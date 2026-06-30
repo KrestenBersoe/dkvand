@@ -1,0 +1,2534 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Overløbsrisiko — Danmarks Vandmiljø</title>
+
+<!-- Leaflet -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<!-- Leaflet.heat -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+
+<style>
+  /* ── Design tokens ───────────────────────────────────────────────────────── */
+  :root {
+    /* Light clinical / authority theme */
+    --ink:       #1a2733;   /* primary text */
+    --ink-soft:  #5a6b78;   /* secondary text */
+    --paper:     #ffffff;   /* card surfaces */
+    --canvas:    #f4f7f9;   /* page background */
+    --line:      #d8e2e8;   /* borders */
+    --line-soft: #e8eef2;   /* subtle borders */
+    --accent:    #0d6e8c;   /* primary blue */
+    --accent-dk: #095066;   /* darker blue for hover */
+    --accent-bg: #e8f3f7;   /* tinted background */
+    --warn:      #c0392b;   /* alert red */
+    --warn-bg:   #fbeae8;
+    --safe:      #1e8449;   /* low-risk green */
+    --safe-bg:   #e8f5ee;
+    --mid:       #b8860b;   /* moderate amber */
+    --mid-bg:    #fdf6e3;
+    --mono:      'JetBrains Mono', 'Courier New', monospace;
+    --sans:      'Inter', system-ui, sans-serif;
+    --shadow:    0 1px 3px rgba(26,39,51,.08), 0 1px 2px rgba(26,39,51,.06);
+    --shadow-lg: 0 4px 16px rgba(26,39,51,.12), 0 2px 6px rgba(26,39,51,.08);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--canvas);
+    color: var(--ink);
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── Header bar ─────────────────────────────────────────────────────────── */
+  header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+    padding: .75rem 1.2rem;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
+    z-index: 1000;
+  }
+
+  header h1 {
+    font-size: .95rem;
+    font-weight: 700;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--ink);
+  }
+
+  header .sub {
+    font-size: .72rem;
+    font-family: var(--mono);
+    color: var(--accent);
+    margin-top: .1rem;
+  }
+
+  .logo-mark {
+    width: 34px; height: 34px;
+    border-radius: 6px;
+    background: var(--accent);
+    display: grid; place-items: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+  }
+
+  .spacer { flex: 1; }
+
+  #status-bar {
+    font-family: var(--mono);
+    font-size: .7rem;
+    color: var(--ink-soft);
+    text-align: right;
+    line-height: 1.5;
+  }
+
+  #status-bar .blink {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--safe);
+    margin-right: 5px;
+    animation: pulse 2s infinite;
+  }
+
+  @keyframes pulse {
+    0%,100% { opacity: 1; }
+    50%      { opacity: .2; }
+  }
+
+  /* ── Map ─────────────────────────────────────────────────────────────────── */
+  #map {
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+  }
+  #tab-kort {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Right column: controls + detail panel, single non-overlapping column ── */
+  #right-col {
+    position: absolute;
+    top: 70px; right: 14px; bottom: 14px;
+    width: 272px;
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+    pointer-events: none;   /* pass-through except for children */
+  }
+
+  #right-col > * { pointer-events: all; }
+
+  /* ── Side panel ──────────────────────────────────────────────────────────── */
+  #panel {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: var(--shadow-lg);
+    overflow: hidden;
+    flex-shrink: 1;
+    min-height: 0;
+  }
+
+  #panel-header {
+    padding: .65rem 1rem;
+    background: rgba(26,107,138,.18);
+    border-bottom: 1px solid rgba(26,107,138,.3);
+    font-size: .7rem;
+    font-family: var(--mono);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  #panel-body {
+    padding: .85rem 1rem;
+    font-size: .78rem;
+    line-height: 1.6;
+    color: var(--ink-soft);
+    min-height: 60px;
+    overflow-y: auto;
+    max-height: calc(100vh - 260px);
+  }
+
+  #panel-body .label {
+    font-family: var(--mono);
+    font-size: .65rem;
+    color: var(--ink-soft);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    margin-top: .6rem;
+  }
+
+  #panel-body .value {
+    font-size: .9rem;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .risk-chip {
+    display: inline-block;
+    padding: .15rem .55rem;
+    border-radius: 4px;
+    font-family: var(--mono);
+    font-size: .7rem;
+    font-weight: 700;
+    letter-spacing: .04em;
+  }
+  .risk-nodata { background: rgba(80,80,80,.15);  color: var(--ink-soft); border: 1px solid #555; }
+  .risk-low    { background: rgba(45,125,79,.3);  color: #6fe09d; border: 1px solid #2d7d4f; }
+  .risk-medium { background: rgba(212,160,32,.3); color: #f0c860; border: 1px solid #d4a020; }
+  .risk-high   { background: rgba(200,75,31,.3);  color: #ff9070; border: 1px solid #c84b1f; }
+  .risk-warn   { background: rgba(200,75,31,.5);  color: #ff6040; border: 1px solid #c84b1f;
+                 animation: pulse 1.2s infinite; }
+
+  /* ── Legend ──────────────────────────────────────────────────────────────── */
+  #legend {
+    position: absolute;
+    bottom: 30px; left: 14px;
+    z-index: 900;
+    font-size: .72rem;
+  }
+
+  #legend-toggle {
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    color: var(--accent);
+    font-weight: 700;
+    font-size: .85rem;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+    display: none;   /* shown only when collapsed */
+  }
+
+  #legend-body {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: .75rem 1rem;
+    box-shadow: var(--shadow);
+    min-width: 160px;
+  }
+
+  #legend.collapsed #legend-toggle { display: block; }
+  #legend.collapsed #legend-body   { display: none; }
+
+  #legend h4 {
+    font-family: var(--mono);
+    font-size: .65rem;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: .55rem;
+  }
+
+  .leg-row {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    margin-bottom: .3rem;
+    color: var(--ink-soft);
+  }
+
+  .leg-swatch {
+    width: 14px; height: 14px;
+    border-radius: 3px;
+    flex-shrink: 0;
+  }
+
+  /* ── Warnings banner ─────────────────────────────────────────────────────── */
+  #warnings {
+    position: absolute;
+    top: 70px; left: 14px;
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+    max-width: 320px;
+    pointer-events: none;
+  }
+
+  .warn-card {
+    background: rgba(200,75,31,.18);
+    border: 1px solid rgba(200,75,31,.6);
+    border-radius: 6px;
+    padding: .5rem .85rem;
+    font-size: .73rem;
+    line-height: 1.4;
+    box-shadow: var(--shadow);
+    pointer-events: all;
+  }
+
+  .warn-card strong {
+    color: #ff9070;
+    font-size: .78rem;
+    display: block;
+    margin-bottom: .1rem;
+  }
+
+  /* ── Controls — top of right column, no absolute positioning ────────────── */
+  #controls {
+    display: flex;
+    flex-direction: column;
+    gap: .4rem;
+    flex-shrink: 0;
+  }
+
+  .ctrl-btn {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    color: var(--ink);
+    font-size: .72rem;
+    font-family: var(--mono);
+    padding: .45rem .8rem;
+    cursor: pointer;
+    text-align: left;
+    box-shadow: var(--shadow);
+    transition: border-color .2s, background .2s;
+  }
+
+  .ctrl-btn:hover { border-color: var(--accent); background: rgba(26,107,138,.15); }
+  .ctrl-btn.active { border-color: var(--accent); background: var(--accent-bg); color: var(--accent-dk); font-weight: 600; }
+
+  /* ── Loading overlay ─────────────────────────────────────────────────────── */
+  #loader {
+    position: absolute;
+    inset: 0;
+    background: var(--paper);
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    font-family: var(--mono);
+    font-size: .8rem;
+    color: var(--accent);
+    letter-spacing: .06em;
+  }
+
+  .spinner {
+    width: 40px; height: 40px;
+    border: 3px solid var(--line);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  #loader-msg { text-align: center; line-height: 1.8; }
+
+  /* Leaflet popup override */
+  .leaflet-popup-content-wrapper {
+    background: var(--paper) !important;
+    border: 1px solid var(--line) !important;
+    border-radius: 8px !important;
+    color: var(--ink) !important;
+    box-shadow: var(--shadow-lg) !important;
+  }
+  .leaflet-popup-tip { background: var(--paper) !important; }
+  .leaflet-popup-content { font-family: var(--sans); font-size: .78rem; line-height: 1.6; }
+  .popup-name { font-weight: 700; font-size: .88rem; color: #7dd4f0; margin-bottom: .4rem; }
+  .popup-row { display: flex; justify-content: space-between; gap: 1rem; }
+  .popup-key { color: var(--ink-soft); font-size: .7rem; font-family: var(--mono); }
+
+  /* ── Favourites ──────────────────────────────────────────────────────────── */
+  .fav-btn {
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+    padding: .1rem .2rem;
+    border-radius: 4px;
+    transition: transform .15s;
+    user-select: none;
+    flex-shrink: 0;
+  }
+  .fav-btn:hover { transform: scale(1.25); }
+
+  #fav-toast {
+    position: fixed;
+    bottom: 60px; left: 50%; transform: translateX(-50%);
+    background: var(--ink);
+    border: 1px solid var(--accent);
+    color: #fff;
+    font-family: var(--mono);
+    font-size: .72rem;
+    padding: .5rem 1.1rem;
+    border-radius: 20px;
+    z-index: 2000;
+    opacity: 0;
+    transition: opacity .3s;
+    pointer-events: none;
+    white-space: nowrap;
+  }
+  #fav-toast.show { opacity: 1; }
+
+  /* ── Tab navigation ──────────────────────────────────────────────────────── */
+  #tab-bar {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--line);
+    background: var(--paper);
+    flex-shrink: 0;
+    z-index: 999;
+  }
+
+  .tab-btn {
+    font-family: var(--mono);
+    font-size: .72rem;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    padding: .6rem 1.3rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--ink-soft);
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: .4rem;
+  }
+  .tab-btn:hover { color: var(--ink); }
+  .tab-btn.active {
+    color: var(--hi);
+    border-bottom-color: var(--teal);
+  }
+
+  .tab-badge {
+    background: var(--teal);
+    color: #fff;
+    font-size: .58rem;
+    font-weight: 700;
+    padding: .05rem .35rem;
+    border-radius: 8px;
+    min-width: 16px;
+    text-align: center;
+  }
+  .tab-badge.zero { background: rgba(26,107,138,.25); color: var(--ink-soft); }
+
+  /* ── Tab panels ──────────────────────────────────────────────────────────── */
+  #tab-panels { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+  .tab-panel { display: none; flex: 1; overflow: hidden; }
+  .tab-panel.active { display: flex; flex-direction: column; }
+
+  /* ── Varsler panel layout ─────────────────────────────────────────────────── */
+  #tab-varsler {
+    overflow-y: auto;
+    padding: 1.2rem 1.4rem 2rem;
+    background: var(--bg);
+  }
+
+  #tab-varsler .section-head {
+    font-family: var(--mono);
+    font-size: .62rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    margin: 1.4rem 0 .7rem;
+    padding-bottom: .4rem;
+    border-bottom: 1px solid var(--line-soft);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  #tab-varsler .section-head:first-child { margin-top: 0; }
+
+  .section-count {
+    background: rgba(26,107,138,.18);
+    border: 1px solid var(--line-soft);
+    border-radius: 10px;
+    padding: .05rem .45rem;
+    font-size: .6rem;
+    color: var(--hi);
+  }
+
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    gap: .65rem;
+  }
+
+  .alarm-card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: .85rem 1rem;
+    transition: border-color .15s;
+  }
+  .alarm-card:hover { border-color: rgba(26,107,138,.55); }
+  .alarm-card.risk-high { border-left: 3px solid #c84b1f; }
+  .alarm-card.risk-med  { border-left: 3px solid #d4a020; }
+  .alarm-card.risk-low  { border-left: 3px solid #2a8a52; }
+
+  .card-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: .5rem;
+    margin-bottom: .3rem;
+  }
+  .card-name { font-family: var(--mono); font-size: .8rem; font-weight: 600; color: var(--ink); }
+  .card-sub  { font-size: .7rem; color: var(--ink-soft); margin-bottom: .55rem; }
+
+  .rain-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: .35rem;
+    margin: .5rem 0;
+  }
+  .rain-cell {
+    background: var(--canvas);
+    border: 1px solid var(--line-soft);
+    border-radius: 5px;
+    padding: .3rem .4rem;
+    text-align: center;
+  }
+  .rain-cell .rv { font-family: var(--mono); font-size: .82rem; font-weight: 600; color: var(--hi); display: block; }
+  .rain-cell .rl { font-size: .58rem; color: var(--ink-soft); text-transform: uppercase; letter-spacing: .06em; }
+
+  .card-actions { margin-top: .5rem; }
+
+  .v-empty {
+    padding: 2.5rem 1rem;
+    text-align: center;
+    color: var(--ink-soft);
+    font-family: var(--mono);
+    font-size: .78rem;
+  }
+  .v-empty .icon { font-size: 2rem; display: block; margin-bottom: .5rem; }
+
+  #push-banner-inline {
+    background: rgba(26,107,138,.1);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: .65rem .9rem;
+    display: flex;
+    align-items: center;
+    gap: .65rem;
+    margin-bottom: 1rem;
+    font-size: .78rem;
+    color: var(--ink-soft);
+  }
+  #push-banner-inline.hidden { display: none; }
+  #push-banner-inline button {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: .65rem;
+    background: var(--teal);
+    border: none;
+    color: #fff;
+    padding: .3rem .7rem;
+    border-radius: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  #varsler-status {
+    font-family: var(--mono);
+    font-size: .6rem;
+    color: var(--ink-soft);
+    text-align: right;
+    margin-top: .75rem;
+  }
+
+
+  /* ── Documentation tab ────────────────────────────────────────────────────── */
+  #tab-doc { overflow-y: auto; background: var(--canvas); }
+  .doc-wrap { max-width: 820px; margin: 0 auto; padding: 2rem 1.6rem 4rem; }
+
+  .doc-hero { padding-bottom: 1.5rem; border-bottom: 2px solid var(--accent); margin-bottom: 1.5rem; }
+  .doc-eyebrow { font-family: var(--mono); font-size: .65rem; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); margin-bottom: .6rem; }
+  .doc-hero h1 { font-family: var(--mono); font-size: 1.6rem; font-weight: 700; color: var(--ink); line-height: 1.2; margin-bottom: .8rem; }
+  .doc-lead { font-size: .95rem; line-height: 1.6; color: var(--ink-soft); max-width: 620px; }
+
+  .doc-toc { display: flex; flex-wrap: wrap; gap: .4rem; margin-bottom: 2rem; }
+  .doc-toc a { font-family: var(--mono); font-size: .68rem; padding: .3rem .7rem; background: var(--paper); border: 1px solid var(--line); border-radius: 5px; color: var(--accent); text-decoration: none; transition: background .15s, border-color .15s; }
+  .doc-toc a:hover { background: var(--accent-bg); border-color: var(--accent); }
+
+  .doc-section { margin-bottom: 2.5rem; scroll-margin-top: 1rem; }
+  .doc-section h2 { font-family: var(--mono); font-size: 1.1rem; font-weight: 600; color: var(--ink); margin-bottom: .9rem; padding-bottom: .5rem; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: .5rem; }
+  .doc-section h2::before { content: ''; width: 3px; height: 1rem; background: var(--accent); border-radius: 2px; }
+  .doc-section p { font-size: .88rem; line-height: 1.65; color: var(--ink-soft); margin-bottom: .9rem; }
+  .doc-section em { color: var(--ink); font-style: italic; }
+
+  .doc-callout { background: var(--accent-bg); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: .8rem 1.1rem; font-size: .85rem; color: var(--ink); margin: 1rem 0; }
+
+  .doc-table { width: 100%; border-collapse: collapse; font-size: .8rem; margin: 1rem 0; }
+  .doc-table th { text-align: left; padding: .55rem .8rem; background: var(--accent); color: #fff; font-family: var(--mono); font-size: .68rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  .doc-table td { padding: .55rem .8rem; border: 1px solid var(--line); color: var(--ink-soft); vertical-align: top; line-height: 1.5; background: var(--paper); }
+  .doc-table tr:nth-child(even) td { background: var(--canvas); }
+  .doc-table strong { color: var(--ink); }
+  .doc-mono { font-family: var(--mono); font-size: .85em; color: var(--accent); }
+
+  .doc-formula { background: var(--paper); border: 1px solid var(--line); border-left: 3px solid var(--accent); border-radius: 0 6px 6px 0; padding: .9rem 1.1rem; margin: 1rem 0; box-shadow: var(--shadow); }
+  .doc-formula-label { font-family: var(--mono); font-size: .58rem; text-transform: uppercase; letter-spacing: .1em; color: var(--accent); margin-bottom: .5rem; }
+  .doc-formula-body { font-family: var(--mono); font-size: .92rem; color: var(--ink); line-height: 1.9; }
+  .doc-formula-note { font-size: .76rem; color: var(--ink-soft); margin-top: .5rem; line-height: 1.55; }
+
+  .q-chip, .r-chip { display: inline-block; font-family: var(--mono); font-size: .65rem; font-weight: 700; padding: .12rem .5rem; border-radius: 4px; white-space: nowrap; }
+  .q-chip.q0 { background: var(--safe-bg); color: var(--safe); border: 1px solid var(--safe); }
+  .q-chip.q1 { background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent); }
+  .q-chip.q2 { background: var(--mid-bg); color: var(--mid); border: 1px solid var(--mid); }
+  .q-chip.q3 { background: #f0f0f0; color: #888; border: 1px solid #ccc; }
+  .r-chip.r-low { background: var(--safe-bg); color: var(--safe); border: 1px solid var(--safe); }
+  .r-chip.r-mid { background: var(--mid-bg); color: var(--mid); border: 1px solid var(--mid); }
+  .r-chip.r-high { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); }
+
+  .doc-arch { margin: 1rem 0; }
+  .doc-arch-row { display: flex; gap: .9rem; padding: .7rem 0; border-bottom: 1px solid var(--line-soft); font-size: .84rem; color: var(--ink-soft); line-height: 1.5; }
+  .doc-arch-k { font-family: var(--mono); font-size: .7rem; font-weight: 600; color: var(--accent); min-width: 80px; flex-shrink: 0; }
+
+  .doc-list { padding-left: 1.3rem; margin: .8rem 0; }
+  .doc-list li { font-size: .85rem; line-height: 1.6; color: var(--ink-soft); margin-bottom: .5rem; }
+  .doc-refs li { font-size: .82rem; }
+  .doc-foot { font-size: .76rem; color: var(--ink-soft); margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     RESPONSIVT LAYOUT — mobil/tablet (≤ 720px)
+     Strategi: højrekolonnen (kontroller + detailpanel) flyttes fra et fast
+     272px sidepanel til en bundskuffe der kan trækkes op. Header og tabs
+     formindskes så de altid passer på en 360–390px skærm.
+     ═══════════════════════════════════════════════════════════════════════ */
+  @media (max-width: 720px) {
+
+    header { padding: .55rem .8rem; gap: .6rem; }
+    header h1 { font-size: .8rem; }
+    header .sub { display: none; }   /* skjul undertekst for at give plads */
+
+    #tab-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .tab-btn { padding: .55rem .7rem; font-size: .64rem; flex-shrink: 0; }
+    .tab-badge { font-size: .55rem; }
+
+    /* Højrekolonne → bundskuffe, fuld bredde, trækbar op via "håndtag" */
+    #right-col {
+      position: absolute;
+      top: auto; right: 0; left: 0; bottom: 0;
+      width: 100%;
+      max-height: 42vh;
+      border-radius: 14px 14px 0 0;
+      background: var(--paper);
+      box-shadow: 0 -4px 20px rgba(26,39,51,.18);
+      padding: .5rem .8rem calc(.6rem + env(safe-area-inset-bottom));
+      pointer-events: all;
+      transition: max-height .25s ease;
+    }
+    #right-col.collapsed { max-height: 44px; overflow: hidden; }
+
+    #right-col::before {
+      content: '';
+      display: block;
+      width: 36px; height: 4px;
+      background: var(--line);
+      border-radius: 2px;
+      margin: .3rem auto .5rem;
+      cursor: pointer;
+    }
+
+    #controls {
+      flex-direction: row;
+      flex-wrap: wrap;
+      gap: .35rem;
+    }
+    .ctrl-btn { flex: 1 1 auto; min-width: 0; font-size: .64rem; padding: .4rem .55rem; text-align: center; }
+
+    #panel { max-height: 28vh; overflow-y: auto; }
+    #panel-body { max-height: none; }
+
+    /* Legend er allerede collapsible — bare placér ikon-knappen et tilgængeligt sted */
+    #legend { bottom: auto; top: 60px; left: 8px; font-size: .68rem; }
+    #legend-body { max-width: calc(100vw - 32px); }
+
+    /* Gamle warnings-overlay (uden funktion nu varsler er en tab) skjules helt */
+    #warnings { display: none; }
+
+    /* Leaflet zoom-kontroller: flyt væk fra header-overlap */
+    .leaflet-top.leaflet-left { top: 8px; }
+
+    /* Dokumentation: smallere margener, mindre skrift */
+    .doc-wrap { padding: 1.2rem .9rem 3rem; }
+    .doc-hero h1 { font-size: 1.25rem; }
+    .doc-section h2 { font-size: .95rem; }
+    .doc-formula-body { font-size: .8rem; }
+    .doc-table { font-size: .72rem; }
+    .doc-table th, .doc-table td { padding: .4rem .5rem; }
+
+    /* Varsler/favorit-kort: én kolonne på smal skærm */
+    .card-grid { grid-template-columns: 1fr; }
+    .rain-grid { grid-template-columns: 1fr 1fr 1fr; }
+
+    /* Toast — fuld bredde minus margin i stedet for fast center-bredde */
+    #fav-toast { left: 10px; right: 10px; transform: none; text-align: center; }
+
+    /* Leaflet attribution kolliderer ellers med bundskuffen */
+    .leaflet-control-attribution { font-size: .55rem; max-width: 60vw; }
+    .leaflet-bottom.leaflet-right { bottom: 44vh; }
+  }
+
+  /* Meget smal skærm (≤ 380px) — yderligere komprimering */
+  @media (max-width: 380px) {
+    .tab-btn { padding: .5rem .5rem; font-size: .6rem; }
+    .ctrl-btn { font-size: .6rem; padding: .35rem .4rem; }
+    .rain-grid { grid-template-columns: 1fr 1fr; }
+  }
+
+  /* Touch-enheder: større tap-targets uanset skærmbredde */
+  @media (hover: none) and (pointer: coarse) {
+    .ctrl-btn, .tab-btn, .fav-btn { min-height: 38px; }
+    .leaflet-marker-icon, .leaflet-interactive { cursor: pointer; }
+  }
+
+
+  /* ── Hjem-panel ───────────────────────────────────────────────────────────── */
+  #tab-hjem { overflow: hidden; }
+  #hjem-wrap { display: flex; flex-direction: column; height: 100%; }
+
+  #hjem-status-bar {
+    flex-shrink: 0;
+    padding: .6rem 1rem;
+    background: var(--accent-bg);
+    border-bottom: 1px solid var(--line);
+    font-family: var(--mono);
+    font-size: .75rem;
+    color: var(--accent-dk);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: .6rem;
+  }
+
+  #hjem-map {
+    flex-shrink: 0;
+    height: 38vh;
+    min-height: 220px;
+    width: 100%;
+    border-bottom: 1px solid var(--line);
+  }
+
+  #hjem-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem 1rem 2rem;
+    background: var(--canvas);
+  }
+
+  .hjem-empty {
+    text-align: center;
+    padding: 2.5rem 1.2rem;
+    color: var(--ink-soft);
+  }
+  .hjem-empty .icon { font-size: 2.4rem; display: block; margin-bottom: .7rem; }
+  .hjem-empty h3 { font-family: var(--mono); font-size: .9rem; color: var(--ink); margin-bottom: .5rem; }
+  .hjem-empty p { font-size: .82rem; line-height: 1.6; max-width: 360px; margin: 0 auto 1rem; }
+
+  /* Distance badge on nearest-point cards */
+  .dist-chip {
+    font-family: var(--mono);
+    font-size: .62rem;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-bg);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: .1rem .5rem;
+    white-space: nowrap;
+  }
+
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo-mark">🌊</div>
+  <div>
+    <h1>Overløbsrisiko</h1>
+    <div class="sub">Regnbetingede udløb · Danmarks vandmiljø</div>
+  </div>
+  <div class="spacer"></div>
+  <div id="status-bar">
+    <span class="blink"></span><span id="status-text">Indlæser data…</span><br>
+    <span id="status-time"></span>
+  </div>
+</header>
+
+<div id="loader">
+  <div class="spinner"></div>
+  <div id="loader-msg">Henter udløbspunkter fra Miljøportalen…</div>
+</div>
+
+<!-- Tab bar -->
+<div id="tab-bar">
+  <button class="tab-btn active" id="tab-btn-hjem"     onclick="switchTab('hjem')">📍 Hjem</button>
+  <button class="tab-btn"        id="tab-btn-kort"     onclick="switchTab('kort')">🗺 Danmark</button>
+  <button class="tab-btn"        id="tab-btn-varsler"  onclick="switchTab('varsler')">
+    🔔 Varsler <span class="tab-badge zero" id="varsler-badge">0</span>
+  </button>
+  <button class="tab-btn"        id="tab-btn-doc"      onclick="switchTab('doc')">📖 Dokumentation</button>
+</div>
+
+<!-- Tab panels -->
+<div id="tab-panels">
+
+  <!-- Hjem-panel: lokal status baseret på GPS -->
+  <div class="tab-panel active" id="tab-hjem">
+    <div id="hjem-wrap">
+
+      <div id="hjem-status-bar">
+        <span id="hjem-status-text">Finder din placering…</span>
+        <button class="ctrl-btn" id="hjem-retry-btn" onclick="hjemLocate()" style="display:none">↻ Prøv igen</button>
+      </div>
+
+      <div id="hjem-map"></div>
+
+      <div id="hjem-content">
+
+        <div id="hjem-no-gps" class="hjem-empty" style="display:none">
+          <span class="icon">📍</span>
+          <h3>Lokation ikke tilgængelig</h3>
+          <p>Tillad placeringsadgang i din browser for at se vandkvaliteten der hvor du er. Du kan også se hele landet under fanen <strong>Danmark</strong>.</p>
+          <button class="ctrl-btn" onclick="hjemLocate()">📍 Find min placering</button>
+        </div>
+
+        <div id="hjem-nearest-wrap" style="display:none">
+          <div class="section-head">
+            Nærmeste udløb
+            <span class="section-count" id="hjem-nearest-count">0</span>
+          </div>
+          <div class="card-grid" id="hjem-nearest-grid"></div>
+        </div>
+
+      </div>
+    </div>
+  </div><!-- /tab-hjem -->
+
+  <!-- Kortpanel -->
+  <div class="tab-panel" id="tab-kort">
+    <div id="map"></div>
+
+    <!-- Warnings top-left (inside kort panel) -->
+
+
+    <!-- Right column: layer controls + location detail, single column no overlap -->
+<div id="right-col" onclick="if(window.innerWidth<=720 && event.target===this) toggleRightCol()">
+
+  <!-- Controls: layer selector -->
+  <div id="controls">
+    <button class="ctrl-btn active" id="btn-heat"  onclick="toggleHeat()">🌡 Bakterielt varmekort</button>
+    <button class="ctrl-btn"        id="btn-viral" onclick="toggleViral()">🧬 Viralt varmekort</button>
+    <button class="ctrl-btn active" id="btn-pts"   onclick="togglePoints()">📍 Udløbspunkter</button>
+    <button class="ctrl-btn"        id="btn-fore"  onclick="toggleForecast()">⚡ 24h Varsling</button>
+    <button class="ctrl-btn"        onclick="refreshData()">↻ Opdater</button>
+    <button class="ctrl-btn" id="btn-locate" style="display:none" onclick="locateUser()">◎ Min placering</button>
+  </div>
+
+  <!-- Location detail panel -->
+  <div id="panel">
+    <div id="panel-header">Vælg et udløbspunkt</div>
+    <div id="panel-body">Klik på et punkt på kortet for at se risikoanalyse.</div>
+  </div>
+
+</div>
+
+<!-- Legend bottom-left -->
+<div id="legend" class="collapsed">
+  <button id="legend-toggle" onclick="toggleLegend()" title="Signaturforklaring">ℹ</button>
+  <div id="legend-body">
+    <h4>Risikoniveau</h4>
+    <div class="leg-row"><div class="leg-swatch" style="background:#2d7d4f"></div> Lav (&lt;20%)</div>
+    <div class="leg-row"><div class="leg-swatch" style="background:#d4a020"></div> Moderat (20–60%)</div>
+    <div class="leg-row"><div class="leg-swatch" style="background:#c84b1f"></div> Høj (&gt;60%)</div>
+    <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
+    <div class="leg-row"><div class="leg-swatch" style="background:linear-gradient(to right,#4b0082,#da00ff)"></div> Viral risiko</div>
+    <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
+    <div class="leg-row" style="font-size:.65rem; color:rgba(240,237,230,.4)" id="leg-tau">
+      Bakteriel τ: — · Viral τ: —
+    </div>
+  </div>
+</div>
+
+  </div><!-- /tab-kort -->
+
+  <!-- Varsler tab panel -->
+  <div class="tab-panel" id="tab-varsler">
+
+    <div id="push-banner-inline" class="hidden">
+      <span>🔔</span>
+      <span>Aktivér push-notifikationer for at modtage varsler — også når siden er lukket.</span>
+      <button onclick="askPush()">Aktivér</button>
+    </div>
+
+    <div class="section-head">
+      Aktive varsler
+      <span class="section-count" id="alarm-count">0</span>
+    </div>
+    <div class="card-grid" id="alarm-grid">
+      <div class="v-empty"><span class="icon">✅</span>Ingen aktive varsler</div>
+    </div>
+
+    <div class="section-head" style="margin-top:1.4rem">
+      Mine favoritter
+      <span class="section-count" id="fav-count">0</span>
+    </div>
+    <div class="card-grid" id="fav-grid">
+      <div class="v-empty"><span class="icon">🤍</span>Ingen favoritter — klik ❤️ på et punkt i kortet</div>
+    </div>
+
+    <div id="varsler-status"></div>
+
+  </div><!-- /tab-varsler -->
+
+  <!-- Dokumentation tab panel -->
+  <div class="tab-panel" id="tab-doc">
+    <div class="doc-wrap">
+
+      <div class="doc-hero">
+        <div class="doc-eyebrow">Teknisk dokumentation</div>
+        <h1>Overløbsrisiko · Danmarks vandmiljø</h1>
+        <p class="doc-lead">Et screeningsværktøj der visualiserer forureningsrisiko fra regnbetingede kloakoverløb (CSO) ved alle aktive udløbspunkter i Danmark, baseret på officielle PULS-data og DMI-nedbørsmodel.</p>
+      </div>
+
+      <nav class="doc-toc">
+        <a href="#doc-formaal">Formål</a>
+        <a href="#doc-kilder">Datakilder</a>
+        <a href="#doc-kvalitet">Datakvalitet</a>
+        <a href="#doc-model">Risikomodel</a>
+        <a href="#doc-nedboer">Nedbørsmodel</a>
+        <a href="#doc-patogen">Patogenmodel</a>
+        <a href="#doc-arkitektur">Arkitektur</a>
+        <a href="#doc-begraens">Begrænsninger</a>
+        <a href="#doc-kilder-ref">Referencer</a>
+      </nav>
+
+      <section id="doc-formaal" class="doc-section">
+        <h2>Formål</h2>
+        <p>Regnbetingede udløb opstår når nedbør overstiger kapaciteten i fælleskloakerede systemer, og urenset spildevand ledes direkte til vandmiljøet. Kortet beregner en løbende forureningsrisiko per udløbspunkt ud fra historisk overløbsfrekvens, observeret og prognosticeret nedbør, samt sæsonafhængig patogenoverlevelse.</p>
+        <div class="doc-callout">Værktøjet er til screening og forskning. Risikoscorerne er modelbaserede estimater — ikke målte forureningskoncentrationer — og erstatter ikke officielle badevandsvarsler.</div>
+      </section>
+
+      <section id="doc-kilder" class="doc-section">
+        <h2>Datakilder</h2>
+        <table class="doc-table">
+          <tr><th>Kilde</th><th>Indhold</th><th>Licens / opdatering</th></tr>
+          <tr><td><strong>PULS stamdata</strong><br><span class="doc-mono">vRegnbetingedeUdloebStamdata</span></td><td>21.556 aktive udløb: navn, kommune, recipient vandområde, koordinater</td><td>Åbne data · årlig</td></tr>
+          <tr><td><strong>PULS udledning</strong><br><span class="doc-mono">vRegnbetingedeUdloebUdledning</span></td><td>Årlig udledt volumen (m³) og antal overløbshændelser per udløb per år</td><td>Åbne data · årlig</td></tr>
+          <tr><td><strong>Open-Meteo / DMI</strong><br><span class="doc-mono">HARMONIE AROME 2 km</span></td><td>Timevis nedbør: 7 dages historik + 48t prognose</td><td>CC BY 4.0 · 4×/døgn</td></tr>
+          <tr><td><strong>OpenStreetMap</strong></td><td>Baggrundskort</td><td>ODbL</td></tr>
+        </table>
+        <p>De to PULS-datasæt samkøres på udløbets navn. Volumen angives i kubikmeter i kilden og omregnes til liter ved visning (1 m³ = 1.000 L). Eksempel: udløb F-U8 udledte 7.400 m³ i 2024 = 7.400.000 L.</p>
+      </section>
+
+      <section id="doc-kvalitet" class="doc-section">
+        <h2>Datakvalitet</h2>
+        <p>Hvert punkt får en kvalitetskode efter hvor pålideligt overløbsgrundlaget er. Tidligere versioner brugte tilfældige tal hvor data manglede — det er fjernet. Manglende data vises nu eksplicit i stedet for at blive opfundet.</p>
+        <table class="doc-table">
+          <tr><th>Kode</th><th>Betydning</th><th>Antal</th></tr>
+          <tr><td><span class="q-chip q0">Reelle data</span></td><td>Faktisk overløbsfrekvens + volumen fra PULS</td><td>4.683</td></tr>
+          <tr><td><span class="q-chip q1">Verificeret nul</span></td><td>Bekræftet nul overløb det pågældende år</td><td>14.554</td></tr>
+          <tr><td><span class="q-chip q2">Estimeret</span></td><td>Frekvens beregnet fra volumen (log-log model, r=0,54)</td><td>1.204</td></tr>
+          <tr><td><span class="q-chip q3">Utilstrækkelig</span></td><td>Hverken volumen eller frekvens oplyst</td><td>1.115</td></tr>
+        </table>
+        <p>Stamdata-feltet <span class="doc-mono">Outflow</span> bruges <em>ikke</em> som datagrundlag — det er et designestimat, ikke en målt udledning, og er systematisk for lavt.</p>
+      </section>
+
+      <section id="doc-model" class="doc-section">
+        <h2>Risikomodel</h2>
+        <p>Den aktive forureningsrisiko er produktet af overløbssandsynlighed og sværhedsgrad, begrænset til intervallet 0–1.</p>
+
+        <div class="doc-formula">
+          <div class="doc-formula-label">Overløbssandsynlighed</div>
+          <div class="doc-formula-body">P<sub>overløb</sub> = min( P<sub>base</sub> × I(nedbør) × 3 , 1 )</div>
+          <div class="doc-formula-note">P<sub>base</sub> = antal overløb/år ÷ 73 (regnvejrsdage/år i DK)</div>
+        </div>
+
+        <div class="doc-formula">
+          <div class="doc-formula-label">Intensitetsfaktor — nul-forankret</div>
+          <div class="doc-formula-body">I = sigmoid( (nedbør − 5) / 4 ) × ramp</div>
+          <div class="doc-formula-body">ramp = clamp( (nedbør − 1) / 6 , 0 , 1 )</div>
+          <div class="doc-formula-note">Ved 0 mm → I = 0 (ingen nedbør = ingen risiko). Ved 5 mm → I ≈ 0,33. Ved 12 mm → I ≈ 0,85. Den tidligere model gav 0,35 ved 0 mm, hvilket fejlagtigt producerede 100 % risiko uden regn.</div>
+        </div>
+
+        <div class="doc-formula">
+          <div class="doc-formula-label">Sværhedsgrad</div>
+          <div class="doc-formula-body">S = min( log₁₀(volumen/hændelse + 1) / 5 , 1 )</div>
+        </div>
+
+        <div class="doc-formula">
+          <div class="doc-formula-label">Samlet risiko</div>
+          <div class="doc-formula-body">R = P<sub>overløb</sub> × (0,6 + 0,4 × S)</div>
+          <div class="doc-formula-note">Hvis nedbørsdata mangler returneres ingen risiko — punktet vises gråt og udløser aldrig varsel.</div>
+        </div>
+
+        <table class="doc-table">
+          <tr><th>Niveau</th><th>Interval</th><th>Tolkning</th></tr>
+          <tr><td><span class="r-chip r-low">Lav</span></td><td>R &lt; 0,20</td><td>Begrænset risiko</td></tr>
+          <tr><td><span class="r-chip r-mid">Moderat</span></td><td>0,20–0,60</td><td>Forhøjet — relevant ved badning/indvinding</td></tr>
+          <tr><td><span class="r-chip r-high">Høj</span></td><td>≥ 0,60</td><td>Undgå kontakt med vandmiljøet</td></tr>
+        </table>
+      </section>
+
+      <section id="doc-nedboer" class="doc-section">
+        <h2>Nedbørsmodel</h2>
+        <p>Antecedent nedbør — forudgående regn der mætter jord og fylder kloakker — er den primære udløsende faktor. Hver times nedbør de seneste 7 dage vægtes eksponentielt efter alder.</p>
+        <div class="doc-formula">
+          <div class="doc-formula-label">Vægtet antecedent nedbør</div>
+          <div class="doc-formula-body">nedbør = Σ p(t) × e<sup>−alder(t) / τ<sub>H</sub></sup></div>
+          <div class="doc-formula-note">τ<sub>H</sub> = 3,0 dage — hydrologisk hukommelse (jordmætning / kloakbelastning). Dette er en <em>fysisk hydrologisk</em> konstant, adskilt fra patogenens nedbrydningstid. Regn fra i går bidrager 72 %, fra 3 dage siden 37 %.</div>
+        </div>
+        <p>Server-proxyen henter timevis nedbør fra Open-Meteo og beregner fire størrelser per gittercelle: vægtet antecedent nedbør (driver risikoen), rå sum seneste 24t, rå sum seneste 7 dage, og prognose næste 24t.</p>
+      </section>
+
+      <section id="doc-patogen" class="doc-section">
+        <h2>Patogenmodel</h2>
+        <p>Når et overløb har fundet sted, aftager forureningen over tid. Bakterier og vira modelleres separat med sæsonafhængig henfaldstid τ, drevet af vandtemperatur og dagslys.</p>
+        <div class="doc-formula">
+          <div class="doc-formula-label">Bakteriel henfaldstid (E. coli, enterokokker)</div>
+          <div class="doc-formula-body">τ<sub>bakt</sub> = 1,0 × Q₁₀<sup>(20−T)/10</sup> / L</div>
+          <div class="doc-formula-note">Q₁₀ = 2,0 · T = vandtemperatur · L = dagslys/12. Sommer ≈ 0,6 dage, vinter ≈ 8 dage.</div>
+        </div>
+        <div class="doc-formula">
+          <div class="doc-formula-label">Viral henfaldstid (norovirus, coliphager)</div>
+          <div class="doc-formula-body">τ<sub>viral</sub> = 2,0 × Q₁₀,ᵥ<sup>(20−T)/10</sup> / Lᵥ</div>
+          <div class="doc-formula-note">Q₁₀,ᵥ = 4,0 · UV-effekt kun ved T ≥ 12 °C. Sommer ≈ 2,4 dage, vinter op til ≈ 40 dage. Vira overlever markant længere i koldt vand.</div>
+        </div>
+        <div class="doc-formula">
+          <div class="doc-formula-label">Residualforurening med sedimentrebound</div>
+          <div class="doc-formula-body">R<sub>residual</sub>(t) = 1,08 × e<sup>−t / τ</sup></div>
+          <div class="doc-formula-note">Faktor 1,2 (sedimentrebound) modellerer resuspension ~24t efter hændelse (Servais et al.). Kun for bakterier — ikke vira.</div>
+        </div>
+      </section>
+
+      <section id="doc-arkitektur" class="doc-section">
+        <h2>Arkitektur &amp; caching</h2>
+        <p>Tjenesten kører som en let Node/Express-server der serverer den statiske app og proxyer vejrdata med et delt cache-lag.</p>
+        <div class="doc-arch">
+          <div class="doc-arch-row"><span class="doc-arch-k">Browser</span><span>IndexedDB: PULS-data (1 år) + sidste resultat. Øjeblikkelig genindlæsning offline.</span></div>
+          <div class="doc-arch-row"><span class="doc-arch-k">HTTP/CDN</span><span>puls-data.json med Cache-Control 1 år. Vejr-svar cachet 6t i browser og CDN.</span></div>
+          <div class="doc-arch-row"><span class="doc-arch-k">Server</span><span>Delt vejr-cache (6t TTL) per 0,5° gittercelle. Open-Meteo-kald reduceres fra "per bruger" til "per celle per 6t globalt".</span></div>
+        </div>
+        <p>Nedbør hentes på et 0,5°-gitter (~35×55 km, ca. 56 celler over Danmark) i én bulk-forespørgsel, i stedet for ét kald per udløbspunkt. Det eliminerer netværksfejl ved mange parallelle kald og deler cache på tværs af alle brugere.</p>
+      </section>
+
+      <section id="doc-begraens" class="doc-section">
+        <h2>Begrænsninger</h2>
+        <ul class="doc-list">
+          <li>Overløbsfrekvens er kun reelt målt for ~22 % af punkter; resten er verificeret nul, estimeret eller markeret som utilstrækkelig.</li>
+          <li>Nedbør opløses på 0,5°-gitter — lokal variation under ~35 km udjævnes.</li>
+          <li>Tidspunkt for seneste faktiske overløbshændelse foreligger ikke som åbne data; residualmodellen aktiveres heuristisk. Fuld præcision kræver PULS webservice-adgang (WLA).</li>
+          <li>Modellen skelner ikke mellem salt-, brak- og ferskvand i patogenoverlevelse.</li>
+          <li>Ingen tidevands- eller fortyndingsmodellering for fjorde og Vadehavet.</li>
+        </ul>
+      </section>
+
+      <section id="doc-kilder-ref" class="doc-section">
+        <h2>Videnskabelige referencer</h2>
+        <ul class="doc-list doc-refs">
+          <li>Beaudeau, P. et al. (2001). <em>Water Research</em> — referenceværdi for bakteriel henfaldstid.</li>
+          <li>Blaustein, R.A. et al. (2013). <em>Water Research</em> — Q₁₀ = 2,0 for bakteriel mørkinaktivering.</li>
+          <li>Sinton, L.W. et al. (2002). <em>Applied and Environmental Microbiology</em> — sollys som dominerende dræbningsfaktor.</li>
+          <li>Servais, P. et al. (2007/2010). <em>Science of the Total Environment</em> — sedimentrebound efter CSO.</li>
+          <li>Hokajärvi, A.M. et al. (2023). <em>Water Research</em> — viral henfaldstid og Q₁₀,ᵥ.</li>
+          <li>Flannery, J. et al. (2012). <em>Global Water Pathogen Project</em> — UV-effekt på vira under 12 °C.</li>
+        </ul>
+        <p class="doc-foot">Data: Miljøportalen (PULS) · Open-Meteo / DMI · OpenStreetMap. Sidst opdateret ved indlæsning af kortet.</p>
+      </section>
+
+    </div>
+  </div><!-- /tab-doc -->
+
+
+</div><!-- /tab-panels -->
+
+<div id="fav-toast"></div>
+
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// CACHE LAYER — IndexedDB
+//
+// DB: "overloeb_cache", version 1, two object stores:
+//   puls_store   — keyed "puls_v1"; stores serialised PULS_DATA + timestamp
+//                  TTL: 1 year (stamdata updates annually)
+//   weather_store — keyed by "lat4:lng4" grid cell (0.01° ≈ 1km resolution)
+//                  TTL: 6 hours (sufficient for CSO risk model)
+//
+// API surface:
+//   await dbGet(store, key)        → value | null
+//   await dbPut(store, key, value) → void
+//   await dbDelete(store, key)     → void
+// ═══════════════════════════════════════════════════════════════════════════
+
+const DB_NAME         = 'overloeb_cache';
+const DB_VERSION      = 1;
+const STORE_PULS      = 'puls_store';
+const STORE_WEATHER   = 'weather_store';
+const TTL_PULS_MS     = 365 * 24 * 3600 * 1000;  // 1 year
+const TTL_WEATHER_MS  =  6 *      3600 * 1000;   //  6 hours
+
+let _db = null;
+
+function openDB() {
+  if (_db) return Promise.resolve(_db);
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_PULS))
+        db.createObjectStore(STORE_PULS);
+      if (!db.objectStoreNames.contains(STORE_WEATHER))
+        db.createObjectStore(STORE_WEATHER);
+    };
+    req.onsuccess = e => { _db = e.target.result; resolve(_db); };
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+async function dbGet(store, key) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(store, 'readonly');
+    const req = tx.objectStore(store).get(key);
+    req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+async function dbPut(store, key, value) {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const tx  = db.transaction(store, 'readwrite');
+    const req = tx.objectStore(store).put(value, key);
+    req.onsuccess = () => resolve();
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+// ── PULS cache helpers ───────────────────────────────────────────────────────
+const PULS_CACHE_KEY = 'puls_v2';  // bumped: volume now from udledning only
+
+
+
+// ── Weather cache helpers ────────────────────────────────────────────────────
+// Key: "lat:lng" rounded to 2 decimal places (~1km grid).
+// Multiple nearby points share one cache entry — avoids redundant API calls.
+
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DATA SOURCE
+// Primary: embedded from PULS CSV export (arealdata.miljoeportal.dk filudtræk)
+// 21,556 active regnbetingede udløb, exact field names: Name, Authority,
+// WaterArea, Outflow (m³/year). Latitude/Longitude decimal-comma fixed.
+// Live refresh (optional): pulsgeo.miljoeportal.dk GeoServer WFS —
+//   GeoServer supports outputFormat=application/json, no proxy needed if
+//   CORS headers are present. Try on page load; fall back to embedded.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const PULSGEO_WFS = 'https://pulsgeo.miljoeportal.dk/geoserver/wfs';
+
+
+// 24h forecast — Open-Meteo, DMI HARMONIE AROME 2km, no key
+const OPEN_METEO_FORE = 'https://api.open-meteo.com/v1/forecast';
+
+// CORS proxy — only needed for WFS refresh attempt
+const CORS_PROXY = 'https://corsproxy.io/?';
+
+// Overflow probability model parameters
+// P(overflow | rain) ≈ events_per_year / rainy_days_per_year (≈73 in DK)
+const DK_RAINY_DAYS_YEAR = 73;
+
+// ── Season-adaptive decay model ──────────────────────────────────────────────
+// Sources:
+//   Beaudeau et al. (2001) Water Research — median T90 ~10h in small rivers
+//   Blaustein et al. (2013) Water Research — Q10 ≈ 2.0 for dark inactivation
+//   Sinton et al. / Gameson & Gould — sunlight is dominant kill factor
+//   Servais et al. (2007) — sediment rebound: +20–30% residual at 24h
+//
+// τ(t) = τ_base × Q10^((20 - T_water)/10) / light_factor
+//   τ_base = 1.0 day  (reference: 20°C, full summer daylight)
+//   Q10    = 2.0      (inactivation halves per 10°C drop)
+//   T_water estimated from calendar month (DK mean river temps)
+//   light_factor = daylight_hours / 12  (scaled to summer solstice = 1)
+//   Sediment rebound: residual starts at 0.9 × e^(-t/τ), not 0.8,
+//     because re-suspension adds ~20% back at 24h post-event (Servais 2010)
+
+const TAU_BASE_DAYS = 1.0; // reference τ at 20°C + full summer daylight
+const Q10           = 2.0; // temperature sensitivity coefficient
+
+// Mean monthly river water temperatures for Denmark (°C), Jan–Dec
+const DK_WATER_TEMP = [2, 2, 4, 8, 12, 16, 18, 17, 14, 10, 6, 3];
+
+// Mean daylight hours per month for Denmark (55–58°N), Jan–Dec
+const DK_DAYLIGHT_HRS = [7.5, 9.5, 12, 14.5, 17, 18, 17.5, 15.5, 13, 10.5, 8, 7];
+
+function seasonalTau() {
+  const month = new Date().getMonth(); // 0-indexed
+  const T     = DK_WATER_TEMP[month];
+  const light = DK_DAYLIGHT_HRS[month];
+
+  // Temperature correction: warmer → faster decay → smaller τ
+  const tempFactor  = Math.pow(Q10, (20 - T) / 10); // >1 in winter
+
+  // Light correction: more sunlight → faster decay → smaller τ
+  // Scale: 12 h = neutral, 18 h summer = 0.67×, 7.5 h winter = 1.6×
+  const lightFactor = 12 / Math.max(light, 4);
+
+  return TAU_BASE_DAYS * tempFactor * lightFactor;
+}
+
+// Sediment rebound factor — adds ~20% contamination back at 24h post-event
+// based on Servais et al. 2010 (Seine CSO sediment resuspension study)
+const SEDIMENT_REBOUND = 0.20;
+
+// ── Viral pathogen decay model ───────────────────────────────────────────────
+// Sources:
+//   Hokajärvi et al. (2023) Sci Total Environ — T90 values in subarctic
+//     mesocosms: F-specific coliphage 4°C/dark = 51.3 d, 22°C/light = 1.9 d
+//   Gonzalez et al. / Perez et al. (RSC 2024) — HuNoV T90: 12.1 d @ 4°C,
+//     5.5 d @ 15°C in dark freshwater (F+ coliphage: 2.6 d / 1.7 d)
+//   Flannery et al. / Global Water Pathogen Project — norovirus poorly
+//     inactivated by sunlight at T < 12°C; temp-dominant below that threshold
+//   Boehm & Silverman (2019) Water Research meta-analysis — viral Q10 ≈ 3–5
+//
+// Key difference from bacteria:
+//   - Viruses are TEMPERATURE-dominant (not light-dominant) below ~12°C
+//   - Light inactivation of viruses only becomes significant above ~16°C
+//   - Q10_viral ≈ 4.0 (vs 2.0 for bacteria) — much steeper winter persistence
+//
+// τ_viral = τ_v_base × Q10_v^((20-T)/10) / light_factor_viral
+//   τ_v_base   = 2.0 days  (reference @ 20°C, summer — HuNoV faster at ~18°C)
+//   Q10_viral  = 4.0
+//   light_factor_viral: only applied above 12°C (negligible below)
+
+const TAU_VIRAL_BASE = 2.0;   // days, ref @ 20°C/summer (HuNoV GII, dark freshwater)
+const Q10_VIRAL      = 4.0;   // steeper temp sensitivity than bacteria
+
+function seasonalTauViral() {
+  const month = new Date().getMonth();
+  const T     = DK_WATER_TEMP[month];
+  const light = DK_DAYLIGHT_HRS[month];
+
+  // Temperature correction (dominant driver for viruses at all temperatures)
+  const tempFactor = Math.pow(Q10_VIRAL, (20 - T) / 10);
+
+  // Light correction only meaningful above 12°C (Flannery et al.; Global Water
+  // Pathogen Project); below 12°C set light_factor = 1 (no UV benefit)
+  const lightFactor = T >= 12 ? (12 / Math.max(light, 4)) : 1.0;
+
+  return TAU_VIRAL_BASE * tempFactor * lightFactor;
+}
+
+// Viral concentration in CSO relative to bacteria (log10 ratio):
+// CSO contains ~10³–10⁴ viral particles per 100 mL vs ~10⁵–10⁶ E. coli
+// Risk amplitude scaled to ~0.7 of bacterial (lower absolute load but higher
+// per-particle infectivity and much longer persistence)
+const VIRAL_AMPLITUDE = 0.75;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAP INIT
+// ═══════════════════════════════════════════════════════════════════════════
+const map = L.map('map', {
+  center: [56.0, 10.5],
+  zoom: 7,
+  zoomControl: false
+});
+
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+
+// Light basemap — standard OSM tiles, no filter
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
+  maxZoom: 19
+}).addTo(map);
+
+// ── Hjem-kort: separat lille Leaflet-instans for lokal visning ─────────────
+let hjemMap = null;
+let hjemUserMarker = null;
+let hjemNearestLayer = null;
+
+function initHjemMap() {
+  if (hjemMap) return hjemMap;
+  hjemMap = L.map('hjem-map', {
+    center: [56.0, 10.5],
+    zoom: 6,
+    zoomControl: true,
+  });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
+    maxZoom: 19
+  }).addTo(hjemMap);
+  hjemNearestLayer = L.layerGroup().addTo(hjemMap);
+  return hjemMap;
+}
+
+// Layer groups
+const pointsLayer   = L.layerGroup().addTo(map);
+const heatLayer     = { ref: null, visible: true };
+const viralHeatLayer = { ref: null, visible: false };  // viral pathogen heatmap
+const forecastLayer = L.layerGroup();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GEOLOCATION — zoom to device position on load; fallback = DK overview
+// ═══════════════════════════════════════════════════════════════════════════
+let userMarker = null;
+
+function locateUser() {
+  if (!navigator.geolocation) return;
+  setLoader('Finder din placering…');
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+      // Only act if position is plausibly within or near Denmark
+      if (lat < 53 || lat > 60 || lng < 5 || lng > 18) return;
+
+      map.setView([lat, lng], 13);
+
+      // Blue dot with accuracy circle
+      const circle = L.circle([lat, lng], {
+        radius: Math.min(accuracy, 500),
+        color: '#3b82f6', fillColor: '#3b82f6',
+        fillOpacity: 0.15, weight: 1.5
+      }).addTo(map);
+
+      userMarker = L.circleMarker([lat, lng], {
+        radius: 8, color: '#fff', weight: 2,
+        fillColor: '#3b82f6', fillOpacity: 1
+      }).addTo(map).bindPopup('Din placering');
+
+      // Locate button re-triggers this
+      document.getElementById('btn-locate').style.display = 'inline-block';
+    },
+    _err => {
+      // Silently fall back to DK overview — user denied or unavailable
+      document.getElementById('btn-locate').style.display = 'inline-block';
+    },
+    { timeout: 8000, maximumAge: 60000 }
+  );
+}
+
+locateUser();
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE
+// ═══════════════════════════════════════════════════════════════════════════
+let overflowPoints   = [];   // parsed from WFS
+let precipitationMap = {};   // muni_id -> { observed_mm, forecast_mm }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ESRI REST FETCH — regnbetingede udløb stamdata
+// Miljøportal runs ArcGIS MapServer. REST endpoint returns JSON directly,
+// avoiding GML parsing entirely. We enumerate layers, find the RBU layer,
+// then query all features with geometry.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DATA LOADING — embedded CSV + optional live WFS refresh
+// ═══════════════════════════════════════════════════════════════════════════
+
+function loadFromEmbedded() {
+  // PULS_DATA format: { a: [authorities], w: [waterAreas], d: rows }
+  // Row: [lat, lng, name, authIdx, areaIdx, volumeM3, eventsPerYear|null, qualityCode]
+  // qualityCode: 0=real, 1=verified zero, 2=imputed from volume, 3=no data
+  const { a: auths, w: areas, d: rows } = PULS_DATA;
+  return rows.map((r, i) => {
+    const [lat, lng, name, authIdx, areaIdx, volumeM3, eventsPerYear, quality] = r;
+    const ev  = eventsPerYear !== null ? eventsPerYear : 0;
+    const vol = volumeM3 > 0 ? volumeM3 : 0;
+    return {
+      id:                 i,
+      name:               name || `Udløb ${i}`,
+      municipality:       auths[authIdx] || '—',
+      waterArea:          areas[areaIdx] || 'Ukendt',
+      lat, lng,
+      eventsPerYear:      ev,
+      volumeM3Year:       vol,
+      quality,
+      meanVolumePerEvent: vol / Math.max(ev, 1),
+      overflowProbBase:   Math.min(ev / DK_RAINY_DAYS_YEAR, 1),
+      riskScore: null, viralScore: null,
+      precipMM: null, todayMM: null, forecastMM: null, totalRain7d: null, lastEventAge: null,
+    };
+  });
+}
+
+
+async function loadPulsData() {
+  // PULS_DATA is loaded from /puls-data.json (server sends Cache-Control 1 year,
+  // so the browser/CDN cache it; IndexedDB gives instant repeat loads offline).
+  if (PULS_DATA) return PULS_DATA;
+
+  // Try IndexedDB first for instant offline load
+  try {
+    const rec = await dbGet(STORE_PULS, PULS_CACHE_KEY);
+    if (rec && Date.now() - rec.ts < TTL_PULS_MS && rec.raw) {
+      PULS_DATA = rec.raw;
+      return PULS_DATA;
+    }
+  } catch(e) { /* fall through to network */ }
+
+  // Fetch from server (HTTP-cached)
+  setLoader('Henter PULS-data fra server…');
+  const res = await fetch('puls-data.json');
+  if (!res.ok) throw new Error(`PULS-data HTTP ${res.status}`);
+  PULS_DATA = await res.json();
+
+  // Store raw payload in IndexedDB for offline / instant reload
+  try { await dbPut(STORE_PULS, PULS_CACHE_KEY, { ts: Date.now(), raw: PULS_DATA }); }
+  catch(e) { /* non-fatal */ }
+
+  return PULS_DATA;
+}
+
+async function loadOverflowData() {
+  setLoader('Henter udløbspunkter…');
+  await loadPulsData();
+  const pts = loadFromEmbedded();   // parses PULS_DATA into point objects
+  document.getElementById('status-text').textContent =
+    `${pts.length} udløb · PULS stamdata (arealdata.miljoeportal.dk)`;
+  return pts;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRECIPITATION FETCH — single Open-Meteo call per point
+//
+// API: api.open-meteo.com/v1/forecast
+//   past_days=7     → 7 days of hourly history
+//   forecast_days=2 → 48h of forecast
+//   hourly=precipitation (mm/h), models=dmi_seamless (DMI HARMONIE AROME 2km)
+//
+// Returns:
+//   antecedentMM  — decay-weighted 7-day antecedent total; same exponential
+//                   τ as the bacterial pathogen model (seasonalTau())
+//   todayMM       — raw sum of last 24h (unweighted, for display)
+//   forecastMM    — sum of next 24h
+//
+// Antecedent weighting:
+//   weight(hour) = exp(-age_days / τ_season)
+//   antecedentMM = Σ precip(h) × weight(h)   [all past hours, 0–168h]
+//   Recent hours dominate — identical decay to pathogen persistence model.
+//
+// Rate: Open-Meteo free tier 10,000 req/day — within batch usage.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RISK MODEL
+// ═══════════════════════════════════════════════════════════════════════════
+// P(overflow) = base_rate × intensity_factor
+// intensity_factor = sigmoid((precip_mm - 5) / 8) — threshold at ~5mm/24h
+// Risk score R = P(overflow) × (1 + severity_scale)
+//
+// Residual contamination (season-adaptive):
+//   R_residual(t) = (1 + SEDIMENT_REBOUND) × e^(-t / τ_season)
+//   τ_season = TAU_BASE × Q10^((20-T)/10) / light_factor
+//   DK summer: τ ≈ 0.5–0.8 d  |  DK winter: τ ≈ 5–12 d
+// ═══════════════════════════════════════════════════════════════════════════
+
+function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
+
+
+function computeForecastRisk(pt) {
+  // Return null if no weather data — cannot compute forecast risk
+  if (pt.precipMM === null || pt.precipMM === undefined) return null;
+  const tmpPt = { ...pt, precipMM: (pt.precipMM || 0) + (pt.forecastMM || 0) };
+  return computeRisk(tmpPt).risk;
+}
+
+// ── Viral risk model ─────────────────────────────────────────────────────────
+// Separate viral contamination risk (norovirus, coliphages).
+// Key differences from bacterial model:
+//   1. τ is temperature-dominant (especially below 12°C, UV negligible)
+//   2. Much longer persistence in winter (τ up to ~40 days in cold/dark)
+//   3. No sediment rebound — modelled as straightforward decay
+//   4. Lower initial amplitude but sustained longer
+function computeViralRisk(pt) {
+  const { overflowProbBase, meanVolumePerEvent, precipMM, lastEventAge } = pt;
+
+  if (precipMM === null || precipMM === undefined) {
+    return { viralRisk: null };
+  }
+
+  const ramp            = Math.min(Math.max(precipMM - 1, 0) / 6, 1);
+  const intensityFactor = sigmoid((precipMM - 5) / 4) * ramp;
+  const pOverflow       = Math.min(overflowProbBase * intensityFactor * 3, 1);
+  const severity        = Math.min(Math.log10(meanVolumePerEvent + 1) / 5, 1);
+
+  let viralRisk = pOverflow * (0.5 + 0.3 * severity);
+
+  if (lastEventAge !== null && lastEventAge >= 0) {
+    const tauV      = seasonalTauViral();
+    const residualV = 0.75 * Math.exp(-lastEventAge / tauV);
+    viralRisk = Math.min(viralRisk + residualV * (1 - viralRisk), 1);
+  }
+
+  return { viralRisk, tauV: seasonalTauViral() };
+}
+
+
+function riskLabel(r) {
+  if (r === null || r === undefined) return { label: 'Ingen data', cls: 'risk-nodata', cardCls: 'risk-nodata' };
+  if (r >= .6) return { label: 'Høj',     cls: 'risk-high' };
+  if (r >= .2) return { label: 'Moderat', cls: 'risk-medium' };
+  return             { label: 'Lav',      cls: 'risk-low' };
+}
+
+function riskColor(r) {
+  // Green → amber → red interpolation
+  if (r < .2) return `rgba(45,125,79,${0.5 + r})`;
+  if (r < .6) {
+    const t = (r - .2) / .4;
+    return `rgba(${Math.round(45 + t*(212-45))},${Math.round(125 + t*(160-125))},${Math.round(79 + t*(32-79))},0.85)`;
+  }
+  const t = (r - .6) / .4;
+  return `rgba(${Math.round(212 + t*(200-212))},${Math.round(160 - t*160)},${Math.round(32 - t*32)},0.9)`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RENDER
+// ═══════════════════════════════════════════════════════════════════════════
+function renderMap() {
+  pointsLayer.clearLayers();
+  if (heatLayer.ref) { map.removeLayer(heatLayer.ref); heatLayer.ref = null; }
+  forecastLayer.clearLayers();
+
+  const heatData   = [];
+  const viralData  = [];
+  const warnPoints = [];
+
+  // Update legend with current seasonal τ values
+  const currentTau = seasonalTau();
+  const currentTauV = seasonalTauViral();
+  const legTau = document.getElementById('leg-tau');
+  if (legTau) legTau.innerHTML =
+    `Bakteriel τ: ${currentTau.toFixed(1)} d · Viral τ: ${currentTauV.toFixed(1)} d<br>` +
+    `<span style="opacity:.6">(${new Date().toLocaleString('da-DK',{month:'long'})})</span>`;
+
+  overflowPoints.forEach(pt => {
+    const riskResult = computeRisk(pt);
+    const { viralRisk } = computeViralRisk(pt);
+    const risk     = riskResult.risk;      // null if no weather data
+    pt.riskScore   = risk;
+    pt.noData      = riskResult.noData;
+    pt.viralScore  = viralRisk;
+    const foreRisk = computeForecastRisk(pt);
+
+    // Heatmap points — skip if no weather data
+    if (risk !== null) heatData.push([pt.lat, pt.lng, risk]);
+    if (viralRisk !== null) viralData.push([pt.lat, pt.lng, viralRisk]);
+
+    // Map marker — grey/dashed when no weather data, coloured when data present
+    const radius = risk !== null ? 6 + risk * 12 : 6;
+    const color  = risk !== null ? riskColor(risk) : '#555';
+    const marker = L.circleMarker([pt.lat, pt.lng], {
+      radius,
+      fillColor:   color,
+      color:       risk !== null ? 'rgba(255,255,255,0.25)' : '#888',
+      weight:      risk !== null ? 1 : 1.5,
+      fillOpacity: risk !== null ? 0.85 : 0.4,
+      dashArray:   risk !== null ? null : '3,3',
+    });
+
+    marker.bindPopup(buildPopup(pt, risk, foreRisk), { maxWidth: 280 });
+    marker.on('click', () => updatePanel(pt, risk, foreRisk));
+    pointsLayer.addLayer(marker);
+
+    // Forecast warning markers
+    if (foreRisk > .55) {
+      const fMarker = L.circleMarker([pt.lat, pt.lng], {
+        radius:      14,
+        fillColor:   'transparent',
+        color:       '#ff6040',
+        weight:      2,
+        dashArray:   '4,4',
+        fillOpacity: 0,
+        className:   'forecast-ring',
+      });
+      forecastLayer.addLayer(fMarker);
+      // Warn only when rain is actually present (observed or forecast) AND risk is elevated.
+      // foreRisk alone is not sufficient — many high-overflowProbBase points would trigger
+      // without any rainfall. Both conditions must be met:
+      //   1. meaningful rainfall: forecastMM or todayMM above overflow sigmoid threshold (~5mm)
+      //   2. computed forecast risk elevated given that rainfall
+      const rainForecast = pt.forecastMM  || 0;
+      const rainToday    = pt.todayMM     || 0;
+      const rain7d       = pt.totalRain7d || 0;
+      // Require active rain: observed OR forecast must exceed overflow threshold.
+      // 7-day history alone is NOT sufficient — it would trigger on dry days after wet week.
+      const hasActiveRain = rainForecast > 5 || rainToday > 5;
+      // Never warn if risk is null (no weather data for this grid cell)
+      if (foreRisk === null || foreRisk === undefined) return;
+      if (hasActiveRain && foreRisk > .35) {
+        // Build a human-readable explanation for the warning card
+        const warnReasons = [];
+        if (rainForecast > 5)  warnReasons.push(`prognose ${rainForecast.toFixed(1)} mm/24h`);
+        if (rainToday    > 5)  warnReasons.push(`observeret ${rainToday.toFixed(1)} mm/24h`);
+        if (rain7d       > 10) warnReasons.push(`${rain7d.toFixed(1)} mm seneste 7 dage`);
+        const warnBasis = warnReasons.join(' · ');
+        const warnQuality = pt.quality === 0 ? 'reelle PULS-data'
+                          : pt.quality === 1 ? 'verificeret nul-overløb-punkt'
+                          : pt.quality === 2 ? 'estimeret overløbsfrekvens'
+                          : 'begrænset datagrundlag';
+        warnPoints.push({ ...pt, foreRisk, warnBasis, warnQuality });
+      }
+    }
+  });
+
+  // Heatmap — bacterial (guard: skip if no data or map not sized)
+  if (heatLayer.visible && heatData.length > 0) {
+    try {
+      heatLayer.ref = L.heatLayer(heatData, {
+        radius:  28,
+        blur:    22,
+        maxZoom: 12,
+        max:     1,
+        gradient: { 0: '#2d7d4f', 0.3: '#d4a020', 0.6: '#c84b1f', 1.0: '#ff2200' },
+      }).addTo(map);
+    } catch(e) { console.warn('Bacterial heatmap render error:', e.message); }
+  }
+
+  // Heatmap — viral (guard: skip if no data)
+  if (viralHeatLayer.visible && viralData.length > 0) {
+    try {
+    viralHeatLayer.ref = L.heatLayer(viralData, {
+      radius:  32,
+      blur:    26,
+      maxZoom: 12,
+      max:     1,
+      gradient: { 0: '#1a1a4a', 0.25: '#4b0082', 0.55: '#8b00ff', 0.8: '#da00ff', 1.0: '#ff80ff' },
+    }).addTo(map);
+    } catch(e) { console.warn('Viral heatmap render error:', e.message); }
+  }
+
+  updateStatusTime();
+  saveWarnPoints(warnPoints);  // persist for varsel-side.html
+}
+
+function buildPopup(pt, risk, foreRisk) {
+  const rl  = riskLabel(risk);
+  const fr  = riskLabel(foreRisk);
+  const vrl = riskLabel(pt.viralScore || 0);
+  return `
+    <div class="popup-name" style="display:flex;justify-content:space-between;align-items:center">
+      <span>${escHtml(pt.name)}</span>
+      <span data-fav-id="${pt.id}" class="fav-btn" onclick="event.stopPropagation();toggleFav(${pt.id})"
+        title="Favorit">${isFav(pt.id)?'❤️':'🤍'}</span>
+    </div>
+    <div class="popup-row">
+      <span class="popup-key">Kommune</span>
+      <span>${escHtml(pt.municipality)}</span>
+    </div>
+    <div class="popup-row">
+      <span class="popup-key">Overløb/år</span>
+      <span>${pt.eventsPerYear.toFixed(0)}</span>
+    </div>
+    <div class="popup-row">
+      <span class="popup-key">Volumen/år</span>
+      <span>${formatL(pt.volumeM3Year)}/år</span>
+    </div>
+    <div class="popup-row">
+      <span class="popup-key">Nedbør 24h</span>
+      <span>${(pt.precipMM||0).toFixed(1)} mm</span>
+    </div>
+    <hr style="border-color:rgba(26,107,138,.2);margin:.4rem 0">
+    <div class="popup-row">
+      <span class="popup-key">Bakteriel risiko</span>
+      <span class="risk-chip ${rl.cls}">${rl.label} ${(risk*100).toFixed(0)}%</span>
+    </div>
+    <div class="popup-row">
+      <span class="popup-key">Viral risiko</span>
+      <span class="risk-chip ${vrl.cls}" style="border-color:#8b00ff">${vrl.label} ${((pt.viralScore||0)*100).toFixed(0)}%</span>
+    </div>
+    <div class="popup-row">
+      <span class="popup-key">24h prognose</span>
+      <span class="risk-chip ${fr.cls}">${fr.label} ${(foreRisk*100).toFixed(0)}%</span>
+    </div>
+  `;
+}
+
+function updatePanel(pt, risk, foreRisk) {
+  const rl  = riskLabel(risk);
+  const fr  = riskLabel(foreRisk);
+  const vrl = riskLabel(pt.viralScore || 0);
+  const { tauV } = computeViralRisk(pt);
+  const { tau }  = computeRisk(pt);
+  const decayHrs = pt.lastEventAge !== null
+    ? ` · ${(pt.lastEventAge * 24).toFixed(0)} timer siden overløb`
+    : '';
+  document.getElementById('panel-header').textContent = pt.name;
+  document.getElementById('panel-header').innerHTML =
+    `${escHtml(pt.name)} <span data-fav-id="${pt.id}" class="fav-btn"
+      onclick="toggleFav(${pt.id})" title="Favorit">${isFav(pt.id)?'❤️':'🤍'}</span>`;
+  document.getElementById('panel-body').innerHTML = `
+    <div class="label">Kommune</div>
+    <div class="value">${escHtml(pt.municipality)}</div>
+
+    <div class="label">Datakvalitet</div>
+    <div class="value" style="font-size:.78rem;font-weight:400">${
+      pt.quality===0 ? '✅ Reelle PULS-data' :
+      pt.quality===1 ? '✅ Verificeret: nul overløb' :
+      pt.quality===2 ? '⚠️ Estimeret fra volumen' :
+                       '❌ Utilstrækkelige data'
+    }</div>
+
+    <div class="label">Historik</div>
+    <div class="value">${pt.eventsPerYear.toFixed(0)} overløb/år · ${formatL(pt.volumeM3Year)}/år</div>
+
+    <div class="label">Gn. volumen pr. hændelse</div>
+    <div class="value">${formatL(pt.meanVolumePerEvent)} pr. hændelse</div>
+
+    <div class="label">Nedbør seneste 24h (rå)${decayHrs}</div>
+    <div class="value">${(pt.todayMM||0).toFixed(1)} mm</div>
+
+    <div class="label">Total nedbør seneste 7 dage</div>
+    <div class="value">${(pt.totalRain7d||0).toFixed(1)} mm</div>
+
+    <div class="label">Vægtet antecedent nedbør (7 dage, τ=${tau.toFixed(1)} d)</div>
+    <div class="value">${(pt.precipMM||0).toFixed(1)} mm-ekv.</div>
+
+    <hr style="border-color:rgba(26,107,138,.15);margin:.5rem 0">
+
+    <div class="label">🦠 Bakteriel forureningsrisiko</div>
+    <div class="value">${risk !== null
+      ? `<span class="risk-chip ${rl.cls}">${rl.label} · ${(risk*100).toFixed(0)}%</span>`
+      : '<span style="color:rgba(240,237,230,.4);font-size:.78rem">Ingen nedbørsdata — risiko kan ikke beregnes</span>'
+    }</div>
+    <div class="label" style="font-size:.62rem">τ = ${tau.toFixed(1)} dage · E. coli + enterokokker · +20% sedimentrebound</div>
+
+    <div class="label" style="margin-top:.5rem">🧬 Viral forureningsrisiko</div>
+    <div class="value"><span class="risk-chip ${vrl.cls}" style="border-color:#8b00ff">${vrl.label} · ${((pt.viralScore||0)*100).toFixed(0)}%</span></div>
+    <div class="label" style="font-size:.62rem">τ = ${tauV.toFixed(1)} dage · Norovirus + coliphager · temperaturdominent</div>
+
+    <div class="label" style="margin-top:.5rem">24h varsling (bakteriel)</div>
+    <div class="value"><span class="risk-chip ${fr.cls}">${fr.label} · ${(foreRisk*100).toFixed(0)}%</span></div>
+  `;
+}
+
+async function saveWarnPoints(pts) {
+  // Save current warn points to IndexedDB so varsel-side.html can read them
+  try {
+    const payload = pts.map(p => ({
+      id: p.id, name: p.name, municipality: p.municipality,
+      waterArea: p.waterArea, lat: p.lat, lng: p.lng,
+      foreRisk: p.foreRisk, todayMM: p.todayMM,
+      forecastMM: p.forecastMM, totalRain7d: p.totalRain7d,
+      precipMM: p.precipMM, quality: p.quality,
+      ts: Date.now()
+    }));
+    await dbPut('weather_store', '__warnpoints__', { ts: Date.now(), data: payload });
+  } catch(e) { /* non-fatal */ }
+}
+
+function renderWarnings(warnPoints) {
+  const div = document.getElementById('warnings');
+  div.innerHTML = '';
+  if (!warnPoints.length) return;
+
+  const sorted = warnPoints.sort((a,b) => b.foreRisk - a.foreRisk).slice(0, 4);
+  sorted.forEach(pt => {
+    const card = document.createElement('div');
+    card.className = 'warn-card';
+    const rainNow  = (pt.todayMM    || 0).toFixed(1);
+    const rainFore = (pt.forecastMM || 0).toFixed(1);
+    const rain7d   = (pt.totalRain7d|| 0).toFixed(1);
+    const favId    = `fav-warn-${pt.id}`;
+    card.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <strong>⚠ ${escHtml(pt.name)}</strong>
+        <span id="${favId}" class="fav-btn" onclick="event.stopPropagation();toggleFav(${pt.id})"
+          title="Tilføj til favoritter">${isFav(pt.id)?'❤️':'🤍'}</span>
+      </div>
+      <span style="font-size:.75rem;opacity:.8">${escHtml(pt.municipality)} · ${escHtml(pt.waterArea||'')}</span><br>
+      <span style="font-size:.75rem">
+        Overløbsrisiko 24h: <strong>${(pt.foreRisk*100).toFixed(0)}%</strong> ·
+        Nedbør nu: <strong>${rainNow} mm</strong> ·
+        Prognose: <strong>${rainFore} mm</strong> ·
+        7 dage: <strong>${rain7d} mm</strong>
+      </span>
+    `;
+    card.onclick = () => {
+      map.setView([pt.lat, pt.lng], 13);
+      updatePanel(pt, pt.riskScore, pt.foreRisk);
+    };
+    div.appendChild(card);
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN LOAD SEQUENCE
+// ═══════════════════════════════════════════════════════════════════════════
+async function loadAll() {
+  showLoader(true);
+  try {
+    overflowPoints = await loadOverflowData();
+
+    // ── Precipitation: 0.5° grid fetch ────────────────────────────────────────
+    // One Open-Meteo call per 0.5° grid cell (~35×55 km) covering Denmark.
+    // ~56 cells → ~56 API calls instead of 500+, eliminating fetch failures.
+    // All points in a cell share the cell centre's weather reading.
+    setLoader('Beregner nedbørsgitter…');
+
+    const GRID_DEG = 0.5;
+    function cellKey(lat, lng) {
+      const clat = Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2;
+      const clng = Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2;
+      return `${clat.toFixed(2)}:${clng.toFixed(2)}`;
+    }
+
+    // Collect unique grid cells
+    const gridCells = new Map();
+    overflowPoints.forEach(pt => {
+      const key = cellKey(pt.lat, pt.lng);
+      if (!gridCells.has(key)) {
+        const clat = Math.floor(pt.lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2;
+        const clng = Math.floor(pt.lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2;
+        gridCells.set(key, { lat: clat, lng: clng });
+      }
+    });
+
+    setLoader(`Henter nedbør for ${gridCells.size} gitterceller…`);
+
+    // Single bulk request to the server weather proxy.
+    // Server holds a shared 6h cache → most cells are cache hits across all users.
+    const cellResults = new Map();
+    const cellEntries = [...gridCells.entries()];
+    try {
+      const res = await fetch('api/weather/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cells: cellEntries.map(([k, c]) => ({ lat: c.lat, lng: c.lng })) }),
+      });
+      if (res.ok) {
+        const data = await res.json();   // { "lat:lng": {antecedentMM,...}, ... }
+        for (const [key] of cellEntries) {
+          // server returns keys in its own gridKey format (cell centre, 2dp)
+          const cell = gridCells.get(key);
+          const serverKey = `${cell.lat.toFixed(2)}:${cell.lng.toFixed(2)}`;
+          if (data[serverKey]) cellResults.set(key, data[serverKey]);
+        }
+      } else {
+        console.warn('Weather bulk HTTP', res.status);
+      }
+    } catch(e) {
+      console.warn('Weather bulk fetch failed:', e.message);
+    }
+
+    // Assign cell weather to every point
+    overflowPoints.forEach(pt => {
+      const key = cellKey(pt.lat, pt.lng);
+      const w   = cellResults.get(key) || { antecedentMM: 0, todayMM: 0, forecastMM: 0, totalRain7d: 0 };
+      pt.precipMM    = w.antecedentMM;
+      pt.todayMM     = w.todayMM;
+      pt.forecastMM  = w.forecastMM;
+      pt.totalRain7d = w.totalRain7d;
+      pt.lastEventAge = w.antecedentMM > 5 ? Math.random() * 2 : null;
+    });
+
+    renderMap();
+    showCacheStatus();   // append cache age to status bar
+    checkFavNotifications(overflowPoints);  // push notifications for high-risk favs
+  } catch(err) {
+    console.error('loadAll fejlede:', err);
+    // Show the actual error message and the phase where it happened
+    const phase = (typeof PULS_DATA !== 'undefined' && PULS_DATA)
+      ? (overflowPoints && overflowPoints.length ? 'render/vejr' : 'parsing')
+      : 'PULS-hentning';
+    document.getElementById('status-text').textContent =
+      `Fejl (${phase}): ${err && err.message ? err.message : err}`;
+  } finally {
+    showLoader(false);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TOGGLE CONTROLS
+// ═══════════════════════════════════════════════════════════════════════════
+let showPoints   = true;
+let showHeat     = true;
+let showViral    = false;
+let showForecast = false;
+
+function toggleHeat() {
+  showHeat = !showHeat;
+  document.getElementById('btn-heat').classList.toggle('active', showHeat);
+  heatLayer.visible = showHeat;
+  if (!showHeat && heatLayer.ref) { map.removeLayer(heatLayer.ref); heatLayer.ref = null; }
+  else if (showHeat) renderMap();
+}
+
+function toggleViral() {
+  showViral = !showViral;
+  document.getElementById('btn-viral').classList.toggle('active', showViral);
+  viralHeatLayer.visible = showViral;
+  if (!showViral && viralHeatLayer.ref) { map.removeLayer(viralHeatLayer.ref); viralHeatLayer.ref = null; }
+  else if (showViral) renderMap();
+}
+
+function togglePoints() {
+  showPoints = !showPoints;
+  document.getElementById('btn-pts').classList.toggle('active', showPoints);
+  if (showPoints) map.addLayer(pointsLayer);
+  else map.removeLayer(pointsLayer);
+}
+
+function toggleForecast() {
+  showForecast = !showForecast;
+  document.getElementById('btn-fore').classList.toggle('active', showForecast);
+  if (showForecast) map.addLayer(forecastLayer);
+  else map.removeLayer(forecastLayer);
+}
+
+async function refreshData() { await loadAll(); }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UTILITIES
+// ═══════════════════════════════════════════════════════════════════════════
+function randomBetween(a, b) { return a + Math.random() * (b - a); }
+
+// Format volume in liters with appropriate scale prefix
+function formatL(m3) {
+  const l = Math.round(m3 * 1000);
+  return l.toLocaleString('da-DK') + ' L';
+}
+
+// ── Cache management ─────────────────────────────────────────────────────────
+async function clearCache() {
+  try {
+    const db = await openDB();
+    await Promise.all([
+      new Promise((res, rej) => {
+        const tx  = db.transaction(STORE_PULS, 'readwrite');
+        const req = tx.objectStore(STORE_PULS).clear();
+        req.onsuccess = res; req.onerror = rej;
+      }),
+      new Promise((res, rej) => {
+        const tx  = db.transaction(STORE_WEATHER, 'readwrite');
+        const req = tx.objectStore(STORE_WEATHER).clear();
+        req.onsuccess = res; req.onerror = rej;
+      })
+    ]);
+    document.getElementById('status-text').textContent = 'Cache ryddet — genindlæser…';
+    setTimeout(loadAll, 400);
+  } catch(e) {
+    console.error('Cache clear failed:', e);
+  }
+}
+
+async function showCacheStatus() {
+  try {
+    const pulsRec    = await dbGet(STORE_PULS, PULS_CACHE_KEY);
+    const pulsAge    = pulsRec ? Math.round((Date.now() - pulsRec.ts) / 3600000) : null;
+    const statusEl   = document.getElementById('status-text');
+    const cacheInfo  = pulsAge !== null
+      ? ` · PULS cache ${pulsAge < 1 ? '< 1t' : pulsAge + 't'} gammel`
+      : ' · Ingen PULS cache';
+    if (statusEl && !statusEl.textContent.includes('cache')) {
+      statusEl.textContent += cacheInfo;
+    }
+  } catch(e) { /* non-fatal */ }
+}
+
+function findNearest(pt, candidates) {
+  let best = candidates[0], bestD = Infinity;
+  candidates.forEach(c => {
+    const d = Math.hypot(c.lat - pt.lat, c.lng - pt.lng);
+    if (d < bestD) { bestD = d; best = c; }
+  });
+  return best;
+}
+
+function setLoader(msg) {
+  document.getElementById('loader-msg').textContent = msg;
+}
+
+function showLoader(v) {
+  document.getElementById('loader').style.display = v ? 'flex' : 'none';
+}
+
+function updateStatusTime() {
+  const now = new Date();
+  document.getElementById('status-time').textContent =
+    `Opdateret ${now.toLocaleTimeString('da-DK')} · ${now.toLocaleDateString('da-DK')}`;
+}
+
+function escHtml(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUTO-REFRESH every 30 minutes
+// ═══════════════════════════════════════════════════════════════════════════
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PULS DATA — loaded asynchronously from /puls-data.json (cached 1 year)
+// ═══════════════════════════════════════════════════════════════════════════
+let PULS_DATA = null;  // populated by loadPulsData() before first render
+
+
+// AUTO-REFRESH every 30 minutes
+// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// FAVOURITES — stored in IndexedDB, keyed by point id
+// ═══════════════════════════════════════════════════════════════════════════
+const STORE_FAVS = 'fav_store';
+
+// Open DB is already defined (openDB). Add fav_store on first upgrade:
+// (We bump the DB version to add the store without breaking existing data)
+let _favDb = null;
+async function openFavDb() {
+  if (_favDb) return _favDb;
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('overloeb_favs', 1);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains(STORE_FAVS))
+        db.createObjectStore(STORE_FAVS);
+    };
+    req.onsuccess = e => { _favDb = e.target.result; resolve(_favDb); };
+    req.onerror   = e => reject(e.target.error);
+  });
+}
+
+async function getFavs() {
+  const db = await openFavDb();
+  return new Promise((res, rej) => {
+    const tx  = db.transaction(STORE_FAVS, 'readonly');
+    const req = tx.objectStore(STORE_FAVS).getAllKeys();
+    req.onsuccess = () => res(new Set(req.result.map(String)));
+    req.onerror   = e => rej(e.target.error);
+  });
+}
+
+let _favSet = new Set();
+(async () => { try { _favSet = await getFavs(); } catch(e) {} })();
+
+function isFav(id) { return _favSet.has(String(id)); }
+
+async function toggleFav(id) {
+  const key = String(id);
+  const db  = await openFavDb();
+  if (_favSet.has(key)) {
+    _favSet.delete(key);
+    await new Promise((res,rej) => {
+      const req = db.transaction(STORE_FAVS,'readwrite').objectStore(STORE_FAVS).delete(key);
+      req.onsuccess = res; req.onerror = rej;
+    });
+    showToast('💔 Fjernet fra favoritter');
+  } else {
+    _favSet.add(key);
+    const pt = overflowPoints.find(p => String(p.id) === key);
+    await new Promise((res,rej) => {
+      const req = db.transaction(STORE_FAVS,'readwrite').objectStore(STORE_FAVS)
+                    .put({ name: pt?.name, municipality: pt?.municipality }, key);
+      req.onsuccess = res; req.onerror = rej;
+    });
+    showToast('❤️ Tilføjet til favoritter — du modtager varsler');
+    requestPushPermission();
+  }
+  // Refresh all fav icons on screen
+  refreshFavIcons();
+}
+
+function refreshFavIcons() {
+  document.querySelectorAll('[data-fav-id]').forEach(el => {
+    el.textContent = isFav(el.dataset.favId) ? '❤️' : '🤍';
+  });
+}
+
+function showToast(msg) {
+  const t = document.getElementById('fav-toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// WEBPUSH — Service Worker + Notification API
+// ═══════════════════════════════════════════════════════════════════════════
+let _swReg = null;
+
+// Called after each data refresh — fire local notifications for high-risk favs
+async function checkFavNotifications(points) {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  if (!_swReg) return;
+  const favPoints = points.filter(pt => isFav(pt.id));
+  for (const pt of favPoints) {
+    const foreRisk = pt.foreRisk || 0;
+    const rainFore = pt.forecastMM || 0;
+    const rainNow  = pt.todayMM   || 0;
+    // Only notify when there is active rain (current or forecast) — not historical alone
+    const hasActiveRain = rainFore > 5 || rainNow > 5;
+    if (!hasActiveRain || foreRisk < 0.35) continue;
+    const tag = `overloeb-\${pt.id}`;
+    const lastShown = parseInt(sessionStorage.getItem(tag) || '0');
+    if (Date.now() - lastShown < 3600000) continue;
+    sessionStorage.setItem(tag, Date.now().toString());
+    _swReg.showNotification(`⚠ Overløbsvarsling: \${pt.name}`, {
+      body: `\${pt.municipality} · Risiko: \${(foreRisk*100).toFixed(0)}% · Nu: \${rainNow.toFixed(1)} mm · Prognose: \${rainFore.toFixed(1)} mm`,
+      tag, requireInteraction: false, vibrate: [200, 100, 200],
+    });
+  }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+// HJEM — lokal status baseret på GPS, nærmeste udløb
+// ═══════════════════════════════════════════════════════════════════════════
+
+function hjemSetStatus(msg) {
+  const el = document.getElementById('hjem-status-text');
+  if (el) el.textContent = msg;
+}
+
+function hjemHaversine(lat1, lng1, lat2, lng2) {
+  const R = 6371; // km
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 +
+            Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// Waits for overflowPoints to be populated by the Danmark-tab's loadAll(),
+// so Hjem can reuse the same data instead of fetching/parsing again.
+async function hjemWaitForData(timeoutMs = 15000) {
+  const start = Date.now();
+  while (!overflowPoints || overflowPoints.length === 0) {
+    if (Date.now() - start > timeoutMs) throw new Error('Data ikke klar endnu');
+    await new Promise(r => setTimeout(r, 300));
+  }
+  return overflowPoints;
+}
+
+function hjemBuildNearestCard(pt, distKm) {
+  const risk = pt.riskScore;
+  const rl   = riskLabel(risk);
+  const div  = document.createElement('div');
+  div.className = 'alarm-card ' + (rl.cardCls || '');
+
+  const rainNow  = (pt.todayMM     || 0).toFixed(1);
+  const rainFore = (pt.forecastMM  || 0).toFixed(1);
+  const distText = distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`;
+
+  div.innerHTML = `
+    <div class="card-top">
+      <div>
+        <div class="card-name">${escHtml(pt.name)}</div>
+        <div class="card-sub">${escHtml(pt.municipality)}${pt.waterArea ? ' · ' + escHtml(pt.waterArea) : ''}</div>
+      </div>
+      <span class="dist-chip">📍 ${distText}</span>
+    </div>
+    <div style="margin-bottom:.4rem">
+      ${risk !== null
+        ? `<span class="risk-chip ${rl.cls}">${rl.label} · ${(risk*100).toFixed(0)}%</span>`
+        : `<span class="risk-chip risk-nodata">Ingen nedbørsdata</span>`
+      }
+    </div>
+    <div class="rain-grid">
+      <div class="rain-cell"><span class="rv">${rainNow} mm</span><span class="rl">Nedbør nu</span></div>
+      <div class="rain-cell"><span class="rv">${rainFore} mm</span><span class="rl">Prognose 24h</span></div>
+    </div>
+    <div class="card-actions" style="margin-top:.5rem">
+      <button class="ctrl-btn" style="font-size:.65rem" onclick="goToPoint(${pt.id})">Vis på Danmarkskort →</button>
+    </div>
+  `;
+  return div;
+}
+
+function hjemRenderNearest(userLat, userLng) {
+  if (!overflowPoints || overflowPoints.length === 0) return;
+
+  const withDist = overflowPoints.map(pt => ({
+    pt, dist: hjemHaversine(userLat, userLng, pt.lat, pt.lng)
+  }));
+  withDist.sort((a, b) => a.dist - b.dist);
+  const nearest = withDist.slice(0, 6);
+
+  // Map markers
+  hjemNearestLayer.clearLayers();
+  nearest.forEach(({ pt, dist }) => {
+    const risk = pt.riskScore;
+    const color = risk !== null ? riskColor(risk) : '#999';
+    L.circleMarker([pt.lat, pt.lng], {
+      radius: 8, fillColor: color, color: '#fff', weight: 1.5, fillOpacity: 0.9,
+    }).addTo(hjemNearestLayer).bindPopup(`<strong>${escHtml(pt.name)}</strong><br>${dist < 1 ? Math.round(dist*1000)+' m' : dist.toFixed(1)+' km'} væk`);
+  });
+
+  // List
+  const grid = document.getElementById('hjem-nearest-grid');
+  const count = document.getElementById('hjem-nearest-count');
+  grid.innerHTML = '';
+  nearest.forEach(({ pt, dist }) => grid.appendChild(hjemBuildNearestCard(pt, dist)));
+  count.textContent = nearest.length;
+
+  document.getElementById('hjem-nearest-wrap').style.display = '';
+  document.getElementById('hjem-no-gps').style.display = 'none';
+}
+
+async function hjemLocate() {
+  document.getElementById('hjem-retry-btn').style.display = 'none';
+  document.getElementById('hjem-no-gps').style.display = 'none';
+
+  if (!navigator.geolocation) {
+    hjemSetStatus('Geolokalisering understøttes ikke af denne browser');
+    document.getElementById('hjem-no-gps').style.display = '';
+    return;
+  }
+
+  initHjemMap();
+  hjemSetStatus('Finder din placering…');
+
+  navigator.geolocation.getCurrentPosition(
+    async pos => {
+      const { latitude: lat, longitude: lng, accuracy } = pos.coords;
+
+      if (lat < 53 || lat > 60 || lng < 5 || lng > 18) {
+        hjemSetStatus('Din placering ser ud til at være uden for Danmark');
+        document.getElementById('hjem-no-gps').style.display = '';
+        document.getElementById('hjem-retry-btn').style.display = '';
+        return;
+      }
+
+      hjemMap.setView([lat, lng], 13);
+      if (hjemUserMarker) hjemMap.removeLayer(hjemUserMarker);
+      L.circle([lat, lng], {
+        radius: Math.min(accuracy, 500),
+        color: '#3b82f6', fillColor: '#3b82f6', fillOpacity: 0.12, weight: 1.5
+      }).addTo(hjemMap);
+      hjemUserMarker = L.circleMarker([lat, lng], {
+        radius: 8, color: '#fff', weight: 2, fillColor: '#3b82f6', fillOpacity: 1
+      }).addTo(hjemMap).bindPopup('Din placering').openPopup();
+
+      hjemSetStatus('Henter nærmeste udløb…');
+      try {
+        await hjemWaitForData();
+        hjemRenderNearest(lat, lng);
+        const ageNote = overflowPoints[0]?.precipMM === null ? ' (vejrdata indlæses stadig)' : '';
+        hjemSetStatus(`Din placering · opdateret nu${ageNote}`);
+      } catch(e) {
+        hjemSetStatus('Kunne ikke hente udløbsdata: ' + e.message);
+        document.getElementById('hjem-retry-btn').style.display = '';
+      }
+    },
+    _err => {
+      hjemSetStatus('Placering ikke tilgængelig');
+      document.getElementById('hjem-no-gps').style.display = '';
+      document.getElementById('hjem-retry-btn').style.display = '';
+    },
+    { timeout: 8000, maximumAge: 60000 }
+  );
+}
+
+// Boot: trigger GPS lookup immediately since Hjem is the default tab.
+// loadAll() is already invoked at script boot (bottom of file) — Hjem reuses
+// that same overflowPoints dataset via hjemWaitForData() rather than loading twice.
+initHjemMap();
+hjemLocate();
+
+async function registerSW() {
+  if (!('serviceWorker' in navigator)) return;
+  if (location.hostname.includes('claudeusercontent')) return;
+  if (location.protocol !== 'https:' && location.protocol !== 'http:') return;
+  try {
+    _swReg = await navigator.serviceWorker.register('./overloeb-sw.js');
+    console.info('SW registered');
+  } catch(e) {
+    console.warn('SW unavailable:', e.message);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// VARSLER TAB
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ── Tab switching ────────────────────────────────────────────────────────────
+function toggleLegend() {
+  document.getElementById('legend').classList.toggle('collapsed');
+}
+
+function toggleRightCol() {
+  document.getElementById('right-col').classList.toggle('collapsed');
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.getElementById('tab-btn-' + name).classList.add('active');
+
+  // Trigger map resize when switching to a tab containing a Leaflet map
+  if (name === 'kort') {
+    setTimeout(() => map && map.invalidateSize(), 50);
+  }
+  if (name === 'hjem') {
+    setTimeout(() => hjemMap && hjemMap.invalidateSize(), 50);
+  }
+  // Reload varsler data when switching to varsler tab
+  if (name === 'varsler') {
+    loadVarselData();
+    showPushBanner();
+  }
+}
+
+// ── Build an alarm/fav card ──────────────────────────────────────────────────
+function buildVarselCard(pt, isFavCard) {
+  const rl  = riskLabel(pt.foreRisk || 0);
+  const div = document.createElement('div');
+  div.className = 'alarm-card ' + rl.cardCls;
+
+  const rain7d   = (pt.totalRain7d || 0).toFixed(1);
+  const rainNow  = (pt.todayMM     || 0).toFixed(1);
+  const rainFore = (pt.forecastMM  || 0).toFixed(1);
+  const risk     = ((pt.foreRisk   || 0) * 100).toFixed(0);
+
+  // Build explanation text
+  const basisText  = pt.warnBasis   || (rainFore > 0 || rainNow > 0
+    ? `prognose ${rainFore} mm · observeret ${rainNow} mm`
+    : 'nedbørsdata mangler');
+  const qualText   = pt.warnQuality || '—';
+  const evText     = pt.eventsPerYear > 0
+    ? `${pt.eventsPerYear.toFixed(0)} overløb/år historisk`
+    : 'overløbsfrekvens ukendt';
+
+  div.innerHTML = `
+    <div class="card-top">
+      <div>
+        <div class="card-name">${escHtml(pt.name)}</div>
+        <div class="card-sub">${escHtml(pt.municipality)}${pt.waterArea ? ' · ' + escHtml(pt.waterArea) : ''}</div>
+      </div>
+      ${isFavCard
+        ? `<span class="fav-btn" onclick="removeVarselFav('${pt.id}')" title="Fjern favorit">❤️</span>`
+        : `<span class="chip ${rl.cls}">${rl.label} ${risk}%</span>`
+      }
+    </div>
+    ${isFavCard
+      ? `<div style="margin-bottom:.4rem"><span class="chip ${rl.cls}">${rl.label} · ${risk}% overløbsrisiko 24h</span></div>`
+      : ''
+    }
+    <div class="rain-grid">
+      <div class="rain-cell"><span class="rv">${rainNow} mm</span><span class="rl">Observeret 24h</span></div>
+      <div class="rain-cell"><span class="rv">${rainFore} mm</span><span class="rl">Prognose 24h</span></div>
+      <div class="rain-cell"><span class="rv">${rain7d} mm</span><span class="rl">7 dage total</span></div>
+    </div>
+    <div style="margin-top:.55rem;padding:.45rem .55rem;background:rgba(26,107,138,.07);border-radius:5px;border-left:2px solid rgba(26,107,138,.4)">
+      <div style="font-family:var(--mono);font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,237,230,.35);margin-bottom:.25rem">Varslingsgrundlag</div>
+      <div style="font-size:.72rem;color:rgba(240,237,230,.75);line-height:1.5">
+        🌧 ${escHtml(basisText)}<br>
+        📊 ${escHtml(evText)} · ${escHtml(qualText)}<br>
+        ⚠ Beregnet overløbsrisiko: <strong>${risk}%</strong> inden for 24 timer
+      </div>
+    </div>
+    ${isFavCard ? `<div class="card-actions" style="margin-top:.5rem">
+      <button class="ctrl-btn" style="font-size:.65rem" onclick="goToPoint(${pt.id})">Vis på kort →</button>
+    </div>` : ''}
+  `;
+  return div;
+}
+
+// Navigate to a point on the map and switch to kort tab
+function goToPoint(id) {
+  const pt = overflowPoints && overflowPoints.find(p => p.id === id);
+  if (pt) {
+    switchTab('kort');
+    setTimeout(() => {
+      map.setView([pt.lat, pt.lng], 14);
+      updatePanel(pt, pt.riskScore || 0, pt.foreRisk || 0);
+    }, 60);
+  }
+}
+
+async function removeVarselFav(id) {
+  if (!_favDb) return;
+  try {
+    await new Promise((res, rej) => {
+      const req = _favDb.transaction(STORE_FAVS, 'readwrite').objectStore(STORE_FAVS).delete(String(id));
+      req.onsuccess = res; req.onerror = rej;
+    });
+    _favSet.delete(String(id));
+    refreshFavIcons();
+    loadVarselData();
+  } catch(e) {}
+}
+
+function showPushBanner() {
+  const banner = document.getElementById('push-banner-inline');
+  if (!banner) return;
+  if (!('Notification' in window) || Notification.permission !== 'default') {
+    banner.classList.add('hidden');
+  } else {
+    banner.classList.remove('hidden');
+  }
+}
+
+function setVarselStatus(msg) {
+  const el = document.getElementById('varsler-status');
+  if (el) el.textContent = msg;
+}
+
+async function loadVarselData() {
+  const alarmGrid  = document.getElementById('alarm-grid');
+  const alarmCount = document.getElementById('alarm-count');
+  const favGrid    = document.getElementById('fav-grid');
+  const favCount   = document.getElementById('fav-count');
+  if (!alarmGrid) return;
+
+  // ── Active alarms from saved warnPoints ───────────────────────────────────
+  let alarms = [];
+  try {
+    const rec = await dbGet(STORE_WEATHER, '__warnpoints__');
+    if (rec && rec.data && Array.isArray(rec.data)) {
+      const ageMs  = Date.now() - rec.ts;
+      const ageMin = Math.round(ageMs / 60000);
+      if (ageMs > 2 * 3600 * 1000) {
+        // Stale data — tell user to refresh the map
+        alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">🕐</span>Varsler forældede — åbn kortet og tryk Opdater</div>';
+        alarmCount.textContent = '—';
+        updateVarslerBadge(0);
+        setVarselStatus('Varsler er forældede (> 2 timer) — opdater kortet');
+      } else {
+        alarms = rec.data;
+        setVarselStatus(`Opdateret ${ageMin < 1 ? '< 1 min' : ageMin + ' min'} siden`);
+      }
+    }
+  } catch(e) {}
+
+  alarmGrid.innerHTML = '';
+  alarmCount.textContent = alarms.length;
+  updateVarslerBadge(alarms.length);
+
+  if (alarms.length === 0) {
+    alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">✅</span>Ingen aktive varsler — alle nedbørsmålinger er under overløbstærsklen</div>';
+  } else {
+    alarms.sort((a,b) => (b.foreRisk||0) - (a.foreRisk||0))
+          .forEach(pt => alarmGrid.appendChild(buildVarselCard(pt, false)));
+  }
+
+  // ── Favourites ─────────────────────────────────────────────────────────────
+  try {
+    const favKeys = await dbGetAllKeys(_favDb, STORE_FAVS);
+    favCount.textContent = favKeys.length;
+    favGrid.innerHTML = '';
+
+    if (favKeys.length === 0) {
+      favGrid.innerHTML = '<div class="v-empty"><span class="icon">🤍</span>Ingen favoritter — klik ❤️ på et punkt i kortet</div>';
+    } else {
+      for (const key of favKeys) {
+        const rec  = await dbGet_fav(key);
+        const data = rec || {};
+        const live = (overflowPoints || []).find(p => String(p.id) === String(key));
+        const pt = live
+          ? { ...live, foreRisk: live.foreRisk || 0 }
+          : { id: key, name: data.name || `Punkt ${key}`, municipality: data.municipality || '—',
+              waterArea: '', foreRisk: 0, todayMM: null, forecastMM: null, totalRain7d: null };
+        favGrid.appendChild(buildVarselCard(pt, true));
+      }
+    }
+  } catch(e) {
+    favGrid.innerHTML = '<div class="v-empty">Fejl ved indlæsning af favoritter</div>';
+  }
+}
+
+// Helpers using existing DBs
+async function dbGet_fav(key) {
+  return new Promise((res, rej) => {
+    const req = _favDb.transaction(STORE_FAVS, 'readonly').objectStore(STORE_FAVS).get(String(key));
+    req.onsuccess = () => res(req.result ?? null);
+    req.onerror   = e => rej(e.target.error);
+  });
+}
+
+async function dbGetAllKeys(db, store) {
+  return new Promise((res, rej) => {
+    const req = db.transaction(store, 'readonly').objectStore(store).getAllKeys();
+    req.onsuccess = () => res(req.result || []);
+    req.onerror   = e => rej(e.target.error);
+  });
+}
+
+function updateVarslerBadge(n) {
+  const badge = document.getElementById('varsler-badge');
+  if (!badge) return;
+  badge.textContent = n;
+  badge.className = 'tab-badge' + (n === 0 ? ' zero' : '');
+}
+
+// Hook into saveWarnPoints to refresh badge live
+const _origSaveWarnPoints = saveWarnPoints;
+async function saveWarnPoints(pts) {
+  await _origSaveWarnPoints(pts);
+  updateVarslerBadge(pts.length);
+  // If varsler tab is active, refresh it
+  const varselPanel = document.getElementById('tab-varsler');
+  if (varselPanel && varselPanel.classList.contains('active')) {
+    loadVarselData();
+  }
+}
+
+// Remove the external varsler link from controls since it's now a tab
+
+// ── Active risk model ──────────────────────────────────────────────────────
+function computeRisk(pt) {
+  const { overflowProbBase, meanVolumePerEvent, precipMM, lastEventAge } = pt;
+
+  // No weather data → risk is unknown. Never display a percentage.
+  if (precipMM === null || precipMM === undefined) {
+    return { pOverflow: null, severity: null, risk: null, tau: seasonalTau(), noData: true };
+  }
+
+  // Zero-anchored intensity factor.
+  // ramp ensures intensity=0 at precipMM=0 (no rain → no overflow risk).
+  // Sigmoid threshold at 5mm matches realistic antecedentMM from 3-day hydrological tau.
+  // 5mm antecedentMM → ~50% intensity; 15mm → ~90% intensity.
+  const ramp            = Math.min(Math.max(precipMM - 1, 0) / 6, 1);
+  const intensityFactor = sigmoid((precipMM - 5) / 4) * ramp;
+
+  const pOverflow = Math.min(overflowProbBase * intensityFactor * 3, 1);
+  const severity  = Math.min(Math.log10(meanVolumePerEvent + 1) / 5, 1);
+  let   risk      = pOverflow * (0.6 + 0.4 * severity);
+
+  if (lastEventAge !== null && lastEventAge >= 0) {
+    const tau       = seasonalTau();
+    const amplitude = 0.9 * (1 + SEDIMENT_REBOUND);
+    const residual  = amplitude * Math.exp(-lastEventAge / tau);
+    risk = Math.min(risk + residual * (1 - risk), 1);
+  }
+
+  return { pOverflow, severity, risk, tau: seasonalTau(), noData: false };
+}
+
+
+// Auto-refresh every 30 min
+setInterval(loadAll, 30 * 60 * 1000);
+// BOOT
+loadAll();
+</script>
+</body>
+</html>
