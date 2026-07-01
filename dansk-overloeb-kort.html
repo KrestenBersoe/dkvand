@@ -768,12 +768,13 @@
     background: var(--paper);
     border-radius: 16px 16px 0 0;
     box-shadow: 0 -4px 20px rgba(26,39,51,.15);
-    max-height: 45vh;
+    max-height: 56px;            /* collapsed: shows only handle + header */
     overflow: hidden;
     display: flex;
     flex-direction: column;
+    transition: max-height .25s ease;
   }
-  #hjem-sheet.expanded { max-height: 80vh; }
+  #hjem-sheet.expanded { max-height: 70vh; }
 
   #hjem-sheet-handle {
     width: 40px; height: 4px;
@@ -1176,7 +1177,7 @@ const DB_NAME         = 'overloeb_cache';
 const DB_VERSION      = 1;
 const STORE_PULS      = 'puls_store';
 const STORE_WEATHER   = 'weather_store';
-const TTL_PULS_MS     = 365 * 24 * 3600 * 1000;  // 1 year
+const TTL_PULS_MS     =  14 * 24 * 3600 * 1000;  // 14 days
 const TTL_WEATHER_MS  =  6 *      3600 * 1000;   //  6 hours
 
 let _db = null;
@@ -1218,7 +1219,7 @@ async function dbPut(store, key, value) {
 }
 
 // ── PULS cache helpers ───────────────────────────────────────────────────────
-const PULS_CACHE_KEY = 'puls_v2';  // bumped: volume now from udledning only
+const PULS_CACHE_KEY = 'puls_v3';  // bumped: TTL changed to 14 days  // bumped: volume now from udledning only
 
 
 
@@ -2132,6 +2133,7 @@ async function toggleFav(id) {
       req.onsuccess = res; req.onerror = rej;
     });
     showToast('💔 Fjernet fra favoritter');
+    await syncPushSubscription();  // update server
   } else {
     _favSet.add(key);
     const pt = overflowPoints.find(p => String(p.id) === key);
@@ -2140,8 +2142,9 @@ async function toggleFav(id) {
                     .put({ name: pt?.name, municipality: pt?.municipality }, key);
       req.onsuccess = res; req.onerror = rej;
     });
-    showToast('❤️ Tilføjet til favoritter — du modtager varsler');
-    requestPushPermission();
+    showToast('❤️ Tilføjet til favoritter');
+    await requestPushPermission();
+    await syncPushSubscription();  // update server with new favourite
   }
   // Refresh all fav icons on screen
   refreshFavIcons();
@@ -2165,27 +2168,25 @@ function showToast(msg) {
 // ═══════════════════════════════════════════════════════════════════════════
 let _swReg = null;
 
-// Called after each data refresh — fire local notifications for high-risk favs
+// After each data refresh: upload warnPoints to server so it can push to all subscribers.
+// The server handles fan-out to all registered subscriptions.
 async function checkFavNotifications(points) {
-  if (!('Notification' in window) || Notification.permission !== 'granted') return;
-  if (!_swReg) return;
-  const favPoints = points.filter(pt => isFav(pt.id));
-  for (const pt of favPoints) {
-    const foreRisk = pt.foreRisk || 0;
-    const rainFore = pt.forecastMM || 0;
-    const rainNow  = pt.todayMM   || 0;
-    // Only notify when there is active rain (current or forecast) — not historical alone
-    const hasActiveRain = rainFore > 5 || rainNow > 5;
-    if (!hasActiveRain || foreRisk < 0.35) continue;
-    const tag = `overloeb-\${pt.id}`;
-    const lastShown = parseInt(sessionStorage.getItem(tag) || '0');
-    if (Date.now() - lastShown < 3600000) continue;
-    sessionStorage.setItem(tag, Date.now().toString());
-    _swReg.showNotification(`⚠ Overløbsvarsling: \${pt.name}`, {
-      body: `\${pt.municipality} · Risiko: \${(foreRisk*100).toFixed(0)}% · Nu: \${rainNow.toFixed(1)} mm · Prognose: \${rainFore.toFixed(1)} mm`,
-      tag, requireInteraction: false, vibrate: [200, 100, 200],
+  if (!_pushSubscription) return;  // only if this client has subscribed
+  const warnPoints = points.filter(pt => {
+    const hasRain = (pt.forecastMM || 0) > 5 || (pt.todayMM || 0) > 5;
+    return hasRain && (pt.foreRisk || 0) > 0.35;
+  }).map(pt => ({
+    id: pt.id, name: pt.name, municipality: pt.municipality, waterArea: pt.waterArea,
+    foreRisk: pt.foreRisk, forecastMM: pt.forecastMM, todayMM: pt.todayMM,
+  }));
+
+  try {
+    await fetch('/api/push/warnpoints', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ warnPoints }),
     });
-  }
+  } catch(e) { console.warn('warnpoints upload:', e); }
 }
 
 
@@ -2343,10 +2344,89 @@ async function registerSW() {
   if (location.protocol !== 'https:' && location.protocol !== 'http:') return;
   try {
     _swReg = await navigator.serviceWorker.register('./overloeb-sw.js');
-    console.info('SW registered');
+    console.info('SW registered:', _swReg.scope);
   } catch(e) {
     console.warn('SW unavailable:', e.message);
   }
+}
+
+// ── Web Push subscription ─────────────────────────────────────────────────
+let _pushSubscription = null;
+
+async function requestPushPermission() {
+  if (!('Notification' in window)) return;
+  if (Notification.permission === 'denied') {
+    showToast('🔕 Notifikationer blokeret i browserindstillinger');
+    return;
+  }
+  const perm = await Notification.requestPermission();
+  if (perm !== 'granted') return;
+  await subscribeToPush();
+}
+
+async function subscribeToPush() {
+  if (!_swReg) { console.warn('SW not ready'); return; }
+  try {
+    const res = await fetch('/api/push/vapid-public-key');
+    if (!res.ok) { console.warn('VAPID key unavailable'); return; }
+    const { publicKey } = await res.json();
+    const appServerKey = urlBase64ToUint8Array(publicKey);
+    _pushSubscription = await _swReg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: appServerKey,
+    });
+    await syncPushSubscription();
+    showToast('🔔 Push-notifikationer aktiveret');
+  } catch(e) {
+    console.warn('Push subscribe failed:', e.message);
+  }
+}
+
+async function syncPushSubscription() {
+  if (!_pushSubscription) return;
+  try {
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subscription: _pushSubscription.toJSON(),
+        favourites: [..._favSet],
+      }),
+    });
+  } catch(e) { console.warn('Push sync failed:', e); }
+}
+
+async function unsubscribeFromPush() {
+  if (!_pushSubscription) return;
+  try {
+    const endpoint = _pushSubscription.endpoint;
+    await _pushSubscription.unsubscribe();
+    _pushSubscription = null;
+    await fetch('/api/push/unsubscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ endpoint }),
+    });
+  } catch(e) { console.warn('Unsubscribe failed:', e); }
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw     = window.atob(base64);
+  return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+}
+
+async function restorePushSubscription() {
+  if (!_swReg) return;
+  try {
+    const existing = await _swReg.pushManager.getSubscription();
+    if (existing) {
+      _pushSubscription = existing;
+      await syncPushSubscription();
+      console.info('Push subscription restored');
+    }
+  } catch(e) { console.warn('Restore push:', e); }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2566,15 +2646,7 @@ function updateVarslerBadge(n) {
 
 // Hook into saveWarnPoints to refresh badge live
 const _origSaveWarnPoints = saveWarnPoints;
-async function saveWarnPoints(pts) {
-  await _origSaveWarnPoints(pts);
-  updateVarslerBadge(pts.length);
-  // If varsler tab is active, refresh it
-  const varselPanel = document.getElementById('tab-varsler');
-  if (varselPanel && varselPanel.classList.contains('active')) {
-    loadVarselData();
-  }
-}
+
 
 // Remove the external varsler link from controls since it's now a tab
 
@@ -2613,6 +2685,7 @@ function computeRisk(pt) {
 setInterval(loadAll, 30 * 60 * 1000);
 // BOOT
 loadAll();
+registerSW().then(() => restorePushSubscription());
 </script>
 </body>
 </html>
