@@ -113,14 +113,10 @@
     flex: 1 1 auto;
     width: 100%;
     min-height: 0;
+    height: 100%;
   }
-  #tab-kort {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    overflow: hidden;
-  }
+  /* #tab-kort positioning is handled by .tab-panel and .tab-panel.active */
+  #tab-kort { position: relative; overflow: hidden; }
 
   /* ── Right column: controls + detail panel, single non-overlapping column ── */
   #right-col {
@@ -704,59 +700,150 @@
   }
 
 
-  /* ── Hjem-panel ───────────────────────────────────────────────────────────── */
-  #tab-hjem { overflow: hidden; }
-  #hjem-wrap { display: flex; flex-direction: column; height: 100%; }
+  /* ── Hjem-panel: fuldskærms kort til mobil ──────────────────────────────── */
+  #tab-hjem { position: relative; overflow: hidden; }
 
+  /* Fuldskærms kort fylder hele panelet */
+  #hjem-map {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+  }
+
+  /* Status-chip i toppen oven på kortet */
   #hjem-status-bar {
-    flex-shrink: 0;
-    padding: .6rem 1rem;
-    background: var(--accent-bg);
-    border-bottom: 1px solid var(--line);
+    position: absolute;
+    top: .6rem; left: 50%; transform: translateX(-50%);
+    z-index: 10;
+    background: rgba(255,255,255,.92);
+    border: 1px solid var(--line);
+    border-radius: 20px;
+    padding: .35rem .85rem;
     font-family: var(--mono);
-    font-size: .75rem;
+    font-size: .72rem;
     color: var(--accent-dk);
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: .6rem;
+    gap: .5rem;
+    box-shadow: var(--shadow);
+    backdrop-filter: blur(4px);
+    white-space: nowrap;
+    max-width: calc(100% - 2rem);
+  }
+  #hjem-retry-btn {
+    background: none;
+    border: none;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: .85rem;
+    padding: 0;
   }
 
-  #hjem-map {
-    flex-shrink: 0;
-    height: 38vh;
-    min-height: 220px;
-    width: 100%;
-    border-bottom: 1px solid var(--line);
-  }
-
-  #hjem-content {
-    flex: 1;
-    overflow-y: auto;
-    padding: 1rem 1rem 2rem;
-    background: var(--canvas);
+  /* GPS-afvist overlay centreret over kortet */
+  #hjem-no-gps {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(244,247,249,.88);
+    backdrop-filter: blur(6px);
   }
 
   .hjem-empty {
     text-align: center;
-    padding: 2.5rem 1.2rem;
-    color: var(--ink-soft);
+    padding: 2rem 1.5rem;
+    max-width: 320px;
   }
-  .hjem-empty .icon { font-size: 2.4rem; display: block; margin-bottom: .7rem; }
-  .hjem-empty h3 { font-family: var(--mono); font-size: .9rem; color: var(--ink); margin-bottom: .5rem; }
-  .hjem-empty p { font-size: .82rem; line-height: 1.6; max-width: 360px; margin: 0 auto 1rem; }
+  .hjem-empty .icon { font-size: 2.5rem; display: block; margin-bottom: .75rem; }
+  .hjem-empty h3 { font-family: var(--mono); font-size: .95rem; color: var(--ink); margin-bottom: .5rem; }
+  .hjem-empty p { font-size: .82rem; line-height: 1.6; color: var(--ink-soft); margin-bottom: .8rem; }
 
-  /* Distance badge on nearest-point cards */
-  .dist-chip {
+  /* Bundpanel — swipe-op liste over nærmeste udløb */
+  #hjem-sheet {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    z-index: 10;
+    background: var(--paper);
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -4px 20px rgba(26,39,51,.15);
+    max-height: 45vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  #hjem-sheet.expanded { max-height: 80vh; }
+
+  #hjem-sheet-handle {
+    width: 40px; height: 4px;
+    background: var(--line);
+    border-radius: 2px;
+    margin: .6rem auto .2rem;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  #hjem-sheet-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .3rem .9rem .5rem;
     font-family: var(--mono);
-    font-size: .62rem;
+    font-size: .65rem;
     font-weight: 600;
-    color: var(--accent);
-    background: var(--accent-bg);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  #hjem-nearest-grid {
+    overflow-y: auto;
+    padding: .5rem .75rem .75rem;
+    display: flex;
+    flex-direction: column;
+    gap: .5rem;
+  }
+
+  /* Compact card for hjem nearest list */
+  .hjem-card {
+    background: var(--canvas);
     border: 1px solid var(--line);
-    border-radius: 10px;
-    padding: .1rem .5rem;
-    white-space: nowrap;
+    border-radius: 8px;
+    padding: .65rem .8rem;
+    display: flex;
+    align-items: center;
+    gap: .7rem;
+    cursor: pointer;
+    transition: border-color .15s;
+  }
+  .hjem-card:hover, .hjem-card:active { border-color: var(--accent); }
+  .hjem-card-risk {
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: .65rem;
+    font-weight: 700;
+    color: #fff;
+  }
+  .hjem-card-body { flex: 1; min-width: 0; }
+  .hjem-card-name { font-weight: 600; font-size: .82rem; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hjem-card-sub  { font-size: .72rem; color: var(--ink-soft); margin-top: .1rem; }
+  .hjem-card-arrow { color: var(--ink-soft); font-size: .9rem; flex-shrink: 0; }
+
+  /* Distance badge */
+  .dist-chip {
+    font-family: var(--mono); font-size: .62rem; font-weight: 600;
+    color: var(--accent); background: var(--accent-bg);
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: .1rem .5rem; white-space: nowrap;
   }
 
 </style>
@@ -794,36 +881,39 @@
 <!-- Tab panels -->
 <div id="tab-panels">
 
-  <!-- Hjem-panel: lokal status baseret på GPS -->
+  <!-- Hjem-panel: fuldskærms lokalt kort til mobil -->
   <div class="tab-panel active" id="tab-hjem">
-    <div id="hjem-wrap">
 
-      <div id="hjem-status-bar">
-        <span id="hjem-status-text">Finder din placering…</span>
-        <button class="ctrl-btn" id="hjem-retry-btn" onclick="hjemLocate()" style="display:none">↻ Prøv igen</button>
-      </div>
+    <!-- Fuldskærms Leaflet-kort -->
+    <div id="hjem-map"></div>
 
-      <div id="hjem-map"></div>
+    <!-- Status-chip øverst -->
+    <div id="hjem-status-bar">
+      <span id="hjem-status-text">Finder din placering…</span>
+      <button id="hjem-retry-btn" onclick="hjemLocate()" style="display:none">↻</button>
+    </div>
 
-      <div id="hjem-content">
-
-        <div id="hjem-no-gps" class="hjem-empty" style="display:none">
-          <span class="icon">📍</span>
-          <h3>Lokation ikke tilgængelig</h3>
-          <p>Tillad placeringsadgang i din browser for at se vandkvaliteten der hvor du er. Du kan også se hele landet under fanen <strong>Danmark</strong>.</p>
-          <button class="ctrl-btn" onclick="hjemLocate()">📍 Find min placering</button>
-        </div>
-
-        <div id="hjem-nearest-wrap" style="display:none">
-          <div class="section-head">
-            Nærmeste udløb
-            <span class="section-count" id="hjem-nearest-count">0</span>
-          </div>
-          <div class="card-grid" id="hjem-nearest-grid"></div>
-        </div>
-
+    <!-- GPS-afvist: centered overlay -->
+    <div id="hjem-no-gps" style="display:none">
+      <div class="hjem-empty">
+        <span class="icon">📍</span>
+        <h3>Lokation ikke tilgængelig</h3>
+        <p>Tillad placeringsadgang for at se vandmiljøet ved din lokation.</p>
+        <button class="ctrl-btn" onclick="hjemLocate()">📍 Find min placering</button>
+        <p style="margin-top:.6rem;font-size:.75rem">Eller se hele landet under <strong>Danmark</strong></p>
       </div>
     </div>
+
+    <!-- Swipe-op panel: nærmeste udløb -->
+    <div id="hjem-sheet" style="display:none">
+      <div id="hjem-sheet-handle" onclick="hjemToggleSheet()"></div>
+      <div id="hjem-sheet-head">
+        Nærmeste udløb
+        <span class="section-count" id="hjem-nearest-count">0</span>
+      </div>
+      <div id="hjem-nearest-grid"></div>
+    </div>
+
   </div><!-- /tab-hjem -->
 
   <!-- Kortpanel -->
@@ -2129,38 +2219,32 @@ async function hjemWaitForData(timeoutMs = 15000) {
 }
 
 function hjemBuildNearestCard(pt, distKm) {
-  const risk = pt.riskScore;
-  const rl   = riskLabel(risk);
-  const div  = document.createElement('div');
-  div.className = 'alarm-card ' + (rl.cardCls || '');
-
-  const rainNow  = (pt.todayMM     || 0).toFixed(1);
-  const rainFore = (pt.forecastMM  || 0).toFixed(1);
+  const risk     = pt.riskScore;
+  const rl       = riskLabel(risk);
   const distText = distKm < 1 ? `${Math.round(distKm * 1000)} m` : `${distKm.toFixed(1)} km`;
+  const pct      = risk !== null ? `${(risk*100).toFixed(0)}%` : '?';
+
+  // Risk circle color
+  const circleColor = risk !== null ? riskColor(risk) : '#bbb';
+
+  const div = document.createElement('div');
+  div.className = 'hjem-card';
+  div.onclick = () => goToPoint(pt.id);
 
   div.innerHTML = `
-    <div class="card-top">
-      <div>
-        <div class="card-name">${escHtml(pt.name)}</div>
-        <div class="card-sub">${escHtml(pt.municipality)}${pt.waterArea ? ' · ' + escHtml(pt.waterArea) : ''}</div>
-      </div>
-      <span class="dist-chip">📍 ${distText}</span>
+    <div class="hjem-card-risk" style="background:${circleColor}">${pct}</div>
+    <div class="hjem-card-body">
+      <div class="hjem-card-name">${escHtml(pt.name)}</div>
+      <div class="hjem-card-sub">${escHtml(pt.waterArea || pt.municipality)} · ${distText}</div>
     </div>
-    <div style="margin-bottom:.4rem">
-      ${risk !== null
-        ? `<span class="risk-chip ${rl.cls}">${rl.label} · ${(risk*100).toFixed(0)}%</span>`
-        : `<span class="risk-chip risk-nodata">Ingen nedbørsdata</span>`
-      }
-    </div>
-    <div class="rain-grid">
-      <div class="rain-cell"><span class="rv">${rainNow} mm</span><span class="rl">Nedbør nu</span></div>
-      <div class="rain-cell"><span class="rv">${rainFore} mm</span><span class="rl">Prognose 24h</span></div>
-    </div>
-    <div class="card-actions" style="margin-top:.5rem">
-      <button class="ctrl-btn" style="font-size:.65rem" onclick="goToPoint(${pt.id})">Vis på Danmarkskort →</button>
-    </div>
+    <div class="hjem-card-arrow">›</div>
   `;
   return div;
+}
+
+function hjemToggleSheet() {
+  const sheet = document.getElementById('hjem-sheet');
+  if (sheet) sheet.classList.toggle('expanded');
 }
 
 function hjemRenderNearest(userLat, userLng) {
@@ -2189,7 +2273,7 @@ function hjemRenderNearest(userLat, userLng) {
   nearest.forEach(({ pt, dist }) => grid.appendChild(hjemBuildNearestCard(pt, dist)));
   count.textContent = nearest.length;
 
-  document.getElementById('hjem-nearest-wrap').style.display = '';
+  document.getElementById('hjem-sheet').style.display = 'flex';
   document.getElementById('hjem-no-gps').style.display = 'none';
 }
 
@@ -2199,7 +2283,7 @@ async function hjemLocate() {
 
   if (!navigator.geolocation) {
     hjemSetStatus('Geolokalisering understøttes ikke af denne browser');
-    document.getElementById('hjem-no-gps').style.display = '';
+    document.getElementById('hjem-no-gps').style.display = 'flex';
     return;
   }
 
@@ -2212,7 +2296,7 @@ async function hjemLocate() {
 
       if (lat < 53 || lat > 60 || lng < 5 || lng > 18) {
         hjemSetStatus('Din placering ser ud til at være uden for Danmark');
-        document.getElementById('hjem-no-gps').style.display = '';
+        document.getElementById('hjem-no-gps').style.display = 'flex';
         document.getElementById('hjem-retry-btn').style.display = '';
         return;
       }
@@ -2240,7 +2324,7 @@ async function hjemLocate() {
     },
     _err => {
       hjemSetStatus('Placering ikke tilgængelig');
-      document.getElementById('hjem-no-gps').style.display = '';
+      document.getElementById('hjem-no-gps').style.display = 'flex';
       document.getElementById('hjem-retry-btn').style.display = '';
     },
     { timeout: 8000, maximumAge: 60000 }
