@@ -296,8 +296,7 @@ async function sendPushNotifications(warnPoints) {
       title: `⚠ Overløbsvarsling: ${hits[0].name}${hits.length > 1 ? ` +${hits.length - 1}` : ''}`,
       body: hits.map(pt =>
         `${pt.name} · ${(( pt.foreRisk || 0)*100).toFixed(0)}% risiko · ${(pt.forecastMM||0).toFixed(1)} mm prognose`
-      ).join('
-'),
+      ).join('\n'),
       tag: 'overloeb-varsling',
       url: '/',
     });
