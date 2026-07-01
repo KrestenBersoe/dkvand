@@ -23,6 +23,7 @@ const https   = require('https');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
 
 // ── Static files with appropriate cache headers ─────────────────────────────
 const STATIC_DIR = __dirname;
@@ -227,8 +228,8 @@ setInterval(() => {
   }
 }, 3600 * 1000);
 
-app.listen(PORT, () => {
-  console.log(`Overløbsrisiko server kører på http://localhost:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Overløbsrisiko server kører på http://${HOST}:${PORT}`);
   console.log(`  Vejr-proxy: /api/weather?lat=55.7&lng=12.5`);
   console.log(`  Bulk:       POST /api/weather/bulk { cells: [...] }`);
   console.log(`  Status:     /api/health`);
