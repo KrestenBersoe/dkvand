@@ -105,8 +105,37 @@ function gridKey(lat, lng) {
   return `${clat.toFixed(4)}:${clng.toFixed(4)}`;
 }
 
-// Denmark + Bornholm bounding box at 0.25°. ~220 cells.
-function buildDenmarkGrid() {
+// Build grid from actual PULS overflow point coordinates — only cells that
+// contain real data points. Avoids warming ~220 sea/foreign bbox cells.
+// puls-data.json format: { a: [authorities], w: [waterAreas], d: [[lat,lng,...], ...] }
+// Typically ~150-180 unique 0.25° cells vs 420 for full bbox.
+let _pulsGrid = null;
+function buildPulsGrid() {
+  if (_pulsGrid) return _pulsGrid;
+  try {
+    const raw  = require('fs').readFileSync(path.join(STATIC_DIR, 'puls-data.json'), 'utf8');
+    const data = JSON.parse(raw);
+    const rows = data?.d || data;                  // compressed: { d: rows } or raw array
+    const seen = new Set();
+    const cells = [];
+    for (const r of rows) {
+      const lat = parseFloat(Array.isArray(r) ? r[0] : (r.lat ?? r.Lat));
+      const lng = parseFloat(Array.isArray(r) ? r[1] : (r.lng ?? r.Lon ?? r.lon));
+      if (isNaN(lat) || isNaN(lng)) continue;
+      const key = gridKey(lat, lng);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const [ls, gs] = key.split(':');
+      cells.push({ lat: parseFloat(ls), lng: parseFloat(gs) });
+    }
+    console.log(`buildPulsGrid: ${cells.length} unique cells from ${rows.length} PULS points`);
+    _pulsGrid = cells;
+    return cells;
+  } catch(e) {
+    console.warn('buildPulsGrid failed, falling back to bbox grid:', e.message);
+    return buildDenmarkGrid();
+  }
+}
   const iLatMin = Math.floor(54.5 / GRID_DEG);
   const iLatMax = Math.ceil(57.9  / GRID_DEG);
   const iLngMin = Math.floor(8.0  / GRID_DEG);
@@ -178,7 +207,7 @@ let warmRunning = false;
 async function warmCache() {
   if (warmRunning) return;
   warmRunning = true;
-  const cells = buildDenmarkGrid();
+  const cells = buildPulsGrid();   // only cells with real PULS points
   const CONC  = 30;
   let idx = 0, fetched = 0, skipped = 0, failed = 0;
   const t0 = Date.now();
@@ -211,10 +240,9 @@ async function warmCache() {
   warmRunning = false;
 }
 
-// Warm on startup only. Interval disabled — each deploy resets in-memory cache,
-// so interval would re-fetch all cells on every deploy during active development.
-// Re-enable setInterval when deploys stabilise.
+// Warm on startup, then every 6h. ~165 PULS cells × 4/day = ~660 calls/day.
 setTimeout(warmCache, 2000);
+setInterval(warmCache, WEATHER_TTL_MS);  // WEATHER_TTL_MS = 6h
 
 app.get('/api/weather', async (req, res) => {
   const lat = parseFloat(req.query.lat);
@@ -493,6 +521,7 @@ app.get('/api/debug', (req, res) => {
     apiCallsTotal:  apiCallCount,
     cacheHitsTotal: cacheHitCount,
     buildGridSize:  buildDenmarkGrid().length,
+    pulsGridSize:   (_pulsGrid || buildPulsGrid()).length,
     lastErrors:     fetchErrors,
     sample,
   });
