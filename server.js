@@ -3,7 +3,7 @@
 //
 // Serves the static map app and provides a weather proxy with a shared
 // server-side cache. This collapses Open-Meteo calls from "per browser"
-// to "per 0.5° grid cell per 6h, globally".
+// to "per 0.1° grid cell per hour, globally".
 //
 // Run:
 //   npm install
@@ -11,16 +11,19 @@
 //   → http://localhost:3000
 //
 // Endpoints:
-//   GET /                      → dansk-overloeb-kort.html
-//   GET /puls-data.json        → PULS dataset (Cache-Control 1 year)
-//   GET /api/weather?lat=&lng= → weather for a grid cell (shared cache, 6h)
-//   GET /api/health            → status + cache stats
+//   GET /                         → dansk-overloeb-kort.html
+//   GET /puls-data.json           → PULS dataset (Cache-Control 14 days)
+//   GET /api/weather/all          → full pre-warmed grid as one cacheable response
+//   GET /api/weather/hourly?key=  → hourlyObs+hourlyFore for one cell (on demand)
+//   GET /api/weather?lat=&lng=    → single cell (fallback)
+//   GET /api/health               → status + cache stats
 // ═══════════════════════════════════════════════════════════════════════════
 
-const express  = require('express');
-const path     = require('path');
-const https    = require('https');
-const webpush  = require('web-push');
+const express     = require('express');
+const compression = require('compression');
+const path        = require('path');
+const https       = require('https');
+const webpush     = require('web-push');
 
 // ── VAPID configuration ─────────────────────────────────────────────────────
 // Set these as environment variables on Fly.io:
@@ -44,6 +47,9 @@ const pushSubscriptions = new Map();  // key: endpoint URL → subscription obje
 const app  = express();
 const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
+
+// Gzip everything — JSON payloads compress ~70-80%
+app.use(compression());
 
 // ── Static files with appropriate cache headers ─────────────────────────────
 const STATIC_DIR = __dirname;
@@ -102,22 +108,32 @@ function gridKey(lat, lng) {
 }
 
 // Denmark bounding box + Bornholm. Generates ~1.200 cells at 0.1°.
+// Uses integer iteration to avoid floating point drift from repeated += 0.1.
+// Cell centres are derived via gridKey() itself — guaranteeing they always
+// match what gridKey() produces for any real PULS point inside the cell.
 function buildDenmarkGrid() {
+  const iLatMin = Math.floor(54.5 / GRID_DEG);  // 545
+  const iLatMax = Math.ceil(57.9  / GRID_DEG);  // 579
+  const iLngMin = Math.floor(8.0  / GRID_DEG);  // 80
+  const iLngMax = Math.ceil(15.4  / GRID_DEG);  // 154
+
   const cells = [];
-  for (let lat = 54.5; lat < 57.9; lat += GRID_DEG) {
-    for (let lng = 8.0; lng < 15.4; lng += GRID_DEG) {
-      const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
-      const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
-      cells.push({ lat: clat, lng: clng });
+  const seen  = new Set();
+
+  for (let iLat = iLatMin; iLat < iLatMax; iLat++) {
+    for (let iLng = iLngMin; iLng < iLngMax; iLng++) {
+      // Sample a point 10% into the cell — avoids boundary ambiguity.
+      // gridKey() snaps it to the canonical cell centre.
+      const sampLat = (iLat + 0.1) * GRID_DEG;
+      const sampLng = (iLng + 0.1) * GRID_DEG;
+      const key = gridKey(sampLat, sampLng);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const [latStr, lngStr] = key.split(':');
+      cells.push({ lat: parseFloat(latStr), lng: parseFloat(lngStr) });
     }
   }
-  // Deduplicate
-  const seen = new Set();
-  return cells.filter(c => {
-    const k = `${c.lat}:${c.lng}`;
-    if (seen.has(k)) return false;
-    seen.add(k); return true;
-  });
+  return cells;
 }
 
 // Bulk fetch up to 100 locations in a single Open-Meteo request.
@@ -264,17 +280,71 @@ app.get('/api/weather', async (req, res) => {
   }
 });
 
-// ── Bulk weather endpoint — serves pre-warmed cache to browser ───────────────
-// POST body: { cells: [{lat, lng}, ...] }  → { "key": {metrics}, ... }
-app.use(express.json({ limit: '256kb' }));
+// ── GET /api/weather/all — full pre-warmed grid in one cacheable response ────
+// Returns all warm cells as { "lat:lng": {antecedentMM, todayMM, forecastMM,
+// totalRain7d}, ... } — hourly arrays are excluded to keep payload small.
+// Browser caches with max-age=3600 (matches server TTL).
+// ETag allows 304 Not Modified when data hasn't changed.
+app.get('/api/weather/all', (req, res) => {
+  const out = {};
+  let warm = 0, stale = 0;
 
-app.post('/api/weather/bulk', async (req, res) => {
-  const cells = Array.isArray(req.body?.cells) ? req.body.cells : [];
-  if (cells.length === 0 || cells.length > 2000) {
-    return res.status(400).json({ error: 'cells array (1–2000) required' });
+  for (const [key, entry] of weatherCache) {
+    if (Date.now() - entry.ts < WEATHER_TTL_MS) {
+      // Strip hourly arrays — client fetches /hourly on demand
+      const { hourlyObs: _o, hourlyFore: _f, ...slim } = entry.data;
+      out[key] = slim;
+      warm++;
+      cacheHitCount++;
+    } else {
+      stale++;
+    }
   }
 
-  const out = {};
+  const etag = `"${warm}-${Math.floor(Date.now() / 60000)}"`;  // changes each minute
+  if (req.headers['if-none-match'] === etag) {
+    return res.status(304).end();
+  }
+
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.set('ETag', etag);
+  res.set('X-Warm-Cells',  String(warm));
+  res.set('X-Stale-Cells', String(stale));
+  res.json(out);
+});
+
+// ── GET /api/weather/hourly?key= — hourly arrays for one cell on demand ──────
+// Called when user clicks a point or opens a varsel card. Much cheaper than
+// bundling 48 floats × 2500 cells into the main /all response.
+app.get('/api/weather/hourly', (req, res) => {
+  const key    = req.query.key;
+  const cached = key ? weatherCache.get(key) : null;
+
+  if (!cached || Date.now() - cached.ts >= WEATHER_TTL_MS) {
+    return res.status(404).json({ error: 'Cell not in cache' });
+  }
+
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.json({
+    hourlyObs:  cached.data.hourlyObs  || [],
+    hourlyFore: cached.data.hourlyFore || [],
+  });
+});
+
+// ── POST /api/weather/bulk — kept for compatibility, also strips hourly ───────
+// POST body: { cells: [{lat, lng}, ...] }  → { "key": {metrics}|null, ... }
+// Never blocks on cold cells — returns immediately from cache only.
+app.use(express.json({ limit: '1mb' }));
+
+app.post('/api/weather/bulk', (req, res) => {
+  const cells = Array.isArray(req.body?.cells) ? req.body.cells : [];
+  if (cells.length === 0 || cells.length > 5000) {
+    return res.status(400).json({ error: 'cells array (1–5000) required' });
+  }
+
+  const out  = {};
+  let   hits = 0, misses = 0;
+
   for (const cell of cells) {
     const lat = parseFloat(cell.lat), lng = parseFloat(cell.lng);
     if (isNaN(lat) || isNaN(lng)) continue;
@@ -282,25 +352,19 @@ app.post('/api/weather/bulk', async (req, res) => {
     const cached = weatherCache.get(key);
 
     if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) {
+      const { hourlyObs: _o, hourlyFore: _f, ...slim } = cached.data;
+      out[key] = slim;
+      hits++;
       cacheHitCount++;
-      out[key] = cached.data;
     } else {
-      // Cache miss at serve time — warm cycle hasn't run yet or cell is outside grid.
-      // Fetch individually (rare after first warm).
-      try {
-        apiCallCount++;
-        const raw  = await fetchOpenMeteo(lat, lng);
-        const data = computeMetrics(raw);
-        weatherCache.set(key, { ts: Date.now(), data });
-        out[key] = data;
-      } catch(e) {
-        if (cached) out[key] = cached.data;
-        else out[key] = { antecedentMM: null, todayMM: null, forecastMM: null, totalRain7d: null, hourlyObs: [], hourlyFore: [], error: true };
-      }
+      out[key] = null;
+      misses++;
     }
   }
 
-  res.set('Cache-Control', 'public, max-age=3600');
+  res.set('Cache-Control', 'no-store');
+  res.set('X-Cache-Hits',   String(hits));
+  res.set('X-Cache-Misses', String(misses));
   res.json(out);
 });
 

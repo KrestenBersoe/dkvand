@@ -9,6 +9,7 @@
     "dev": "node --watch server.js"
   },
   "dependencies": {
+    "compression": "^1.7.4",
     "express": "^4.21.0",
     "web-push": "^3.6.7"
   },

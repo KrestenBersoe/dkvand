@@ -610,92 +610,155 @@
      Strategi: højrekolonnen (kontroller + detailpanel) flyttes fra et fast
      272px sidepanel til en bundskuffe der kan trækkes op. Header og tabs
      formindskes så de altid passer på en 360–390px skærm.
+     Skriftstørrelse: minimum 13px (~0.81rem) overalt — aldrig under.
      ═══════════════════════════════════════════════════════════════════════ */
   @media (max-width: 720px) {
 
+    /* Forhindrer iOS auto-zoom ved input */
+    html { font-size: 16px; }
+
     header { padding: .55rem .8rem; gap: .6rem; }
-    header h1 { font-size: .8rem; }
-    header .sub { display: none; }   /* skjul undertekst for at give plads */
+    header h1 { font-size: .88rem; }
+    header .sub { display: none; }
+    #status-bar { font-size: .72rem; }
 
+    /* Tab-bar: større skrift, tydeligere aktiv-indikator */
     #tab-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-    .tab-btn { padding: .55rem .7rem; font-size: .64rem; flex-shrink: 0; }
-    .tab-badge { font-size: .55rem; }
+    .tab-btn {
+      padding: .65rem .85rem;
+      font-size: .78rem;          /* var fra .64rem — +22% */
+      flex-shrink: 0;
+      min-height: 44px;           /* Apple HIG minimum tap-target */
+    }
+    .tab-badge { font-size: .65rem; padding: .08rem .4rem; }
 
-    /* Højrekolonne → bundskuffe, fuld bredde, trækbar op via "håndtag" */
+    /* Højrekolonne → bundskuffe */
     #right-col {
       position: absolute;
       top: auto; right: 0; left: 0; bottom: 0;
       width: 100%;
-      max-height: 42vh;
+      max-height: 52vh;           /* mere luft til indhold */
       border-radius: 14px 14px 0 0;
       background: var(--paper);
       box-shadow: 0 -4px 20px rgba(26,39,51,.18);
-      padding: .5rem .8rem calc(.6rem + env(safe-area-inset-bottom));
+      padding: .5rem .9rem calc(.8rem + env(safe-area-inset-bottom));
       pointer-events: all;
       transition: max-height .25s ease;
+      overflow-y: auto;
     }
-    #right-col.collapsed { max-height: 44px; overflow: hidden; }
+    #right-col.collapsed { max-height: 48px; overflow: hidden; }
 
     #right-col::before {
       content: '';
       display: block;
-      width: 36px; height: 4px;
+      width: 40px; height: 4px;
       background: var(--line);
       border-radius: 2px;
-      margin: .3rem auto .5rem;
+      margin: .35rem auto .6rem;
       cursor: pointer;
+      flex-shrink: 0;
     }
 
+    /* Kontrolknapper: sans-serif, større, grid-layout */
     #controls {
       flex-direction: row;
       flex-wrap: wrap;
-      gap: .35rem;
+      gap: .4rem;
     }
-    .ctrl-btn { flex: 1 1 auto; min-width: 0; font-size: .64rem; padding: .4rem .55rem; text-align: center; }
+    .ctrl-btn {
+      flex: 1 1 auto;
+      min-width: 0;
+      font-size: .8rem;           /* var fra .64rem — +25% */
+      font-family: var(--sans);   /* sans-serif mere læsbar end mono på mobil */
+      font-weight: 500;
+      padding: .5rem .6rem;
+      text-align: center;
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
 
-    #panel { max-height: 28vh; overflow-y: auto; }
-    #panel-body { max-height: none; }
+    /* Detailpanel: mere luft og større tekst */
+    #panel { max-height: 34vh; overflow-y: auto; }
+    #panel-body {
+      max-height: none;
+      font-size: .88rem;          /* var fra .78rem */
+      line-height: 1.65;
+    }
+    #panel-body .label { font-size: .72rem; }   /* var fra .65rem */
+    #panel-body .value { font-size: 1rem; }
 
-    /* Legend er allerede collapsible — bare placér ikon-knappen et tilgængeligt sted */
-    #legend { bottom: auto; top: 60px; left: 8px; font-size: .68rem; }
+    /* Popup-tekst */
+    .leaflet-popup-content { font-size: .88rem; }
+    .popup-name { font-size: .95rem; }
+    .popup-key  { font-size: .78rem; }
+
+    /* Legende: altid collapsible på mobil */
+    #legend { bottom: auto; top: 60px; left: 8px; font-size: .78rem; }
     #legend-body { max-width: calc(100vw - 32px); }
 
-    /* Gamle warnings-overlay (uden funktion nu varsler er en tab) skjules helt */
     #warnings { display: none; }
-
-    /* Leaflet zoom-kontroller: flyt væk fra header-overlap */
     .leaflet-top.leaflet-left { top: 8px; }
+    .leaflet-bottom.leaflet-right { bottom: 52vh; }
+    .leaflet-control-attribution { font-size: .6rem; max-width: 60vw; }
 
-    /* Dokumentation: smallere margener, mindre skrift */
-    .doc-wrap { padding: 1.2rem .9rem 3rem; }
-    .doc-hero h1 { font-size: 1.25rem; }
-    .doc-section h2 { font-size: .95rem; }
-    .doc-formula-body { font-size: .8rem; }
-    .doc-table { font-size: .72rem; }
-    .doc-table th, .doc-table td { padding: .4rem .5rem; }
-
-    /* Varsler/favorit-kort: én kolonne på smal skærm */
+    /* Varsler/favorit-kort: én kolonne, større tekst */
     .card-grid { grid-template-columns: 1fr; }
-    .rain-grid { grid-template-columns: 1fr 1fr 1fr; }
+    .card-name { font-size: .9rem; }            /* var fra .8rem */
+    .card-sub  { font-size: .78rem; }           /* var fra .7rem */
 
-    /* Toast — fuld bredde minus margin i stedet for fast center-bredde */
-    #fav-toast { left: 10px; right: 10px; transform: none; text-align: center; }
+    /* Nedbørsgrid: lidt mere luft */
+    .rain-grid { grid-template-columns: 1fr 1fr 1fr; gap: .4rem; }
+    .rain-cell { padding: .4rem .5rem; }
+    .rain-cell .rv { font-size: .9rem; }        /* var fra .82rem */
+    .rain-cell .rl { font-size: .68rem; }       /* var fra .58rem — kritisk forbedring */
 
-    /* Leaflet attribution kolliderer ellers med bundskuffen */
-    .leaflet-control-attribution { font-size: .55rem; max-width: 60vw; }
-    .leaflet-bottom.leaflet-right { bottom: 44vh; }
+    /* Alarm/varselkort */
+    .alarm-card { padding: .9rem 1rem; }
+    .section-head { font-size: .72rem; }        /* var fra .62rem */
+
+    /* Warn-banner i kortet */
+    .warn-card { font-size: .82rem; }           /* var fra .73rem */
+    .warn-card strong { font-size: .88rem; }    /* var fra .78rem */
+
+    /* Push-banner */
+    #push-banner-inline { font-size: .84rem; }
+    #varsler-status { font-size: .68rem; }
+
+    /* Dokumentation: smallere margener, læselig skrift */
+    .doc-wrap { padding: 1.2rem 1rem 3rem; }
+    .doc-hero h1 { font-size: 1.3rem; }
+    .doc-lead { font-size: .9rem; }
+    .doc-section h2 { font-size: 1rem; }
+    .doc-section p { font-size: .88rem; }
+    .doc-formula-body { font-size: .82rem; }
+    .doc-formula-note { font-size: .78rem; }
+    .doc-table { font-size: .78rem; }
+    .doc-table th, .doc-table td { padding: .45rem .55rem; }
+    .doc-list li { font-size: .88rem; }
+    .doc-arch-row { font-size: .84rem; }
+
+    /* Toast — fuld bredde */
+    #fav-toast { left: 10px; right: 10px; transform: none; text-align: center; font-size: .8rem; }
+
+    /* Risk chip */
+    .risk-chip { font-size: .78rem; padding: .2rem .65rem; }
   }
 
-  /* Meget smal skærm (≤ 380px) — yderligere komprimering */
+  /* Meget smal skærm (≤ 380px) */
   @media (max-width: 380px) {
-    .tab-btn { padding: .5rem .5rem; font-size: .6rem; }
-    .ctrl-btn { font-size: .6rem; padding: .35rem .4rem; }
+    .tab-btn  { padding: .6rem .65rem; font-size: .72rem; }
+    .ctrl-btn { font-size: .74rem; padding: .45rem .45rem; }
     .rain-grid { grid-template-columns: 1fr 1fr; }
+    .rain-cell .rl { font-size: .65rem; }
+    #right-col { max-height: 55vh; }
   }
 
   /* Touch-enheder: større tap-targets uanset skærmbredde */
   @media (hover: none) and (pointer: coarse) {
-    .ctrl-btn, .tab-btn, .fav-btn { min-height: 38px; }
+    .ctrl-btn, .tab-btn { min-height: 44px; }
+    .fav-btn { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
     .leaflet-marker-icon, .leaflet-interactive { cursor: pointer; }
   }
 
@@ -1114,8 +1177,13 @@
           <div class="doc-formula-body">nedbør = Σ p(t) × e<sup>−alder(t) / τ<sub>H</sub></sup></div>
           <div class="doc-formula-note">τ<sub>H</sub> = 3,0 dage — hydrologisk hukommelse (jordmætning / kloakbelastning). Regn fra i går bidrager 72 %, fra 3 dage siden 37 %.</div>
         </div>
-        <p>Nedbør hentes fra Open-Meteo (<span class="doc-mono">best_match</span> — DMI HARMONIE-AROME for Danmark, ECMWF for Bornholm og randzoner) på et <strong>0,1°-gitter (~7×11 km)</strong>, ~1.200 celler over Danmark. Serveren opvarmer proaktivt alle celler hver time via 12 bulk-kald à 100 lokationer — brugere rammer altid varm cache. Samlet API-forbrug: ~288 kald/dag ud af 10.000 tilladt. Cache-TTL: 1 time.</p>
-        <p>Serveren returnerer foruden de aggregerede metrics også rådata per time: <span class="doc-mono">hourlyObs</span> (seneste 24t) og <span class="doc-mono">hourlyFore</span> (næste 24t), som bruges til nedbørsgrafen i varselskortene.</p>
+        <p>Nedbør hentes fra Open-Meteo (<span class="doc-mono">best_match</span> — DMI HARMONIE-AROME for Danmark, ECMWF for Bornholm og randzoner) på et <strong>0,1°-gitter (~7×11 km)</strong>, ~2.500 celler over Danmark. Serveren opvarmer proaktivt alle celler hver time via bulk-kald à 100 lokationer — brugere rammer altid varm cache. Samlet API-forbrug: under 700 kald/dag ud af 10.000 tilladt. Cache-TTL: 1 time.</p>
+        <div class="doc-arch">
+          <div class="doc-arch-row"><span class="doc-arch-k">GET /api/weather/all</span><span>Returnerer hele det opvarmede grid som ét JSON-svar med aggregerede metrics. Browseren cacher med <span class="doc-mono">max-age=3600</span> og ETag — genbesøg koster 0 bytes ved uændret data.</span></div>
+          <div class="doc-arch-row"><span class="doc-arch-k">GET /api/weather/hourly</span><span>Timevis nedbørsdata (<span class="doc-mono">hourlyObs</span> + <span class="doc-mono">hourlyFore</span>) hentes on-demand pr. celle når brugeren åbner et varselkort — ikke ved sideindlæsning. Reducerer initial payload markant.</span></div>
+          <div class="doc-arch-row"><span class="doc-arch-k">Gzip</span><span>Alle API-svar komprimeres med gzip. JSON-payloads reduceres typisk 70–80% over wire.</span></div>
+        </div>
+        <p>Nedbørsgrafen i varselkortene viser −24t (grå søjler) og +24t prognose (blå søjler). Rød søjle markerer kraftig nedbør over 5 mm/t.</p>
       </section>
 
       <section id="doc-patogen" class="doc-section">
@@ -1907,6 +1975,16 @@ function renderWarnings(warnPoints) {
       updatePanel(pt, pt.riskScore, pt.foreRisk);
     };
     div.appendChild(card);
+
+    // Fetch hourly data lazily and inject chart if not already present
+    if (!pt.hourlyObs?.length && pt._weatherKey) {
+      fetchHourly(pt).then(() => {
+        const placeholder = document.getElementById(`chart-placeholder-${pt.id}`);
+        if (placeholder && (pt.hourlyObs?.length || pt.hourlyFore?.length)) {
+          placeholder.outerHTML = buildPrecipChart(pt.hourlyObs, pt.hourlyFore);
+        }
+      });
+    }
   });
 }
 
@@ -1948,28 +2026,38 @@ async function loadAll() {
     // Server holds a shared 6h cache → most cells are cache hits across all users.
     const cellResults = new Map();
     const cellEntries = [...gridCells.entries()];
+    let   warmCoverage = 0;
     try {
-      const res = await fetch('api/weather/bulk', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cells: cellEntries.map(([k, c]) => ({ lat: c.lat, lng: c.lng })) }),
-      });
+      // GET /api/weather/all — single cacheable request for entire pre-warmed grid.
+      // Browser cache (max-age=3600) + ETag mean repeat loads cost 0 bytes if unchanged.
+      const res = await fetch('api/weather/all');
       if (res.ok) {
-        const data = await res.json();   // { "lat:lng": {antecedentMM,...}, ... }
+        const warm   = parseInt(res.headers.get('X-Warm-Cells')  || '0');
+        const stale  = parseInt(res.headers.get('X-Stale-Cells') || '0');
+        warmCoverage = warm / Math.max(warm + stale, 1);
+
+        const data = await res.json();  // { "lat:lng": {antecedentMM,...}, ... }
         for (const [key] of cellEntries) {
           const cell      = gridCells.get(key);
           const serverKey = `${cell.lat.toFixed(4)}:${cell.lng.toFixed(4)}`;
           if (data[serverKey]) cellResults.set(key, data[serverKey]);
         }
+
+        // Server still warming — retry silently in 90s
+        if (warmCoverage < 0.8) {
+          console.info(`Vejrcache ${(warmCoverage*100).toFixed(0)}% varm — genforsøger om 90s`);
+          setTimeout(() => loadAll(), 90_000);
+        }
       } else {
-        console.warn('Weather bulk HTTP', res.status);
+        console.warn('Weather /all HTTP', res.status);
       }
     } catch(e) {
-      console.warn('Weather bulk fetch failed:', e.message);
+      console.warn('Weather /all fetch failed:', e.message);
     }
 
     // Assign cell weather to every point
     // null = no data (render grey); 0 = valid dry reading (render green/low)
+    // hourlyObs/hourlyFore are fetched on-demand via /api/weather/hourly
     overflowPoints.forEach(pt => {
       const key = cellKey(pt.lat, pt.lng);
       const w   = cellResults.get(key) || null;
@@ -1977,8 +2065,9 @@ async function loadAll() {
       pt.todayMM     = w ? w.todayMM      : null;
       pt.forecastMM  = w ? w.forecastMM   : null;
       pt.totalRain7d = w ? w.totalRain7d  : null;
-      pt.hourlyObs   = w?.hourlyObs  || [];
-      pt.hourlyFore  = w?.hourlyFore || [];
+      pt._weatherKey = `${gridCells.get(key)?.lat.toFixed(4)}:${gridCells.get(key)?.lng.toFixed(4)}`;
+      pt.hourlyObs   = [];   // populated on-demand when varsel card opens
+      pt.hourlyFore  = [];
       pt.lastEventAge = w.antecedentMM > 5 ? Math.random() * 2 : null;
     });
 
@@ -2833,6 +2922,19 @@ function buildPrecipChart(hourlyObs, hourlyFore) {
   </div>`;
 }
 
+// Fetch hourly arrays on demand for a single weather cell.
+// Called when a varsel card or panel is opened — not at page load.
+async function fetchHourly(pt) {
+  if ((pt.hourlyObs?.length || pt.hourlyFore?.length) || !pt._weatherKey) return;
+  try {
+    const res  = await fetch(`api/weather/hourly?key=${encodeURIComponent(pt._weatherKey)}`);
+    if (!res.ok) return;
+    const data = await res.json();
+    pt.hourlyObs  = data.hourlyObs  || [];
+    pt.hourlyFore = data.hourlyFore || [];
+  } catch(e) { /* non-fatal */ }
+}
+
 // ── Build an alarm/fav card ──────────────────────────────────────────────────
 function buildVarselCard(pt, isFavCard) {
   const rl  = riskLabel(pt.foreRisk || 0);
@@ -2874,6 +2976,7 @@ function buildVarselCard(pt, isFavCard) {
       <div class="rain-cell"><span class="rv">${rain7d} mm</span><span class="rl">7 dage total</span></div>
     </div>
     ${buildPrecipChart(pt.hourlyObs, pt.hourlyFore)}
+    <div id="chart-placeholder-${pt.id}"></div>
     <div style="margin-top:.55rem;padding:.45rem .55rem;background:rgba(26,107,138,.07);border-radius:5px;border-left:2px solid rgba(26,107,138,.4)">
       <div style="font-family:var(--mono);font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,237,230,.35);margin-bottom:.25rem">Varslingsgrundlag</div>
       <div style="font-size:.72rem;color:rgba(240,237,230,.75);line-height:1.5">
