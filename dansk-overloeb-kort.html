@@ -1114,7 +1114,8 @@
           <div class="doc-formula-body">nedbør = Σ p(t) × e<sup>−alder(t) / τ<sub>H</sub></sup></div>
           <div class="doc-formula-note">τ<sub>H</sub> = 3,0 dage — hydrologisk hukommelse (jordmætning / kloakbelastning). Regn fra i går bidrager 72 %, fra 3 dage siden 37 %.</div>
         </div>
-        <p>Server-proxyen returnerer foruden de aggregerede metrics også rådata per time: <span class="doc-mono">hourlyObs</span> (seneste 24t, time for time) og <span class="doc-mono">hourlyFore</span> (næste 24t). Disse bruges til nedbørsgrafen i varselskortene — grå søjler for observeret nedbør, blå for prognose, rød ved kraftig nedbør over 5 mm/t.</p>
+        <p>Nedbør hentes fra Open-Meteo (<span class="doc-mono">best_match</span> — DMI HARMONIE-AROME for Danmark, ECMWF for Bornholm og randzoner) på et <strong>0,1°-gitter (~7×11 km)</strong>, ~1.200 celler over Danmark. Serveren opvarmer proaktivt alle celler hver time via 12 bulk-kald à 100 lokationer — brugere rammer altid varm cache. Samlet API-forbrug: ~288 kald/dag ud af 10.000 tilladt. Cache-TTL: 1 time.</p>
+        <p>Serveren returnerer foruden de aggregerede metrics også rådata per time: <span class="doc-mono">hourlyObs</span> (seneste 24t) og <span class="doc-mono">hourlyFore</span> (næste 24t), som bruges til nedbørsgrafen i varselskortene.</p>
       </section>
 
       <section id="doc-patogen" class="doc-section">
@@ -1917,17 +1918,17 @@ async function loadAll() {
   try {
     overflowPoints = await loadOverflowData();
 
-    // ── Precipitation: 0.5° grid fetch ────────────────────────────────────────
-    // One Open-Meteo call per 0.5° grid cell (~35×55 km) covering Denmark.
-    // ~56 cells → ~56 API calls instead of 500+, eliminating fetch failures.
-    // All points in a cell share the cell centre's weather reading.
+    // ── Precipitation: 0.1° grid fetch ────────────────────────────────────────
+    // One Open-Meteo call per 0.1° grid cell (~7×11 km) covering Denmark.
+    // ~1.200 cells — server warms all proactively every hour via 12 bulk calls.
+    // Browser bulk POST hits warm cache directly; essentially zero API calls.
     setLoader('Beregner nedbørsgitter…');
 
-    const GRID_DEG = 0.5;
+    const GRID_DEG = 0.1;
     function cellKey(lat, lng) {
-      const clat = Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2;
-      const clng = Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2;
-      return `${clat.toFixed(2)}:${clng.toFixed(2)}`;
+      const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+      const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+      return `${clat.toFixed(4)}:${clng.toFixed(4)}`;
     }
 
     // Collect unique grid cells
@@ -1935,8 +1936,8 @@ async function loadAll() {
     overflowPoints.forEach(pt => {
       const key = cellKey(pt.lat, pt.lng);
       if (!gridCells.has(key)) {
-        const clat = Math.floor(pt.lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2;
-        const clng = Math.floor(pt.lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2;
+        const clat = Math.round((Math.floor(pt.lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+        const clng = Math.round((Math.floor(pt.lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
         gridCells.set(key, { lat: clat, lng: clng });
       }
     });
@@ -1956,9 +1957,8 @@ async function loadAll() {
       if (res.ok) {
         const data = await res.json();   // { "lat:lng": {antecedentMM,...}, ... }
         for (const [key] of cellEntries) {
-          // server returns keys in its own gridKey format (cell centre, 2dp)
-          const cell = gridCells.get(key);
-          const serverKey = `${cell.lat.toFixed(2)}:${cell.lng.toFixed(2)}`;
+          const cell      = gridCells.get(key);
+          const serverKey = `${cell.lat.toFixed(4)}:${cell.lng.toFixed(4)}`;
           if (data[serverKey]) cellResults.set(key, data[serverKey]);
         }
       } else {
@@ -1969,15 +1969,16 @@ async function loadAll() {
     }
 
     // Assign cell weather to every point
+    // null = no data (render grey); 0 = valid dry reading (render green/low)
     overflowPoints.forEach(pt => {
       const key = cellKey(pt.lat, pt.lng);
-      const w   = cellResults.get(key) || { antecedentMM: 0, todayMM: 0, forecastMM: 0, totalRain7d: 0 };
-      pt.precipMM    = w.antecedentMM;
-      pt.todayMM     = w.todayMM;
-      pt.forecastMM  = w.forecastMM;
-      pt.totalRain7d = w.totalRain7d;
-      pt.hourlyObs   = w.hourlyObs  || [];
-      pt.hourlyFore  = w.hourlyFore || [];
+      const w   = cellResults.get(key) || null;
+      pt.precipMM    = w ? w.antecedentMM : null;
+      pt.todayMM     = w ? w.todayMM      : null;
+      pt.forecastMM  = w ? w.forecastMM   : null;
+      pt.totalRain7d = w ? w.totalRain7d  : null;
+      pt.hourlyObs   = w?.hourlyObs  || [];
+      pt.hourlyFore  = w?.hourlyFore || [];
       pt.lastEventAge = w.antecedentMM > 5 ? Math.random() * 2 : null;
     });
 

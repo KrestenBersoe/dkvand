@@ -83,44 +83,78 @@ app.get('/overloeb-sw.js', (req, res) => {
 });
 
 // ── Weather proxy with shared server-side cache ─────────────────────────────
-// Cache key = rounded 0.5° grid cell. TTL = 6 hours.
-const WEATHER_TTL_MS = 6 * 3600 * 1000;
+// Grid: 0.1° (~7×11 km) — matches DMI HARMONIE-AROME resolution closely.
+// TTL: 1 hour — balances freshness with API budget.
+// Warming: at startup and every hour, all ~1.200 DK cells are refreshed
+//          proactively in 12 bulk calls (100 cells each) so users always
+//          hit a warm cache. 12 calls/hour × 24h = 288 calls/day — well
+//          within Open-Meteo free tier (10.000/day).
+const GRID_DEG       = 0.1;
+const WEATHER_TTL_MS = 1 * 3600 * 1000;  // 1 hour
 const weatherCache   = new Map(); // key → { ts, data }
 let   apiCallCount   = 0;
 let   cacheHitCount  = 0;
 
 function gridKey(lat, lng) {
-  const clat = Math.floor(lat / 0.5) * 0.5 + 0.25;
-  const clng = Math.floor(lng / 0.5) * 0.5 + 0.25;
-  return `${clat.toFixed(2)}:${clng.toFixed(2)}`;
+  const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+  const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+  return `${clat.toFixed(4)}:${clng.toFixed(4)}`;
 }
 
-function fetchOpenMeteo(lat, lng) {
+// Denmark bounding box + Bornholm. Generates ~1.200 cells at 0.1°.
+function buildDenmarkGrid() {
+  const cells = [];
+  for (let lat = 54.5; lat < 57.9; lat += GRID_DEG) {
+    for (let lng = 8.0; lng < 15.4; lng += GRID_DEG) {
+      const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+      const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+      cells.push({ lat: clat, lng: clng });
+    }
+  }
+  // Deduplicate
+  const seen = new Set();
+  return cells.filter(c => {
+    const k = `${c.lat}:${c.lng}`;
+    if (seen.has(k)) return false;
+    seen.add(k); return true;
+  });
+}
+
+// Bulk fetch up to 100 locations in a single Open-Meteo request.
+// Returns array of results in same order as input cells.
+function fetchOpenMeteoBulk(cells) {
   return new Promise((resolve, reject) => {
-    const url = `https://api.open-meteo.com/v1/forecast` +
-      `?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
+    const lats = cells.map(c => c.lat.toFixed(4)).join(',');
+    const lngs = cells.map(c => c.lng.toFixed(4)).join(',');
+    const url  = `https://api.open-meteo.com/v1/forecast` +
+      `?latitude=${lats}&longitude=${lngs}` +
       `&hourly=precipitation&past_days=7&forecast_days=2` +
-      `&models=dmi_seamless&timezone=Europe%2FCopenhagen`;
+      `&models=best_match&timezone=Europe%2FCopenhagen`;
 
     https.get(url, resp => {
       if (resp.statusCode !== 200) {
         reject(new Error(`Open-Meteo HTTP ${resp.statusCode}`));
-        resp.resume();
-        return;
+        resp.resume(); return;
       }
       let body = '';
       resp.on('data', c => body += c);
       resp.on('end', () => {
-        try { resolve(JSON.parse(body)); }
-        catch (e) { reject(e); }
+        try {
+          const parsed = JSON.parse(body);
+          // Single location → wrap in array for uniform handling
+          resolve(Array.isArray(parsed) ? parsed : [parsed]);
+        } catch(e) { reject(e); }
       });
     }).on('error', reject);
   });
 }
 
-// Compute the derived precipitation metrics server-side so the client
-// receives ready-to-use values (antecedentMM with fixed 3-day hydrological tau,
-// todayMM, forecastMM, totalRain7d).
+// Single-cell fetch (used by /api/weather endpoint as fallback)
+function fetchOpenMeteo(lat, lng) {
+  return fetchOpenMeteoBulk([{ lat, lng }]).then(arr => arr[0]);
+}
+
+// Compute derived precipitation metrics from raw Open-Meteo JSON.
 function computeMetrics(json) {
   const times  = json?.hourly?.time         || [];
   const values = json?.hourly?.precipitation || [];
@@ -129,8 +163,8 @@ function computeMetrics(json) {
   const TAU    = 3.0; // days — hydrological memory (soil saturation / sewer load)
 
   let antecedentMM = 0, todayMM = 0, forecastMM = 0, totalRain7d = 0;
-  const hourlyObs  = [];  // last 24h observed, oldest first (index 0 = 24h ago)
-  const hourlyFore = [];  // next 24h forecast, soonest first (index 0 = next hour)
+  const hourlyObs  = [];  // last 24h observed, oldest first
+  const hourlyFore = [];  // next 24h forecast, soonest first
 
   times.forEach((tStr, i) => {
     const mm  = Math.max(Number(values[i]) || 0, 0);
@@ -139,24 +173,63 @@ function computeMetrics(json) {
     const diffMs  = now - tMs;
     const ageDays = diffMs / (86400 * 1000);
     if (diffMs >= 0) {
-      // Past or present
       if (mm > 0) antecedentMM += mm * Math.exp(-ageDays / TAU);
       totalRain7d += mm;
-      if (diffMs < 24 * MS_HOUR) {
-        todayMM += mm;
-        hourlyObs.push(mm);
-      }
+      if (diffMs < 24 * MS_HOUR) { todayMM += mm; hourlyObs.push(mm); }
     } else {
-      // Future
-      if (-diffMs <= 24 * MS_HOUR) {
-        forecastMM += mm;
-        hourlyFore.push(mm);
-      }
+      if (-diffMs <= 24 * MS_HOUR) { forecastMM += mm; hourlyFore.push(mm); }
     }
   });
 
   return { antecedentMM, todayMM, forecastMM, totalRain7d, hourlyObs, hourlyFore };
 }
+
+// ── Proactive cache warming ──────────────────────────────────────────────────
+// Refreshes all stale cells in ~12 bulk calls. Runs at startup and every hour.
+let warmRunning = false;
+async function warmCache() {
+  if (warmRunning) return;
+  warmRunning = true;
+  const cells  = buildDenmarkGrid();
+  const CHUNK  = 100;
+  let fetched  = 0, skipped = 0, failed = 0;
+  const t0     = Date.now();
+
+  for (let i = 0; i < cells.length; i += CHUNK) {
+    const chunk = cells.slice(i, i + CHUNK);
+    const stale = chunk.filter(c => {
+      const cached = weatherCache.get(gridKey(c.lat, c.lng));
+      return !cached || Date.now() - cached.ts >= WEATHER_TTL_MS;
+    });
+    skipped += chunk.length - stale.length;
+    if (stale.length === 0) continue;
+
+    try {
+      apiCallCount++;
+      const results = await fetchOpenMeteoBulk(stale);
+      results.forEach((json, idx) => {
+        const cell = stale[idx];
+        if (!cell) return;
+        weatherCache.set(gridKey(cell.lat, cell.lng), { ts: Date.now(), data: computeMetrics(json) });
+        fetched++;
+      });
+    } catch(e) {
+      failed += stale.length;
+      console.warn(`warmCache chunk ${i}–${i + CHUNK} failed:`, e.message);
+    }
+
+    // Brief pause between chunks — polite to the API
+    if (i + CHUNK < cells.length) await new Promise(r => setTimeout(r, 300));
+  }
+
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s`);
+  warmRunning = false;
+}
+
+// Stagger first warm by 2s to let server finish binding, then every hour.
+setTimeout(warmCache, 2000);
+setInterval(warmCache, WEATHER_TTL_MS);
 
 app.get('/api/weather', async (req, res) => {
   const lat = parseFloat(req.query.lat);
@@ -165,83 +238,69 @@ app.get('/api/weather', async (req, res) => {
     return res.status(400).json({ error: 'lat and lng required' });
   }
 
-  const key = gridKey(lat, lng);
+  const key    = gridKey(lat, lng);
   const cached = weatherCache.get(key);
 
   if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) {
     cacheHitCount++;
-    res.set('Cache-Control', 'public, max-age=21600'); // 6h browser/CDN cache
+    res.set('Cache-Control', 'public, max-age=3600');
     res.set('X-Cache', 'HIT');
     return res.json(cached.data);
   }
 
   try {
     apiCallCount++;
-    // Fetch using the cell centre coordinates for consistency
-    const clat = Math.floor(lat / 0.5) * 0.5 + 0.25;
-    const clng = Math.floor(lng / 0.5) * 0.5 + 0.25;
+    const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+    const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
     const raw  = await fetchOpenMeteo(clat, clng);
     const data = computeMetrics(raw);
     weatherCache.set(key, { ts: Date.now(), data });
-    res.set('Cache-Control', 'public, max-age=21600');
+    res.set('Cache-Control', 'public, max-age=3600');
     res.set('X-Cache', 'MISS');
     res.json(data);
-  } catch (e) {
-    // On failure, serve stale cache if available rather than nothing
-    if (cached) {
-      res.set('X-Cache', 'STALE');
-      return res.json(cached.data);
-    }
+  } catch(e) {
+    if (cached) { res.set('X-Cache', 'STALE'); return res.json(cached.data); }
     res.status(502).json({ error: e.message });
   }
 });
 
-// ── Bulk weather endpoint — fetch many cells in one request ─────────────────
+// ── Bulk weather endpoint — serves pre-warmed cache to browser ───────────────
 // POST body: { cells: [{lat, lng}, ...] }  → { "key": {metrics}, ... }
-// Lets the client request all ~56 grid cells in a single round-trip.
 app.use(express.json({ limit: '256kb' }));
 
 app.post('/api/weather/bulk', async (req, res) => {
   const cells = Array.isArray(req.body?.cells) ? req.body.cells : [];
-  if (cells.length === 0 || cells.length > 200) {
-    return res.status(400).json({ error: 'cells array (1–200) required' });
+  if (cells.length === 0 || cells.length > 2000) {
+    return res.status(400).json({ error: 'cells array (1–2000) required' });
   }
 
   const out = {};
-  // Process with limited concurrency to avoid hammering Open-Meteo
-  const CONCURRENCY = 6;
-  let idx = 0;
+  for (const cell of cells) {
+    const lat = parseFloat(cell.lat), lng = parseFloat(cell.lng);
+    if (isNaN(lat) || isNaN(lng)) continue;
+    const key    = gridKey(lat, lng);
+    const cached = weatherCache.get(key);
 
-  async function worker() {
-    while (idx < cells.length) {
-      const cell = cells[idx++];
-      const lat = parseFloat(cell.lat), lng = parseFloat(cell.lng);
-      if (isNaN(lat) || isNaN(lng)) continue;
-      const key = gridKey(lat, lng);
-
-      const cached = weatherCache.get(key);
-      if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) {
-        cacheHitCount++;
-        out[key] = cached.data;
-        continue;
-      }
+    if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) {
+      cacheHitCount++;
+      out[key] = cached.data;
+    } else {
+      // Cache miss at serve time — warm cycle hasn't run yet or cell is outside grid.
+      // Fetch individually (rare after first warm).
       try {
         apiCallCount++;
-        const clat = Math.floor(lat / 0.5) * 0.5 + 0.25;
-        const clng = Math.floor(lng / 0.5) * 0.5 + 0.25;
-        const raw  = await fetchOpenMeteo(clat, clng);
+        const raw  = await fetchOpenMeteo(lat, lng);
         const data = computeMetrics(raw);
         weatherCache.set(key, { ts: Date.now(), data });
         out[key] = data;
-      } catch (e) {
+      } catch(e) {
         if (cached) out[key] = cached.data;
-        else out[key] = { antecedentMM: 0, todayMM: 0, forecastMM: 0, totalRain7d: 0, error: true };
+        else out[key] = { antecedentMM: null, todayMM: null, forecastMM: null, totalRain7d: null, hourlyObs: [], hourlyFore: [], error: true };
       }
     }
   }
 
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-  res.set('Cache-Control', 'public, max-age=21600');
+  res.set('Cache-Control', 'public, max-age=3600');
   res.json(out);
 });
 
