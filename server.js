@@ -93,10 +93,11 @@ app.get('/overloeb-sw.js', (req, res) => {
 // TTL: 3 hours. warmCache uses individual single-location calls (proven to work).
 // API budget: ~220 cells × 8 warmups/day = ~1.760 calls/day (well under 10.000).
 const GRID_DEG       = 0.25;
-const WEATHER_TTL_MS = 3 * 3600 * 1000;
+const WEATHER_TTL_MS = 6 * 3600 * 1000;  // 6 hours — 420 cells × 4/day = 1.680 calls/day
 const weatherCache   = new Map();
 let   apiCallCount   = 0;
 let   cacheHitCount  = 0;
+const fetchErrors    = [];   // ring buffer — last 5 errors from fetchOpenMeteo
 
 function gridKey(lat, lng) {
   const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
@@ -196,7 +197,10 @@ async function warmCache() {
         fetched++;
       } catch(e) {
         failed++;
-        console.warn('warmCache cell failed:', key, e.message);
+        const errMsg = `${key}: ${e.message}`;
+        console.warn('warmCache cell failed:', errMsg);
+        fetchErrors.push({ ts: new Date().toISOString(), key, error: e.message });
+        if (fetchErrors.length > 5) fetchErrors.shift();
       }
     }
   }
@@ -207,8 +211,10 @@ async function warmCache() {
   warmRunning = false;
 }
 
+// Warm on startup only. Interval disabled — each deploy resets in-memory cache,
+// so interval would re-fetch all cells on every deploy during active development.
+// Re-enable setInterval when deploys stabilise.
 setTimeout(warmCache, 2000);
-setInterval(warmCache, WEATHER_TTL_MS);
 
 app.get('/api/weather', async (req, res) => {
   const lat = parseFloat(req.query.lat);
@@ -487,6 +493,7 @@ app.get('/api/debug', (req, res) => {
     apiCallsTotal:  apiCallCount,
     cacheHitsTotal: cacheHitCount,
     buildGridSize:  buildDenmarkGrid().length,
+    lastErrors:     fetchErrors,
     sample,
   });
 });
