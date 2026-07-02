@@ -2068,7 +2068,7 @@ async function loadAll() {
       pt._weatherKey = `${gridCells.get(key)?.lat.toFixed(4)}:${gridCells.get(key)?.lng.toFixed(4)}`;
       pt.hourlyObs   = [];   // populated on-demand when varsel card opens
       pt.hourlyFore  = [];
-      pt.lastEventAge = w.antecedentMM > 5 ? Math.random() * 2 : null;
+      pt.lastEventAge = w && w.antecedentMM > 5 ? Math.random() * 2 : null;
     });
 
     renderMap();
