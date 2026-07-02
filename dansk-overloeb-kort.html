@@ -2027,32 +2027,57 @@ async function loadAll() {
     const cellResults = new Map();
     const cellEntries = [...gridCells.entries()];
     let   warmCoverage = 0;
+
+    // ── Trin 1: GET /api/weather/all — hent hele det opvarmede grid ──────────
     try {
-      // GET /api/weather/all — single cacheable request for entire pre-warmed grid.
-      // Browser cache (max-age=3600) + ETag mean repeat loads cost 0 bytes if unchanged.
       const res = await fetch('api/weather/all');
       if (res.ok) {
         const warm   = parseInt(res.headers.get('X-Warm-Cells')  || '0');
         const stale  = parseInt(res.headers.get('X-Stale-Cells') || '0');
         warmCoverage = warm / Math.max(warm + stale, 1);
 
-        const data = await res.json();  // { "lat:lng": {antecedentMM,...}, ... }
+        const data = await res.json();
         for (const [key] of cellEntries) {
           const cell      = gridCells.get(key);
           const serverKey = `${cell.lat.toFixed(4)}:${cell.lng.toFixed(4)}`;
           if (data[serverKey]) cellResults.set(key, data[serverKey]);
         }
-
-        // Server still warming — retry silently in 90s
-        if (warmCoverage < 0.8) {
-          console.info(`Vejrcache ${(warmCoverage*100).toFixed(0)}% varm — genforsøger om 90s`);
-          setTimeout(() => loadAll(), 90_000);
-        }
-      } else {
-        console.warn('Weather /all HTTP', res.status);
       }
     } catch(e) {
       console.warn('Weather /all fetch failed:', e.message);
+    }
+
+    // ── Trin 2: fallback til POST bulk hvis cache er næsten tom ─────────────
+    // Sker typisk i de første minutter efter server-opstart inden warmCache
+    // er færdig, eller hvis Open-Meteo bulk-kald fejlede.
+    if (cellResults.size < Math.min(50, cellEntries.length * 0.2)) {
+      console.info(`Cache kun ${cellResults.size} celler — falder tilbage til POST bulk`);
+      try {
+        const res = await fetch('api/weather/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cells: cellEntries.map(([, c]) => ({ lat: c.lat, lng: c.lng })) }),
+        });
+        if (res.ok) {
+          const hits   = parseInt(res.headers.get('X-Cache-Hits')   || '0');
+          const misses = parseInt(res.headers.get('X-Cache-Misses') || '0');
+          warmCoverage = hits / Math.max(hits + misses, 1);
+          const data   = await res.json();
+          for (const [key] of cellEntries) {
+            const cell      = gridCells.get(key);
+            const serverKey = `${cell.lat.toFixed(4)}:${cell.lng.toFixed(4)}`;
+            if (data[serverKey]) cellResults.set(key, data[serverKey]);
+          }
+        }
+      } catch(e) {
+        console.warn('Weather bulk fallback failed:', e.message);
+      }
+    }
+
+    // Server stadig ved at varme op — genforsøg om 60s
+    if (warmCoverage < 0.8) {
+      console.info(`Vejrcache ${(warmCoverage * 100).toFixed(0)}% varm — genforsøger om 60s`);
+      setTimeout(() => loadAll(), 60_000);
     }
 
     // Assign cell weather to every point

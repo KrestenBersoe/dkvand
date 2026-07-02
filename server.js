@@ -201,13 +201,14 @@ function computeMetrics(json) {
 }
 
 // ── Proactive cache warming ──────────────────────────────────────────────────
-// Refreshes all stale cells in ~12 bulk calls. Runs at startup and every hour.
+// Refreshes all stale cells. Runs at startup and every hour.
+// CHUNK=10: conservative — Open-Meteo multi-location works reliably at ≤10.
 let warmRunning = false;
 async function warmCache() {
   if (warmRunning) return;
   warmRunning = true;
   const cells  = buildDenmarkGrid();
-  const CHUNK  = 100;
+  const CHUNK  = 10;
   let fetched  = 0, skipped = 0, failed = 0;
   const t0     = Date.now();
 
@@ -225,7 +226,7 @@ async function warmCache() {
       const results = await fetchOpenMeteoBulk(stale);
       results.forEach((json, idx) => {
         const cell = stale[idx];
-        if (!cell) return;
+        if (!cell || !json?.hourly) return;  // skip malformed responses
         weatherCache.set(gridKey(cell.lat, cell.lng), { ts: Date.now(), data: computeMetrics(json) });
         fetched++;
       });
@@ -234,12 +235,12 @@ async function warmCache() {
       console.warn(`warmCache chunk ${i}–${i + CHUNK} failed:`, e.message);
     }
 
-    // Brief pause between chunks — polite to the API
-    if (i + CHUNK < cells.length) await new Promise(r => setTimeout(r, 300));
+    // 200ms pause between chunks
+    if (i + CHUNK < cells.length) await new Promise(r => setTimeout(r, 200));
   }
 
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s`);
+  console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s — cache size: ${weatherCache.size}`);
   warmRunning = false;
 }
 
@@ -331,18 +332,19 @@ app.get('/api/weather/hourly', (req, res) => {
   });
 });
 
-// ── POST /api/weather/bulk — kept for compatibility, also strips hourly ───────
-// POST body: { cells: [{lat, lng}, ...] }  → { "key": {metrics}|null, ... }
-// Never blocks on cold cells — returns immediately from cache only.
+// ── POST /api/weather/bulk — fallback with limited individual fetches ─────────
+// Returns warm cells from cache immediately. Cold cells are fetched individually
+// with concurrency=4 so the endpoint is useful even before warmCache completes.
 app.use(express.json({ limit: '1mb' }));
 
-app.post('/api/weather/bulk', (req, res) => {
+app.post('/api/weather/bulk', async (req, res) => {
   const cells = Array.isArray(req.body?.cells) ? req.body.cells : [];
   if (cells.length === 0 || cells.length > 5000) {
     return res.status(400).json({ error: 'cells array (1–5000) required' });
   }
 
-  const out  = {};
+  const out     = {};
+  const cold    = [];
   let   hits = 0, misses = 0;
 
   for (const cell of cells) {
@@ -350,16 +352,42 @@ app.post('/api/weather/bulk', (req, res) => {
     if (isNaN(lat) || isNaN(lng)) continue;
     const key    = gridKey(lat, lng);
     const cached = weatherCache.get(key);
-
     if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) {
       const { hourlyObs: _o, hourlyFore: _f, ...slim } = cached.data;
       out[key] = slim;
       hits++;
       cacheHitCount++;
     } else {
-      out[key] = null;
+      cold.push({ lat, lng, key, cached });
       misses++;
     }
+  }
+
+  // Fetch cold cells individually with limited concurrency
+  if (cold.length > 0) {
+    const CONC = 4;
+    let idx = 0;
+    async function worker() {
+      while (idx < cold.length) {
+        const { lat, lng, key, cached } = cold[idx++];
+        try {
+          apiCallCount++;
+          const raw  = await fetchOpenMeteo(lat, lng);
+          const data = computeMetrics(raw);
+          weatherCache.set(key, { ts: Date.now(), data });
+          const { hourlyObs: _o, hourlyFore: _f, ...slim } = data;
+          out[key] = slim;
+        } catch(e) {
+          if (cached) {
+            const { hourlyObs: _o, hourlyFore: _f, ...slim } = cached.data;
+            out[key] = slim;
+          } else {
+            out[key] = null;
+          }
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONC, cold.length) }, worker));
   }
 
   res.set('Cache-Control', 'no-store');
