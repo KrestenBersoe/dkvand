@@ -1735,6 +1735,7 @@ function renderMap() {
 
   updateStatusTime();
   saveWarnPoints(warnPoints);  // persist for varsel-side.html
+  colorKystvandByRisk();       // farv VP3 kystvand-polygoner efter max-risiko
 }
 
 function buildPopup(pt, risk, foreRisk) {
@@ -2038,6 +2039,83 @@ function toggleVP3Rbu() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// VP3 KYSTVAND RISIKOFARVE
+// Farver kystvand-polygoner efter max-risikoniveau for alle PULS-udløb
+// der tilhører det pågældende vandområde. Koblingen sker via:
+//   1. Tekstmatch: pt.waterArea ≈ feature.properties.navn/vandomr_id
+//   2. Fallback: spatiel nærhed (nærmeste punkt inden for ~15 km)
+// Kaldes fra renderMap() efter risikoberegning.
+// ═══════════════════════════════════════════════════════════════════════════
+function colorKystvandByRisk() {
+  if (!vp3KystvandLayer || !overflowPoints || overflowPoints.length === 0) return;
+
+  // Byg et opslag: waterArea-navn (lowercase) → max riskScore
+  const areaRisk = new Map();
+  overflowPoints.forEach(pt => {
+    if (pt.riskScore === null) return;
+    const key = (pt.waterArea || '').toLowerCase().trim();
+    if (!key) return;
+    const cur = areaRisk.get(key) ?? 0;
+    if (pt.riskScore > cur) areaRisk.set(key, pt.riskScore);
+  });
+
+  // For hvert lag-feature: find risiko og sæt farve
+  vp3KystvandLayer.eachLayer(layer => {
+    const props = layer.feature?.properties || {};
+
+    // Forsøg match på flere mulige felter
+    const candidates = [
+      props.navn, props.ov_navn, props.vandomr_id, props.name, props.NAME
+    ].filter(Boolean).map(s => String(s).toLowerCase().trim());
+
+    let maxRisk = null;
+    for (const c of candidates) {
+      // Eksakt match
+      if (areaRisk.has(c)) { maxRisk = areaRisk.get(c); break; }
+      // Delvist match — kystvand "Isefjord" matcher udløb "Isefjord Indre"
+      for (const [key, val] of areaRisk) {
+        if (key.includes(c) || c.includes(key)) {
+          if (maxRisk === null || val > maxRisk) maxRisk = val;
+        }
+      }
+      if (maxRisk !== null) break;
+    }
+
+    // Farv polygon efter risikoniveau
+    let fillColor, color, fillOpacity;
+    if (maxRisk === null) {
+      // Ingen data — subtil blå
+      fillColor = '#1a6faf'; color = '#1a6faf'; fillOpacity = 0.07;
+    } else if (maxRisk >= 0.6) {
+      // Høj — rød
+      fillColor = '#c84b1f'; color = '#9a3518'; fillOpacity = 0.35;
+    } else if (maxRisk >= 0.2) {
+      // Moderat — amber
+      fillColor = '#d4a020'; color = '#a07818'; fillOpacity = 0.28;
+    } else {
+      // Lav — grøn
+      fillColor = '#2d7d4f'; color = '#1e5c39'; fillOpacity = 0.22;
+    }
+
+    layer.setStyle({ fillColor, color, weight: 1.5, fillOpacity });
+
+    // Opdater tooltip med risikoniveneau
+    const navn = candidates[0] || 'Kystvand';
+    const riskTekst = maxRisk === null
+      ? 'Ingen nedbørsdata'
+      : maxRisk >= 0.6 ? `⚠ Høj risiko · ${(maxRisk*100).toFixed(0)}%`
+      : maxRisk >= 0.2 ? `⚡ Moderat risiko · ${(maxRisk*100).toFixed(0)}%`
+      :                  `✅ Lav risiko · ${(maxRisk*100).toFixed(0)}%`;
+    layer.bindTooltip(
+      `<strong>${escHtml(String(navn))}</strong><br>` +
+      `${riskTekst}<br>` +
+      `<span style="font-size:.65rem;opacity:.7">VP3 kystvandområde</span>`,
+      { sticky: true }
+    );
+  });
+}
+
 async function loadVP3Layers() {
   // Kystvand-afgrænsninger (polygoner, VP3 genbesøg 2025)
   try {
@@ -2057,6 +2135,8 @@ async function loadVP3Layers() {
         }
       });
       if (showVP3Kyst) vp3KystvandLayer.addTo(map);
+      // Farv med det samme hvis risikodata allerede er klar
+      colorKystvandByRisk();
       console.info('VP3 kystvande indlæst:', data.features?.length, 'features');
     }
   } catch(e) { console.warn('VP3 kystvande fejl:', e.message); }
