@@ -136,6 +136,9 @@ function buildPulsGrid() {
     return buildDenmarkGrid();
   }
 }
+
+// Denmark + Bornholm bounding box at 0.25°. Fallback if buildPulsGrid fails.
+function buildDenmarkGrid() {
   const iLatMin = Math.floor(54.5 / GRID_DEG);
   const iLatMax = Math.ceil(57.9  / GRID_DEG);
   const iLngMin = Math.floor(8.0  / GRID_DEG);
