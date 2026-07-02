@@ -129,24 +129,33 @@ function computeMetrics(json) {
   const TAU    = 3.0; // days — hydrological memory (soil saturation / sewer load)
 
   let antecedentMM = 0, todayMM = 0, forecastMM = 0, totalRain7d = 0;
+  const hourlyObs  = [];  // last 24h observed, oldest first (index 0 = 24h ago)
+  const hourlyFore = [];  // next 24h forecast, soonest first (index 0 = next hour)
 
   times.forEach((tStr, i) => {
-    const mm = Math.max(Number(values[i]) || 0, 0);
-    if (mm === 0) return;
+    const mm  = Math.max(Number(values[i]) || 0, 0);
     const tMs = new Date(tStr).getTime();
     if (isNaN(tMs)) return;
     const diffMs  = now - tMs;
     const ageDays = diffMs / (86400 * 1000);
     if (diffMs >= 0) {
-      antecedentMM += mm * Math.exp(-ageDays / TAU);
-      totalRain7d  += mm;
-      if (diffMs < 24 * MS_HOUR) todayMM += mm;
+      // Past or present
+      if (mm > 0) antecedentMM += mm * Math.exp(-ageDays / TAU);
+      totalRain7d += mm;
+      if (diffMs < 24 * MS_HOUR) {
+        todayMM += mm;
+        hourlyObs.push(mm);
+      }
     } else {
-      if (-diffMs <= 24 * MS_HOUR) forecastMM += mm;
+      // Future
+      if (-diffMs <= 24 * MS_HOUR) {
+        forecastMM += mm;
+        hourlyFore.push(mm);
+      }
     }
   });
 
-  return { antecedentMM, todayMM, forecastMM, totalRain7d };
+  return { antecedentMM, todayMM, forecastMM, totalRain7d, hourlyObs, hourlyFore };
 }
 
 app.get('/api/weather', async (req, res) => {

@@ -929,8 +929,8 @@
 
   <!-- Controls: layer selector -->
   <div id="controls">
-    <button class="ctrl-btn active" id="btn-heat"  onclick="toggleHeat()">🌡 Bakterielt varmekort</button>
-    <button class="ctrl-btn"        id="btn-viral" onclick="toggleViral()">🧬 Viralt varmekort</button>
+    <button class="ctrl-btn active" id="btn-heat"  onclick="toggleHeat()">🌡 Bakterielt kort</button>
+    <button class="ctrl-btn"        id="btn-viral" onclick="toggleViral()">🧬 Viralt kort</button>
     <button class="ctrl-btn active" id="btn-pts"   onclick="togglePoints()">📍 Udløbspunkter</button>
     <button class="ctrl-btn"        id="btn-fore"  onclick="toggleForecast()">⚡ 24h Varsling</button>
     <button class="ctrl-btn active" id="btn-vp3kyst" onclick="toggleVP3Kyst()">🌊 Kystvande (VP3)</button>
@@ -951,7 +951,7 @@
 <!-- Legend bottom-left -->
 <div id="legend" class="collapsed">
   <button id="legend-toggle" onclick="toggleLegend()" title="Signaturforklaring">ℹ</button>
-  <div id="legend-body">
+  <div id="legend-body" onclick="toggleLegend()" style="cursor:pointer" title="Klik for at minimere">
     <h4>Risikoniveau</h4>
     <div class="leg-row"><div class="leg-swatch" style="background:#2d7d4f"></div> Lav (&lt;20%)</div>
     <div class="leg-row"><div class="leg-swatch" style="background:#d4a020"></div> Moderat (20–60%)</div>
@@ -1007,25 +1007,26 @@
       <div class="doc-hero">
         <div class="doc-eyebrow">Teknisk dokumentation</div>
         <h1>Overløbsrisiko · Danmarks vandmiljø</h1>
-        <p class="doc-lead">Et screeningsværktøj der visualiserer forureningsrisiko fra regnbetingede kloakoverløb (CSO) ved alle aktive udløbspunkter i Danmark, baseret på officielle PULS-data og DMI-nedbørsmodel.</p>
+        <p class="doc-lead">Et screeningsværktøj der visualiserer forureningsrisiko fra regnbetingede kloakoverløb (CSO) ved alle aktive udløbspunkter i Danmark, baseret på officielle PULS-data, VP3 vandområdeplandata og DMI-nedbørsmodel.</p>
       </div>
 
       <nav class="doc-toc">
         <a href="#doc-formaal">Formål</a>
         <a href="#doc-kilder">Datakilder</a>
+        <a href="#doc-kortlag">Kortlag</a>
         <a href="#doc-kvalitet">Datakvalitet</a>
         <a href="#doc-model">Risikomodel</a>
         <a href="#doc-nedboer">Nedbørsmodel</a>
         <a href="#doc-patogen">Patogenmodel</a>
-        <a href="#doc-arkitektur">Arkitektur</a>
+        <a href="#doc-badevand">Badevandsvurdering</a>
         <a href="#doc-begraens">Begrænsninger</a>
         <a href="#doc-kilder-ref">Referencer</a>
       </nav>
 
       <section id="doc-formaal" class="doc-section">
         <h2>Formål</h2>
-        <p>Regnbetingede udløb opstår når nedbør overstiger kapaciteten i fælleskloakerede systemer, og urenset spildevand ledes direkte til vandmiljøet. Kortet beregner en løbende forureningsrisiko per udløbspunkt ud fra historisk overløbsfrekvens, observeret og prognosticeret nedbør, samt sæsonafhængig patogenoverlevelse.</p>
-        <div class="doc-callout">Værktøjet er til screening og forskning. Risikoscorerne er modelbaserede estimater — ikke målte forureningskoncentrationer — og erstatter ikke officielle badevandsvarsler.</div>
+        <p>Regnbetingede udløb opstår når nedbør overstiger kapaciteten i fælleskloakerede systemer, og urenset spildevand ledes direkte til vandmiljøet. Kortet beregner en løbende forureningsrisiko per udløbspunkt ud fra historisk overløbsfrekvens, observeret og prognosticeret nedbør samt sæsonafhængig patogenoverlevelse. Risikoen kobles til målsatte kystvandområder og EU-badevandslokaliteter via Miljøstyrelsens vandområdeplaner (VP3).</p>
+        <div class="doc-callout">Værktøjet er til screening og forskning. Risikoscorerne er modelbaserede estimater — ikke målte forureningskoncentrationer — og erstatter ikke officielle badevandsvarsler fra Miljøstyrelsen.</div>
       </section>
 
       <section id="doc-kilder" class="doc-section">
@@ -1034,15 +1035,31 @@
           <tr><th>Kilde</th><th>Indhold</th><th>Licens / opdatering</th></tr>
           <tr><td><strong>PULS stamdata</strong><br><span class="doc-mono">vRegnbetingedeUdloebStamdata</span></td><td>21.556 aktive udløb: navn, kommune, recipient vandområde, koordinater</td><td>Åbne data · årlig</td></tr>
           <tr><td><strong>PULS udledning</strong><br><span class="doc-mono">vRegnbetingedeUdloebUdledning</span></td><td>Årlig udledt volumen (m³) og antal overløbshændelser per udløb per år</td><td>Åbne data · årlig</td></tr>
-          <tr><td><strong>Open-Meteo / DMI</strong><br><span class="doc-mono">HARMONIE AROME 2 km</span></td><td>Timevis nedbør: 7 dages historik + 48t prognose</td><td>CC BY 4.0 · 4×/døgn</td></tr>
+          <tr><td><strong>Open-Meteo / DMI</strong><br><span class="doc-mono">HARMONIE AROME 2 km</span></td><td>Timevis nedbør: 7 dages historik + 48t prognose inkl. rådata per time</td><td>CC BY 4.0 · 4×/døgn</td></tr>
+          <tr><td><strong>VP3 vandområdeplaner</strong><br><span class="doc-mono">vp3_2endelig2025 (WFS)</span></td><td>Kystvandområder, badevandslokaliteter og RBU-punkter fra vandområdeplanerne 2021–2027 efter genbesøget (dec. 2025)</td><td>Åbne data · ved planrevision</td></tr>
           <tr><td><strong>OpenStreetMap</strong></td><td>Baggrundskort</td><td>ODbL</td></tr>
         </table>
-        <p>De to PULS-datasæt samkøres på udløbets navn. Volumen angives i kubikmeter i kilden og omregnes til liter ved visning (1 m³ = 1.000 L). Eksempel: udløb F-U8 udledte 7.400 m³ i 2024 = 7.400.000 L.</p>
+        <p>De to PULS-datasæt samkøres på udløbets navn. Volumen angives i kubikmeter i kilden og omregnes til liter ved visning (1 m³ = 1.000 L). VP3-data hentes som GeoJSON via Miljøministeriets WFS-tjeneste og gemmes som statiske filer.</p>
+      </section>
+
+      <section id="doc-kortlag" class="doc-section">
+        <h2>Kortlag</h2>
+        <p>Kortet indeholder seks toggelbare lag under Danmark-fanen:</p>
+        <table class="doc-table">
+          <tr><th>Lag</th><th>Indhold</th><th>Farvelogik</th></tr>
+          <tr><td>🌡 Bakterielt kort</td><td>Varmekort over alle 21.556 udløbspunkter</td><td>Grøn → amber → rød efter bakteriel risikoscore</td></tr>
+          <tr><td>🧬 Viralt kort</td><td>Varmekort med separat viral risikomodel</td><td>Lilla gradient — vira overlever markant længere om vinteren</td></tr>
+          <tr><td>📍 Udløbspunkter</td><td>Individuelle PULS-udløb som cirkler</td><td>Radius og farve efter risikoniveau; grå/stiplet ved ingen data</td></tr>
+          <tr><td>⚡ 24h Varsling</td><td>Ring-markører ved udløb med forhøjet prognoserisiko</td><td>Rød stiplet ring ved forecastrisiko > 55 %</td></tr>
+          <tr><td>🌊 Kystvande (VP3)</td><td>Polygoner for de 109 målsatte kystvandområder</td><td>Grøn/amber/rød udfyldning efter max-risiko fra PULS-udløb med matching vandområde</td></tr>
+          <tr><td>🏖 Badevandsområder</td><td>EU badevandsovervågningsstationer fra VP3</td><td>Cirkelmarkør i grøn/amber/rød efter nærmeste PULS-udløbs risikoniveau inden for 15 km</td></tr>
+        </table>
+        <p>VP3-lagene loades parallelt med vejrdata og farves automatisk når risikoberegningen er færdig. Kystvand-polygonerne følger de officielle afgrænsninger fra Vandområdeplanerne 2021–2027 efter genbesøget.</p>
       </section>
 
       <section id="doc-kvalitet" class="doc-section">
         <h2>Datakvalitet</h2>
-        <p>Hvert punkt får en kvalitetskode efter hvor pålideligt overløbsgrundlaget er. Tidligere versioner brugte tilfældige tal hvor data manglede — det er fjernet. Manglende data vises nu eksplicit i stedet for at blive opfundet.</p>
+        <p>Hvert udløbspunkt får en kvalitetskode efter hvor pålideligt overløbsgrundlaget er. Manglende data vises eksplicit — ingen værdier opfindes.</p>
         <table class="doc-table">
           <tr><th>Kode</th><th>Betydning</th><th>Antal</th></tr>
           <tr><td><span class="q-chip q0">Reelle data</span></td><td>Faktisk overløbsfrekvens + volumen fra PULS</td><td>4.683</td></tr>
@@ -1067,7 +1084,7 @@
           <div class="doc-formula-label">Intensitetsfaktor — nul-forankret</div>
           <div class="doc-formula-body">I = sigmoid( (nedbør − 5) / 4 ) × ramp</div>
           <div class="doc-formula-body">ramp = clamp( (nedbør − 1) / 6 , 0 , 1 )</div>
-          <div class="doc-formula-note">Ved 0 mm → I = 0 (ingen nedbør = ingen risiko). Ved 5 mm → I ≈ 0,33. Ved 12 mm → I ≈ 0,85. Den tidligere model gav 0,35 ved 0 mm, hvilket fejlagtigt producerede 100 % risiko uden regn.</div>
+          <div class="doc-formula-note">Ved 0 mm → I = 0. Ved 5 mm → I ≈ 0,33. Ved 12 mm → I ≈ 0,85. Nul nedbør giver altid nul risiko.</div>
         </div>
 
         <div class="doc-formula">
@@ -1084,7 +1101,7 @@
         <table class="doc-table">
           <tr><th>Niveau</th><th>Interval</th><th>Tolkning</th></tr>
           <tr><td><span class="r-chip r-low">Lav</span></td><td>R &lt; 0,20</td><td>Begrænset risiko</td></tr>
-          <tr><td><span class="r-chip r-mid">Moderat</span></td><td>0,20–0,60</td><td>Forhøjet — relevant ved badning/indvinding</td></tr>
+          <tr><td><span class="r-chip r-mid">Moderat</span></td><td>0,20–0,60</td><td>Forhøjet — relevant ved badning og indvinding</td></tr>
           <tr><td><span class="r-chip r-high">Høj</span></td><td>≥ 0,60</td><td>Undgå kontakt med vandmiljøet</td></tr>
         </table>
       </section>
@@ -1095,9 +1112,9 @@
         <div class="doc-formula">
           <div class="doc-formula-label">Vægtet antecedent nedbør</div>
           <div class="doc-formula-body">nedbør = Σ p(t) × e<sup>−alder(t) / τ<sub>H</sub></sup></div>
-          <div class="doc-formula-note">τ<sub>H</sub> = 3,0 dage — hydrologisk hukommelse (jordmætning / kloakbelastning). Dette er en <em>fysisk hydrologisk</em> konstant, adskilt fra patogenens nedbrydningstid. Regn fra i går bidrager 72 %, fra 3 dage siden 37 %.</div>
+          <div class="doc-formula-note">τ<sub>H</sub> = 3,0 dage — hydrologisk hukommelse (jordmætning / kloakbelastning). Regn fra i går bidrager 72 %, fra 3 dage siden 37 %.</div>
         </div>
-        <p>Server-proxyen henter timevis nedbør fra Open-Meteo og beregner fire størrelser per gittercelle: vægtet antecedent nedbør (driver risikoen), rå sum seneste 24t, rå sum seneste 7 dage, og prognose næste 24t.</p>
+        <p>Server-proxyen returnerer foruden de aggregerede metrics også rådata per time: <span class="doc-mono">hourlyObs</span> (seneste 24t, time for time) og <span class="doc-mono">hourlyFore</span> (næste 24t). Disse bruges til nedbørsgrafen i varselskortene — grå søjler for observeret nedbør, blå for prognose, rød ved kraftig nedbør over 5 mm/t.</p>
       </section>
 
       <section id="doc-patogen" class="doc-section">
@@ -1111,32 +1128,30 @@
         <div class="doc-formula">
           <div class="doc-formula-label">Viral henfaldstid (norovirus, coliphager)</div>
           <div class="doc-formula-body">τ<sub>viral</sub> = 2,0 × Q₁₀,ᵥ<sup>(20−T)/10</sup> / Lᵥ</div>
-          <div class="doc-formula-note">Q₁₀,ᵥ = 4,0 · UV-effekt kun ved T ≥ 12 °C. Sommer ≈ 2,4 dage, vinter op til ≈ 40 dage. Vira overlever markant længere i koldt vand.</div>
+          <div class="doc-formula-note">Q₁₀,ᵥ = 4,0 · UV-effekt kun ved T ≥ 12 °C. Sommer ≈ 2,4 dage, vinter op til ≈ 40 dage.</div>
         </div>
         <div class="doc-formula">
           <div class="doc-formula-label">Residualforurening med sedimentrebound</div>
           <div class="doc-formula-body">R<sub>residual</sub>(t) = 1,08 × e<sup>−t / τ</sup></div>
-          <div class="doc-formula-note">Faktor 1,2 (sedimentrebound) modellerer resuspension ~24t efter hændelse (Servais et al.). Kun for bakterier — ikke vira.</div>
+          <div class="doc-formula-note">Sedimentrebound modellerer resuspension ~24t efter hændelse (Servais et al.). Kun for bakterier — ikke vira.</div>
         </div>
       </section>
 
-      <section id="doc-arkitektur" class="doc-section">
-        <h2>Arkitektur &amp; caching</h2>
-        <p>Tjenesten kører som en let Node/Express-server der serverer den statiske app og proxyer vejrdata med et delt cache-lag.</p>
-        <div class="doc-arch">
-          <div class="doc-arch-row"><span class="doc-arch-k">Browser</span><span>IndexedDB: PULS-data (1 år) + sidste resultat. Øjeblikkelig genindlæsning offline.</span></div>
-          <div class="doc-arch-row"><span class="doc-arch-k">HTTP/CDN</span><span>puls-data.json med Cache-Control 1 år. Vejr-svar cachet 6t i browser og CDN.</span></div>
-          <div class="doc-arch-row"><span class="doc-arch-k">Server</span><span>Delt vejr-cache (6t TTL) per 0,5° gittercelle. Open-Meteo-kald reduceres fra "per bruger" til "per celle per 6t globalt".</span></div>
-        </div>
-        <p>Nedbør hentes på et 0,5°-gitter (~35×55 km, ca. 56 celler over Danmark) i én bulk-forespørgsel, i stedet for ét kald per udløbspunkt. Det eliminerer netværksfejl ved mange parallelle kald og deler cache på tværs af alle brugere.</p>
+      <section id="doc-badevand" class="doc-section">
+        <h2>Badevandsvurdering</h2>
+        <p>Badevandslokaliteterne fra VP3 (EU's badevandsovervågning) kobles til risikomodellen via to trin:</p>
+        <p><strong>Trin 1 — Kystvand-polygoner:</strong> Hvert af de 109 målsatte kystvandområder fra Vandområdeplanerne 2021–2027 farves efter den højeste risikokarakter blandt PULS-udløb hvis <span class="doc-mono">waterArea</span>-felt matcher kystvandets <span class="doc-mono">ov_navn</span>. Match sker på eksakt og delvist tekstmatch.</p>
+        <p><strong>Trin 2 — Badevandslokaliteter:</strong> Hvert badevandsovervågningspunkt farves efter den højeste risikokarakter fra PULS-udløb inden for 15 km — uafhængigt af tekstmatch. Denne spatielle søgning fanger lokale udløb der potentielt påvirker badevandet selv om vandområde-navnene ikke matcher direkte. Fallback: nærmeste kystvand-polygons risiko anvendes.</p>
+        <div class="doc-callout">Badevandsvurderingen er en modelbaseret indikator for CSO-risiko. Den afspejler ikke de officielle badevandsprofiler fra Miljøstyrelsen, som baseres på flerårige bakteriemålinger og lokale forureningskilder.</div>
       </section>
 
       <section id="doc-begraens" class="doc-section">
         <h2>Begrænsninger</h2>
         <ul class="doc-list">
           <li>Overløbsfrekvens er kun reelt målt for ~22 % af punkter; resten er verificeret nul, estimeret eller markeret som utilstrækkelig.</li>
-          <li>Nedbør opløses på 0,5°-gitter — lokal variation under ~35 km udjævnes.</li>
-          <li>Tidspunkt for seneste faktiske overløbshændelse foreligger ikke som åbne data; residualmodellen aktiveres heuristisk. Fuld præcision kræver PULS webservice-adgang (WLA).</li>
+          <li>Nedbør opløses på 0,5°-gitter (~35×55 km) — lokal variation udjævnes.</li>
+          <li>Tidspunkt for seneste faktiske overløbshændelse foreligger ikke som åbne data; residualmodellen aktiveres heuristisk.</li>
+          <li>Tekstmatch mellem PULS <span class="doc-mono">waterArea</span> og VP3 <span class="doc-mono">ov_navn</span> dækker ikke alle kystvandområder — udløb til vandløb og søer kobles ikke til kystvand-polygoner.</li>
           <li>Modellen skelner ikke mellem salt-, brak- og ferskvand i patogenoverlevelse.</li>
           <li>Ingen tidevands- eller fortyndingsmodellering for fjorde og Vadehavet.</li>
         </ul>
@@ -1152,7 +1167,10 @@
           <li>Hokajärvi, A.M. et al. (2023). <em>Water Research</em> — viral henfaldstid og Q₁₀,ᵥ.</li>
           <li>Flannery, J. et al. (2012). <em>Global Water Pathogen Project</em> — UV-effekt på vira under 12 °C.</li>
         </ul>
-        <p class="doc-foot">Data: Miljøportalen (PULS) · Open-Meteo / DMI · OpenStreetMap. Sidst opdateret ved indlæsning af kortet.</p>
+        <p class="doc-foot">
+          Data: Miljøportalen (PULS) · Miljøstyrelsen (VP3) · Open-Meteo / DMI · OpenStreetMap.<br>
+          Kildekode: <a href="https://github.com/KrestenBersoe/dkvand/" target="_blank" rel="noopener" style="color:var(--accent)">github.com/KrestenBersoe/dkvand</a>
+        </p>
       </section>
 
     </div>
@@ -1482,6 +1500,7 @@ function loadFromEmbedded() {
       overflowProbBase:   Math.min(ev / DK_RAINY_DAYS_YEAR, 1),
       riskScore: null, viralScore: null,
       precipMM: null, todayMM: null, forecastMM: null, totalRain7d: null, lastEventAge: null,
+      hourlyObs: [], hourlyFore: [],
     };
   });
 }
@@ -1735,7 +1754,7 @@ function renderMap() {
 
   updateStatusTime();
   saveWarnPoints(warnPoints);  // persist for varsel-side.html
-  colorKystvandByRisk();       // farv VP3 kystvand-polygoner efter max-risiko
+  colorKystvandByRisk();       // farv VP3 kystvand-polygoner + badevandspunkter efter max-risiko
 }
 
 function buildPopup(pt, risk, foreRisk) {
@@ -1847,6 +1866,8 @@ async function saveWarnPoints(pts) {
       foreRisk: p.foreRisk, todayMM: p.todayMM,
       forecastMM: p.forecastMM, totalRain7d: p.totalRain7d,
       precipMM: p.precipMM, quality: p.quality,
+      hourlyObs:  p.hourlyObs  || [],
+      hourlyFore: p.hourlyFore || [],
       ts: Date.now()
     }));
     await dbPut('weather_store', '__warnpoints__', { ts: Date.now(), data: payload });
@@ -1955,6 +1976,8 @@ async function loadAll() {
       pt.todayMM     = w.todayMM;
       pt.forecastMM  = w.forecastMM;
       pt.totalRain7d = w.totalRain7d;
+      pt.hourlyObs   = w.hourlyObs  || [];
+      pt.hourlyFore  = w.hourlyFore || [];
       pt.lastEventAge = w.antecedentMM > 5 ? Math.random() * 2 : null;
     });
 
@@ -2040,17 +2063,31 @@ function toggleVP3Rbu() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// VP3 KYSTVAND RISIKOFARVE
-// Farver kystvand-polygoner efter max-risikoniveau for alle PULS-udløb
-// der tilhører det pågældende vandområde. Koblingen sker via:
-//   1. Tekstmatch: pt.waterArea ≈ feature.properties.navn/vandomr_id
-//   2. Fallback: spatiel nærhed (nærmeste punkt inden for ~15 km)
-// Kaldes fra renderMap() efter risikoberegning.
+// VP3 RISIKOFARVE — kystvand-polygoner + badevandspunkter
+//
+// Kystvand:   farves efter max-risiko fra PULS-udløb med matching waterArea
+// Badevand:   farves efter (1) nærmeste PULS-udløb inden for 15 km og
+//             (2) risikoniveau på det nærmeste kystvand-polygon
+// Kaldes fra renderMap() og fra loadVP3Layers() når lag er klar.
 // ═══════════════════════════════════════════════════════════════════════════
+function riskStyle(risk) {
+  if (risk === null) return { fillColor: '#1a6faf', borderColor: '#1565a0', fillOpacity: 0.07 };
+  if (risk >= 0.6)   return { fillColor: '#c84b1f', borderColor: '#9a3518', fillOpacity: 0.35 };
+  if (risk >= 0.2)   return { fillColor: '#d4a020', borderColor: '#a07818', fillOpacity: 0.28 };
+  return               { fillColor: '#2d7d4f', borderColor: '#1e5c39', fillOpacity: 0.22 };
+}
+
+function riskTooltipText(risk) {
+  if (risk === null) return 'Ingen nedbørsdata';
+  if (risk >= 0.6)   return `⚠ Høj forureningsrisiko · ${(risk*100).toFixed(0)}%`;
+  if (risk >= 0.2)   return `⚡ Moderat forureningsrisiko · ${(risk*100).toFixed(0)}%`;
+  return                    `✅ Lav forureningsrisiko · ${(risk*100).toFixed(0)}%`;
+}
+
 function colorKystvandByRisk() {
   if (!vp3KystvandLayer || !overflowPoints || overflowPoints.length === 0) return;
 
-  // Byg et opslag: waterArea-navn (lowercase) → max riskScore
+  // ── Trin 1: PULS waterArea → max riskScore ──────────────────────────────
   const areaRisk = new Map();
   overflowPoints.forEach(pt => {
     if (pt.riskScore === null) return;
@@ -2060,20 +2097,15 @@ function colorKystvandByRisk() {
     if (pt.riskScore > cur) areaRisk.set(key, pt.riskScore);
   });
 
-  // For hvert lag-feature: find risiko og sæt farve
+  // ── Trin 2: farv kystvand-polygoner + gem risiko på laget ───────────────
   vp3KystvandLayer.eachLayer(layer => {
     const props = layer.feature?.properties || {};
-
-    // Forsøg match på flere mulige felter
-    const candidates = [
-      props.navn, props.ov_navn, props.vandomr_id, props.name, props.NAME
-    ].filter(Boolean).map(s => String(s).toLowerCase().trim());
+    const candidates = [props.ov_navn, props.ov_id, props.ho_na]
+      .filter(Boolean).map(s => String(s).toLowerCase().trim());
 
     let maxRisk = null;
     for (const c of candidates) {
-      // Eksakt match
       if (areaRisk.has(c)) { maxRisk = areaRisk.get(c); break; }
-      // Delvist match — kystvand "Isefjord" matcher udløb "Isefjord Indre"
       for (const [key, val] of areaRisk) {
         if (key.includes(c) || c.includes(key)) {
           if (maxRisk === null || val > maxRisk) maxRisk = val;
@@ -2082,35 +2114,82 @@ function colorKystvandByRisk() {
       if (maxRisk !== null) break;
     }
 
-    // Farv polygon efter risikoniveau
-    let fillColor, color, fillOpacity;
-    if (maxRisk === null) {
-      // Ingen data — subtil blå
-      fillColor = '#1a6faf'; color = '#1a6faf'; fillOpacity = 0.07;
-    } else if (maxRisk >= 0.6) {
-      // Høj — rød
-      fillColor = '#c84b1f'; color = '#9a3518'; fillOpacity = 0.35;
-    } else if (maxRisk >= 0.2) {
-      // Moderat — amber
-      fillColor = '#d4a020'; color = '#a07818'; fillOpacity = 0.28;
-    } else {
-      // Lav — grøn
-      fillColor = '#2d7d4f'; color = '#1e5c39'; fillOpacity = 0.22;
-    }
+    layer._riskScore = maxRisk; // gemmes til badevand-opslag
 
-    layer.setStyle({ fillColor, color, weight: 1.5, fillOpacity });
+    const s = riskStyle(maxRisk);
+    layer.setStyle({ fillColor: s.fillColor, color: s.borderColor, weight: 1.5, fillOpacity: s.fillOpacity });
 
-    // Opdater tooltip med risikoniveneau
-    const navn = candidates[0] || 'Kystvand';
-    const riskTekst = maxRisk === null
-      ? 'Ingen nedbørsdata'
-      : maxRisk >= 0.6 ? `⚠ Høj risiko · ${(maxRisk*100).toFixed(0)}%`
-      : maxRisk >= 0.2 ? `⚡ Moderat risiko · ${(maxRisk*100).toFixed(0)}%`
-      :                  `✅ Lav risiko · ${(maxRisk*100).toFixed(0)}%`;
+    const navn = props.ov_navn || props.ov_id || 'Kystvand';
     layer.bindTooltip(
       `<strong>${escHtml(String(navn))}</strong><br>` +
-      `${riskTekst}<br>` +
+      `${riskTooltipText(maxRisk)}<br>` +
       `<span style="font-size:.65rem;opacity:.7">VP3 kystvandområde</span>`,
+      { sticky: true }
+    );
+  });
+
+  // ── Trin 3: farv badevandspunkter ───────────────────────────────────────
+  colorBadevandByRisk();
+}
+
+function colorBadevandByRisk() {
+  if (!vp3BadevandLayer || !overflowPoints || overflowPoints.length === 0) return;
+
+  // Byg array af kystvand-centroider + risiko til hurtig opslag
+  const kystCenters = [];
+  if (vp3KystvandLayer) {
+    vp3KystvandLayer.eachLayer(layer => {
+      try {
+        const c = layer.getBounds().getCenter();
+        kystCenters.push({ lat: c.lat, lng: c.lng, risk: layer._riskScore ?? null });
+      } catch(e) {}
+    });
+  }
+
+  // Max ~15 km ≈ 0.135° i breddegrad — CSO-påvirkning rækker typisk 5–15 km
+  const MAX_DEG = 0.135;
+
+  vp3BadevandLayer.eachLayer(layer => {
+    let ll;
+    try { ll = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter(); }
+    catch(e) { return; }
+
+    // (a) Direkte spatiel søgning: nærmeste PULS-udløb inden for 15 km
+    let pulsRisk = null;
+    overflowPoints.forEach(pt => {
+      if (pt.riskScore === null) return;
+      if (Math.abs(pt.lat - ll.lat) > MAX_DEG || Math.abs(pt.lng - ll.lng) > MAX_DEG) return;
+      if (pulsRisk === null || pt.riskScore > pulsRisk) pulsRisk = pt.riskScore;
+    });
+
+    // (b) Fallback: nærmeste kystvand-polygon
+    let kystvandRisk = null;
+    if (kystCenters.length > 0) {
+      let minD = Infinity;
+      kystCenters.forEach(k => {
+        const d = Math.hypot(k.lat - ll.lat, k.lng - ll.lng);
+        if (d < minD) { minD = d; kystvandRisk = k.risk; }
+      });
+    }
+
+    // Brug PULS-risiko hvis tilgængelig, ellers kystvand-risiko
+    const risk = pulsRisk !== null ? pulsRisk : kystvandRisk;
+
+    const s = riskStyle(risk);
+    layer.setStyle({
+      fillColor:   s.fillColor,
+      color:       '#fff',
+      weight:      2,
+      fillOpacity: risk === null ? 0.45 : 0.88,
+      radius:      8,
+    });
+
+    const p = layer.feature?.properties || {};
+    const navn = p.pkt_navn || p.navn || 'Badevandslokalitet';
+    layer.bindTooltip(
+      `<strong>🏖 ${escHtml(String(navn))}</strong><br>` +
+      `${riskTooltipText(risk)}<br>` +
+      `<span style="font-size:.65rem;opacity:.7">EU badevandsovervågning · VP3</span>`,
       { sticky: true }
     );
   });
@@ -2130,14 +2209,26 @@ async function loadVP3Layers() {
         },
         onEachFeature: (f, l) => {
           const p = f.properties || {};
-          const navn = p.vandomr_id || p.ov_id || p.navn || 'Kystvand';
+          const navn = p.ov_navn || p.ov_id || 'Kystvand';
           l.bindTooltip(`<strong>${escHtml(String(navn))}</strong><br><span style="font-size:.7rem;opacity:.7">VP3 kystvandområde</span>`, { sticky: true });
         }
       });
       if (showVP3Kyst) vp3KystvandLayer.addTo(map);
-      // Farv med det samme hvis risikodata allerede er klar
-      colorKystvandByRisk();
       console.info('VP3 kystvande indlæst:', data.features?.length, 'features');
+
+      // Vent til risikoberegningen er færdig (renderMap har kørt med vejrdata)
+      // loadAll() og loadVP3Layers() kører parallelt — poll til riskScore er klar
+      (async () => {
+        const deadline = Date.now() + 30000;
+        while (Date.now() < deadline) {
+          if (overflowPoints.length > 0 && overflowPoints.some(p => p.riskScore !== null)) {
+            colorKystvandByRisk();
+            return;
+          }
+          await new Promise(r => setTimeout(r, 400));
+        }
+        colorKystvandByRisk(); // timeout — farv med ingen-data styling
+      })();
     }
   } catch(e) { console.warn('VP3 kystvande fejl:', e.message); }
 
@@ -2163,6 +2254,19 @@ async function loadVP3Layers() {
       });
       if (showVP3Bade) vp3BadevandLayer.addTo(map);
       console.info('VP3 badevand indlæst:', data.features?.length, 'features');
+
+      // Farv badevandspunkter når risikodata er klar
+      (async () => {
+        const deadline = Date.now() + 30000;
+        while (Date.now() < deadline) {
+          if (overflowPoints.length > 0 && overflowPoints.some(p => p.riskScore !== null)) {
+            colorBadevandByRisk();
+            return;
+          }
+          await new Promise(r => setTimeout(r, 400));
+        }
+        colorBadevandByRisk();
+      })();
     }
   } catch(e) { console.warn('VP3 badevand fejl:', e.message); }
 
@@ -2663,6 +2767,71 @@ function switchTab(name) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// NEDBØRSGRAF — SVG mini-søjlegraf, 48 timer: −24h (grå) + +24h (blå)
+// ═══════════════════════════════════════════════════════════════════════════
+function buildPrecipChart(hourlyObs, hourlyFore) {
+  const obs  = (hourlyObs  || []).slice(-24);  // seneste 24h, ældst først
+  const fore = (hourlyFore || []).slice(0, 24); // næste 24h, snarest først
+
+  // Ingen data — vis ingen graf
+  if (obs.length === 0 && fore.length === 0) return '';
+
+  const allMM  = [...obs, ...fore];
+  const maxMM  = Math.max(...allMM, 0.5);  // mindst 0.5 for at undgå tom graf
+  const W = 240, H = 40;
+  const total  = Math.max(obs.length + fore.length, 1);
+  const barW   = W / total;
+  const nowX   = (obs.length / total) * W;
+
+  // Farver
+  const COL_OBS_DRY  = 'rgba(90,107,120,0.25)';
+  const COL_OBS_WET  = 'rgba(90,107,120,0.65)';
+  const COL_FORE_DRY = 'rgba(13,110,140,0.3)';
+  const COL_FORE_WET = 'rgba(13,110,140,0.85)';
+  const COL_FORE_HVY = 'rgba(200,75,31,0.85)';  // >5mm/t — markér tydeligt
+
+  let bars = '';
+
+  obs.forEach((mm, i) => {
+    const h   = mm > 0 ? Math.max((mm / maxMM) * H, 2) : 0;
+    const x   = i * barW;
+    const col = mm >= 1 ? COL_OBS_WET : COL_OBS_DRY;
+    if (h > 0) bars += `<rect x="${x.toFixed(1)}" y="${(H - h).toFixed(1)}" width="${Math.max(barW - 0.8, 0.5).toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"/>`;
+  });
+
+  fore.forEach((mm, i) => {
+    const h   = mm > 0 ? Math.max((mm / maxMM) * H, 2) : 0;
+    const x   = (obs.length + i) * barW;
+    const col = mm >= 5 ? COL_FORE_HVY : mm >= 1 ? COL_FORE_WET : COL_FORE_DRY;
+    if (h > 0) bars += `<rect x="${x.toFixed(1)}" y="${(H - h).toFixed(1)}" width="${Math.max(barW - 0.8, 0.5).toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"/>`;
+  });
+
+  // Max-label (øverst højre)
+  const maxLabel = maxMM >= 1 ? `${maxMM.toFixed(1)} mm/t` : '';
+
+  return `
+  <div style="margin:.5rem 0 .3rem">
+    <svg viewBox="0 0 ${W} ${H + 14}" width="100%" style="display:block;overflow:visible" preserveAspectRatio="none">
+      <!-- baggrund obs -->
+      <rect x="0" y="0" width="${nowX.toFixed(1)}" height="${H}" fill="rgba(26,39,51,.04)" rx="1"/>
+      <!-- baggrund fore -->
+      <rect x="${nowX.toFixed(1)}" y="0" width="${(W - nowX).toFixed(1)}" height="${H}" fill="rgba(13,110,140,.04)" rx="1"/>
+      <!-- bundlinje -->
+      <line x1="0" y1="${H}" x2="${W}" y2="${H}" stroke="rgba(90,107,120,.2)" stroke-width="0.5"/>
+      <!-- søjler -->
+      ${bars}
+      <!-- Nu-linje -->
+      <line x1="${nowX.toFixed(1)}" y1="0" x2="${nowX.toFixed(1)}" y2="${H}" stroke="rgba(255,255,255,.5)" stroke-width="1" stroke-dasharray="2,2"/>
+      <!-- labels -->
+      <text x="2" y="${H + 10}" font-size="7.5" fill="rgba(90,107,120,.7)" font-family="monospace">−24h</text>
+      <text x="${nowX.toFixed(1)}" y="${H + 10}" text-anchor="middle" font-size="7.5" fill="rgba(200,200,200,.85)" font-family="monospace" font-weight="bold">NU</text>
+      <text x="${W - 2}" y="${H + 10}" text-anchor="end" font-size="7.5" fill="rgba(13,110,140,.8)" font-family="monospace">+24h</text>
+      ${maxLabel ? `<text x="${W - 2}" y="9" text-anchor="end" font-size="7" fill="rgba(90,107,120,.6)" font-family="monospace">${maxLabel}</text>` : ''}
+    </svg>
+  </div>`;
+}
+
 // ── Build an alarm/fav card ──────────────────────────────────────────────────
 function buildVarselCard(pt, isFavCard) {
   const rl  = riskLabel(pt.foreRisk || 0);
@@ -2703,6 +2872,7 @@ function buildVarselCard(pt, isFavCard) {
       <div class="rain-cell"><span class="rv">${rainFore} mm</span><span class="rl">Prognose 24h</span></div>
       <div class="rain-cell"><span class="rv">${rain7d} mm</span><span class="rl">7 dage total</span></div>
     </div>
+    ${buildPrecipChart(pt.hourlyObs, pt.hourlyFore)}
     <div style="margin-top:.55rem;padding:.45rem .55rem;background:rgba(26,107,138,.07);border-radius:5px;border-left:2px solid rgba(26,107,138,.4)">
       <div style="font-family:var(--mono);font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,237,230,.35);margin-bottom:.25rem">Varslingsgrundlag</div>
       <div style="font-size:.72rem;color:rgba(240,237,230,.75);line-height:1.5">
