@@ -12,6 +12,11 @@ COPY dansk-overloeb-kort.html ./
 COPY puls-data.json ./
 COPY overloeb-sw.js ./
 
+# VP3 geodata (kystvande, badevandsområder, RBU-punkter)
+COPY vp3_kystvande_simplified.geojson ./
+COPY vp3_badevand.geojson ./
+COPY vp3_rbu_slim.geojson ./
+
 EXPOSE 8080
 
 ENV PORT=8080

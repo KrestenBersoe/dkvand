@@ -54,6 +54,19 @@ app.get('/puls-data.json', (req, res) => {
   res.sendFile(path.join(STATIC_DIR, 'puls-data.json'));
 });
 
+// VP3 geodata: static reference files updated rarely → cache 1 week
+const VP3_FILES = [
+  'vp3_kystvande_simplified.geojson',
+  'vp3_badevand.geojson',
+  'vp3_rbu_slim.geojson',
+];
+VP3_FILES.forEach(f => {
+  app.get('/' + f, (req, res) => {
+    res.set('Cache-Control', 'public, max-age=604800');  // 7 days
+    res.sendFile(path.join(STATIC_DIR, f));
+  });
+});
+
 // HTML: no-cache so the browser always revalidates with the server.
 // (Use a short max-age in production once stable; no-cache avoids stale-JS
 // confusion during active development.)

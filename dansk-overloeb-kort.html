@@ -933,6 +933,9 @@
     <button class="ctrl-btn"        id="btn-viral" onclick="toggleViral()">🧬 Viralt varmekort</button>
     <button class="ctrl-btn active" id="btn-pts"   onclick="togglePoints()">📍 Udløbspunkter</button>
     <button class="ctrl-btn"        id="btn-fore"  onclick="toggleForecast()">⚡ 24h Varsling</button>
+    <button class="ctrl-btn active" id="btn-vp3kyst" onclick="toggleVP3Kyst()">🌊 Kystvande (VP3)</button>
+    <button class="ctrl-btn active" id="btn-vp3bade" onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
+    <button class="ctrl-btn"        id="btn-vp3rbu"  onclick="toggleVP3Rbu()">🔴 RBU VP3-punkter</button>
     <button class="ctrl-btn"        onclick="refreshData()">↻ Opdater</button>
     <button class="ctrl-btn" id="btn-locate" style="display:none" onclick="locateUser()">◎ Min placering</button>
   </div>
@@ -955,6 +958,10 @@
     <div class="leg-row"><div class="leg-swatch" style="background:#c84b1f"></div> Høj (&gt;60%)</div>
     <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
     <div class="leg-row"><div class="leg-swatch" style="background:linear-gradient(to right,#4b0082,#da00ff)"></div> Viral risiko</div>
+    <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
+    <div class="leg-row"><div class="leg-swatch" style="background:#1a6faf;opacity:.5;border:1px solid #1a6faf"></div> Kystvande (VP3)</div>
+    <div class="leg-row"><div class="leg-swatch" style="background:#f0c040;opacity:.5;border:1px solid #e6a817"></div> Badevandsområder</div>
+    <div class="leg-row"><div class="leg-swatch" style="background:#c0392b;border-radius:50%"></div> RBU VP3-punkter</div>
     <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
     <div class="leg-row" style="font-size:.65rem; color:rgba(240,237,230,.4)" id="leg-tau">
       Bakteriel τ: — · Viral τ: —
@@ -1386,6 +1393,14 @@ const pointsLayer   = L.layerGroup().addTo(map);
 const heatLayer     = { ref: null, visible: true };
 const viralHeatLayer = { ref: null, visible: false };  // viral pathogen heatmap
 const forecastLayer = L.layerGroup();
+
+// VP3 vandområde-lag
+let vp3KystvandLayer = null;
+let vp3BadevandLayer = null;
+let vp3RbuLayer      = null;
+let showVP3Kyst      = true;
+let showVP3Bade      = true;
+let showVP3Rbu       = false;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GEOLOCATION — zoom to device position on load; fallback = DK overview
@@ -1994,6 +2009,112 @@ function toggleForecast() {
   document.getElementById('btn-fore').classList.toggle('active', showForecast);
   if (showForecast) map.addLayer(forecastLayer);
   else map.removeLayer(forecastLayer);
+}
+
+function toggleVP3Kyst() {
+  showVP3Kyst = !showVP3Kyst;
+  document.getElementById('btn-vp3kyst').classList.toggle('active', showVP3Kyst);
+  if (vp3KystvandLayer) {
+    if (showVP3Kyst) vp3KystvandLayer.addTo(map);
+    else map.removeLayer(vp3KystvandLayer);
+  }
+}
+
+function toggleVP3Bade() {
+  showVP3Bade = !showVP3Bade;
+  document.getElementById('btn-vp3bade').classList.toggle('active', showVP3Bade);
+  if (vp3BadevandLayer) {
+    if (showVP3Bade) vp3BadevandLayer.addTo(map);
+    else map.removeLayer(vp3BadevandLayer);
+  }
+}
+
+function toggleVP3Rbu() {
+  showVP3Rbu = !showVP3Rbu;
+  document.getElementById('btn-vp3rbu').classList.toggle('active', showVP3Rbu);
+  if (vp3RbuLayer) {
+    if (showVP3Rbu) vp3RbuLayer.addTo(map);
+    else map.removeLayer(vp3RbuLayer);
+  }
+}
+
+async function loadVP3Layers() {
+  // Kystvand-afgrænsninger (polygoner, VP3 genbesøg 2025)
+  try {
+    const resp = await fetch('vp3_kystvande_simplified.geojson');
+    if (resp.ok) {
+      const data = await resp.json();
+      vp3KystvandLayer = L.geoJSON(data, {
+        style: {
+          color: '#1a6faf', weight: 1.5,
+          fillColor: '#1a6faf', fillOpacity: 0.07,
+          dashArray: null
+        },
+        onEachFeature: (f, l) => {
+          const p = f.properties || {};
+          const navn = p.vandomr_id || p.ov_id || p.navn || 'Kystvand';
+          l.bindTooltip(`<strong>${escHtml(String(navn))}</strong><br><span style="font-size:.7rem;opacity:.7">VP3 kystvandområde</span>`, { sticky: true });
+        }
+      });
+      if (showVP3Kyst) vp3KystvandLayer.addTo(map);
+      console.info('VP3 kystvande indlæst:', data.features?.length, 'features');
+    }
+  } catch(e) { console.warn('VP3 kystvande fejl:', e.message); }
+
+  // Badevandsområder
+  try {
+    const resp = await fetch('vp3_badevand.geojson');
+    if (resp.ok) {
+      const data = await resp.json();
+      vp3BadevandLayer = L.geoJSON(data, {
+        style: {
+          color: '#e6a817', weight: 1.8,
+          fillColor: '#f0c040', fillOpacity: 0.12
+        },
+        pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+          radius: 5, color: '#e6a817', weight: 1.5,
+          fillColor: '#f0c040', fillOpacity: 0.8
+        }),
+        onEachFeature: (f, l) => {
+          const p = f.properties || {};
+          const navn = p.pkt_navn || p.navn || p.id || 'Badevandsområde';
+          l.bindTooltip(`<strong>${escHtml(String(navn))}</strong><br><span style="font-size:.7rem;opacity:.7">VP3 badevandsområde</span>`, { sticky: true });
+        }
+      });
+      if (showVP3Bade) vp3BadevandLayer.addTo(map);
+      console.info('VP3 badevand indlæst:', data.features?.length, 'features');
+    }
+  } catch(e) { console.warn('VP3 badevand fejl:', e.message); }
+
+  // RBU-punkter fra VP3 (separate fra PULS-punkter — VP3-klassificering)
+  try {
+    const resp = await fetch('vp3_rbu_slim.geojson');
+    if (resp.ok) {
+      const data = await resp.json();
+      vp3RbuLayer = L.geoJSON(data, {
+        pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+          radius: 4, color: '#8b1a1a', weight: 1,
+          fillColor: '#c0392b', fillOpacity: 0.75
+        }),
+        onEachFeature: (f, l) => {
+          const p = f.properties || {};
+          const navn     = p.pkt_navn   || `RBU ${p.pkt_id || ''}`;
+          const kommune  = p.komm_navn  || '—';
+          const vandom   = p.vandomr_id || '—';
+          const tilstand = p.udl_va_sta || '?';
+          const indsats  = p.i_program === 'Ja' || p.i_program === true ? '<br>⚠ I VP3 indsatsprogram' : '';
+          l.bindTooltip(
+            `<strong>${escHtml(String(navn))}</strong><br>` +
+            `${escHtml(kommune)} · ${escHtml(String(vandom))}<br>` +
+            `Tilstand: ${escHtml(String(tilstand))}${indsats}`,
+            { sticky: true }
+          );
+        }
+      });
+      if (showVP3Rbu) vp3RbuLayer.addTo(map);
+      console.info('VP3 RBU indlæst:', data.features?.length, 'features');
+    }
+  } catch(e) { console.warn('VP3 RBU fejl:', e.message); }
 }
 
 async function refreshData() { await loadAll(); }
@@ -2685,6 +2806,7 @@ function computeRisk(pt) {
 setInterval(loadAll, 30 * 60 * 1000);
 // BOOT
 loadAll();
+loadVP3Layers();
 registerSW().then(() => restorePushSubscription());
 </script>
 </body>
