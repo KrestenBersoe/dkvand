@@ -3,7 +3,7 @@
 //
 // Serves the static map app and provides a weather proxy with a shared
 // server-side cache. This collapses Open-Meteo calls from "per browser"
-// to "per 0.1° grid cell per hour, globally".
+// to "per 0.25° grid cell per 3h, globally".
 //
 // Run:
 //   npm install
@@ -89,15 +89,12 @@ app.get('/overloeb-sw.js', (req, res) => {
 });
 
 // ── Weather proxy with shared server-side cache ─────────────────────────────
-// Grid: 0.1° (~7×11 km) — matches DMI HARMONIE-AROME resolution closely.
-// TTL: 1 hour — balances freshness with API budget.
-// Warming: at startup and every hour, all ~1.200 DK cells are refreshed
-//          proactively in 12 bulk calls (100 cells each) so users always
-//          hit a warm cache. 12 calls/hour × 24h = 288 calls/day — well
-//          within Open-Meteo free tier (10.000/day).
-const GRID_DEG       = 0.1;
-const WEATHER_TTL_MS = 1 * 3600 * 1000;  // 1 hour
-const weatherCache   = new Map(); // key → { ts, data }
+// Grid: 0.25° (~17×28 km) — 4× finer than original 0.5°, reliable API usage.
+// TTL: 3 hours. warmCache uses individual single-location calls (proven to work).
+// API budget: ~220 cells × 8 warmups/day = ~1.760 calls/day (well under 10.000).
+const GRID_DEG       = 0.25;
+const WEATHER_TTL_MS = 3 * 3600 * 1000;
+const weatherCache   = new Map();
 let   apiCallCount   = 0;
 let   cacheHitCount  = 0;
 
@@ -107,46 +104,32 @@ function gridKey(lat, lng) {
   return `${clat.toFixed(4)}:${clng.toFixed(4)}`;
 }
 
-// Denmark bounding box + Bornholm. Generates ~1.200 cells at 0.1°.
-// Uses integer iteration to avoid floating point drift from repeated += 0.1.
-// Cell centres are derived via gridKey() itself — guaranteeing they always
-// match what gridKey() produces for any real PULS point inside the cell.
+// Denmark + Bornholm bounding box at 0.25°. ~220 cells.
 function buildDenmarkGrid() {
-  const iLatMin = Math.floor(54.5 / GRID_DEG);  // 545
-  const iLatMax = Math.ceil(57.9  / GRID_DEG);  // 579
-  const iLngMin = Math.floor(8.0  / GRID_DEG);  // 80
-  const iLngMax = Math.ceil(15.4  / GRID_DEG);  // 154
-
-  const cells = [];
-  const seen  = new Set();
-
+  const iLatMin = Math.floor(54.5 / GRID_DEG);
+  const iLatMax = Math.ceil(57.9  / GRID_DEG);
+  const iLngMin = Math.floor(8.0  / GRID_DEG);
+  const iLngMax = Math.ceil(15.4  / GRID_DEG);
+  const cells = [], seen = new Set();
   for (let iLat = iLatMin; iLat < iLatMax; iLat++) {
     for (let iLng = iLngMin; iLng < iLngMax; iLng++) {
-      // Sample a point 10% into the cell — avoids boundary ambiguity.
-      // gridKey() snaps it to the canonical cell centre.
-      const sampLat = (iLat + 0.1) * GRID_DEG;
-      const sampLng = (iLng + 0.1) * GRID_DEG;
-      const key = gridKey(sampLat, sampLng);
+      const key = gridKey((iLat + 0.1) * GRID_DEG, (iLng + 0.1) * GRID_DEG);
       if (seen.has(key)) continue;
       seen.add(key);
-      const [latStr, lngStr] = key.split(':');
-      cells.push({ lat: parseFloat(latStr), lng: parseFloat(lngStr) });
+      const [ls, gs] = key.split(':');
+      cells.push({ lat: parseFloat(ls), lng: parseFloat(gs) });
     }
   }
   return cells;
 }
 
-// Bulk fetch up to 100 locations in a single Open-Meteo request.
-// Returns array of results in same order as input cells.
-function fetchOpenMeteoBulk(cells) {
+// Single-location fetch — proven reliable with Open-Meteo.
+function fetchOpenMeteo(lat, lng) {
   return new Promise((resolve, reject) => {
-    const lats = cells.map(c => c.lat.toFixed(4)).join(',');
-    const lngs = cells.map(c => c.lng.toFixed(4)).join(',');
-    const url  = `https://api.open-meteo.com/v1/forecast` +
-      `?latitude=${lats}&longitude=${lngs}` +
+    const url = `https://api.open-meteo.com/v1/forecast` +
+      `?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
       `&hourly=precipitation&past_days=7&forecast_days=2` +
       `&models=best_match&timezone=Europe%2FCopenhagen`;
-
     https.get(url, resp => {
       if (resp.statusCode !== 200) {
         reject(new Error(`Open-Meteo HTTP ${resp.statusCode}`));
@@ -155,19 +138,11 @@ function fetchOpenMeteoBulk(cells) {
       let body = '';
       resp.on('data', c => body += c);
       resp.on('end', () => {
-        try {
-          const parsed = JSON.parse(body);
-          // Single location → wrap in array for uniform handling
-          resolve(Array.isArray(parsed) ? parsed : [parsed]);
-        } catch(e) { reject(e); }
+        try { resolve(JSON.parse(body)); }
+        catch(e) { reject(e); }
       });
     }).on('error', reject);
   });
-}
-
-// Single-cell fetch (used by /api/weather endpoint as fallback)
-function fetchOpenMeteo(lat, lng) {
-  return fetchOpenMeteoBulk([{ lat, lng }]).then(arr => arr[0]);
 }
 
 // Compute derived precipitation metrics from raw Open-Meteo JSON.
@@ -176,12 +151,9 @@ function computeMetrics(json) {
   const values = json?.hourly?.precipitation || [];
   const now    = Date.now();
   const MS_HOUR = 3600 * 1000;
-  const TAU    = 3.0; // days — hydrological memory (soil saturation / sewer load)
-
+  const TAU    = 3.0;
   let antecedentMM = 0, todayMM = 0, forecastMM = 0, totalRain7d = 0;
-  const hourlyObs  = [];  // last 24h observed, oldest first
-  const hourlyFore = [];  // next 24h forecast, soonest first
-
+  const hourlyObs = [], hourlyFore = [];
   times.forEach((tStr, i) => {
     const mm  = Math.max(Number(values[i]) || 0, 0);
     const tMs = new Date(tStr).getTime();
@@ -196,55 +168,45 @@ function computeMetrics(json) {
       if (-diffMs <= 24 * MS_HOUR) { forecastMM += mm; hourlyFore.push(mm); }
     }
   });
-
   return { antecedentMM, todayMM, forecastMM, totalRain7d, hourlyObs, hourlyFore };
 }
 
 // ── Proactive cache warming ──────────────────────────────────────────────────
-// Refreshes all stale cells. Runs at startup and every hour.
-// CHUNK=10: conservative — Open-Meteo multi-location works reliably at ≤10.
+// Individual single-location calls, CONCURRENCY=30. ~220 cells → ~10s warmup.
 let warmRunning = false;
 async function warmCache() {
   if (warmRunning) return;
   warmRunning = true;
-  const cells  = buildDenmarkGrid();
-  const CHUNK  = 10;
-  let fetched  = 0, skipped = 0, failed = 0;
-  const t0     = Date.now();
+  const cells = buildDenmarkGrid();
+  const CONC  = 30;
+  let idx = 0, fetched = 0, skipped = 0, failed = 0;
+  const t0 = Date.now();
 
-  for (let i = 0; i < cells.length; i += CHUNK) {
-    const chunk = cells.slice(i, i + CHUNK);
-    const stale = chunk.filter(c => {
-      const cached = weatherCache.get(gridKey(c.lat, c.lng));
-      return !cached || Date.now() - cached.ts >= WEATHER_TTL_MS;
-    });
-    skipped += chunk.length - stale.length;
-    if (stale.length === 0) continue;
-
-    try {
-      apiCallCount++;
-      const results = await fetchOpenMeteoBulk(stale);
-      results.forEach((json, idx) => {
-        const cell = stale[idx];
-        if (!cell || !json?.hourly) return;  // skip malformed responses
-        weatherCache.set(gridKey(cell.lat, cell.lng), { ts: Date.now(), data: computeMetrics(json) });
+  async function worker() {
+    while (idx < cells.length) {
+      const cell = cells[idx++];
+      const key  = gridKey(cell.lat, cell.lng);
+      const cached = weatherCache.get(key);
+      if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) { skipped++; continue; }
+      try {
+        apiCallCount++;
+        const raw  = await fetchOpenMeteo(cell.lat, cell.lng);
+        const data = computeMetrics(raw);
+        weatherCache.set(key, { ts: Date.now(), data });
         fetched++;
-      });
-    } catch(e) {
-      failed += stale.length;
-      console.warn(`warmCache chunk ${i}–${i + CHUNK} failed:`, e.message);
+      } catch(e) {
+        failed++;
+        console.warn('warmCache cell failed:', key, e.message);
+      }
     }
-
-    // 200ms pause between chunks
-    if (i + CHUNK < cells.length) await new Promise(r => setTimeout(r, 200));
   }
 
+  await Promise.all(Array.from({ length: Math.min(CONC, cells.length) }, worker));
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s — cache size: ${weatherCache.size}`);
+  console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s — cache: ${weatherCache.size} cells`);
   warmRunning = false;
 }
 
-// Stagger first warm by 2s to let server finish binding, then every hour.
 setTimeout(warmCache, 2000);
 setInterval(warmCache, WEATHER_TTL_MS);
 
@@ -260,7 +222,7 @@ app.get('/api/weather', async (req, res) => {
 
   if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) {
     cacheHitCount++;
-    res.set('Cache-Control', 'public, max-age=3600');
+    res.set('Cache-Control', 'public, max-age=10800');  // 3h
     res.set('X-Cache', 'HIT');
     return res.json(cached.data);
   }
@@ -272,7 +234,7 @@ app.get('/api/weather', async (req, res) => {
     const raw  = await fetchOpenMeteo(clat, clng);
     const data = computeMetrics(raw);
     weatherCache.set(key, { ts: Date.now(), data });
-    res.set('Cache-Control', 'public, max-age=3600');
+    res.set('Cache-Control', 'public, max-age=10800');
     res.set('X-Cache', 'MISS');
     res.json(data);
   } catch(e) {
@@ -307,7 +269,7 @@ app.get('/api/weather/all', (req, res) => {
     return res.status(304).end();
   }
 
-  res.set('Cache-Control', 'public, max-age=3600');
+  res.set('Cache-Control', 'public, max-age=10800');  // 3h
   res.set('ETag', etag);
   res.set('X-Warm-Cells',  String(warm));
   res.set('X-Stale-Cells', String(stale));

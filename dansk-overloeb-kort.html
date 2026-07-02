@@ -1177,7 +1177,7 @@
           <div class="doc-formula-body">nedbør = Σ p(t) × e<sup>−alder(t) / τ<sub>H</sub></sup></div>
           <div class="doc-formula-note">τ<sub>H</sub> = 3,0 dage — hydrologisk hukommelse (jordmætning / kloakbelastning). Regn fra i går bidrager 72 %, fra 3 dage siden 37 %.</div>
         </div>
-        <p>Nedbør hentes fra Open-Meteo (<span class="doc-mono">best_match</span> — DMI HARMONIE-AROME for Danmark, ECMWF for Bornholm og randzoner) på et <strong>0,1°-gitter (~7×11 km)</strong>, ~2.500 celler over Danmark. Serveren opvarmer proaktivt alle celler hver time via bulk-kald à 100 lokationer — brugere rammer altid varm cache. Samlet API-forbrug: under 700 kald/dag ud af 10.000 tilladt. Cache-TTL: 1 time.</p>
+        <p>Nedbør hentes fra Open-Meteo (<span class="doc-mono">best_match</span> — DMI HARMONIE-AROME for Danmark, ECMWF for Bornholm og randzoner) på et <strong>0,25°-gitter (~17×28 km)</strong>, ~220 celler over Danmark. Serveren opvarmer proaktivt alle celler hver 3. time via individuelle enkelt-lokationskald med 30 parallelle forbindelser — hele opvarmningen tager ~10 sekunder. Samlet API-forbrug: ~1.760 kald/dag ud af 10.000 tilladt. Cache-TTL: 3 timer.</p>
         <div class="doc-arch">
           <div class="doc-arch-row"><span class="doc-arch-k">GET /api/weather/all</span><span>Returnerer hele det opvarmede grid som ét JSON-svar med aggregerede metrics. Browseren cacher med <span class="doc-mono">max-age=3600</span> og ETag — genbesøg koster 0 bytes ved uændret data.</span></div>
           <div class="doc-arch-row"><span class="doc-arch-k">GET /api/weather/hourly</span><span>Timevis nedbørsdata (<span class="doc-mono">hourlyObs</span> + <span class="doc-mono">hourlyFore</span>) hentes on-demand pr. celle når brugeren åbner et varselkort — ikke ved sideindlæsning. Reducerer initial payload markant.</span></div>
@@ -1996,13 +1996,12 @@ async function loadAll() {
   try {
     overflowPoints = await loadOverflowData();
 
-    // ── Precipitation: 0.1° grid fetch ────────────────────────────────────────
-    // One Open-Meteo call per 0.1° grid cell (~7×11 km) covering Denmark.
-    // ~1.200 cells — server warms all proactively every hour via 12 bulk calls.
-    // Browser bulk POST hits warm cache directly; essentially zero API calls.
+    // ── Precipitation: 0.25° grid fetch ───────────────────────────────────────
+    // 0.25° ≈ 17×28 km — 4× finer than original 0.5°, reliable with Open-Meteo.
+    // Server warms ~220 cells every 3h via individual single-location calls.
     setLoader('Beregner nedbørsgitter…');
 
-    const GRID_DEG = 0.1;
+    const GRID_DEG = 0.25;
     function cellKey(lat, lng) {
       const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
       const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
