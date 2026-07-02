@@ -462,6 +462,35 @@ app.post('/api/push/send', async (req, res) => {
   res.json({ ok: true, subscribers: pushSubscriptions.size });
 });
 
+// ── GET /api/debug — cache diagnostics ───────────────────────────────────────
+app.get('/api/debug', (req, res) => {
+  const all   = [...weatherCache.entries()];
+  const now   = Date.now();
+  const warm  = all.filter(([, e]) => now - e.ts < WEATHER_TTL_MS);
+  const stale = all.filter(([, e]) => now - e.ts >= WEATHER_TTL_MS);
+  const sample = warm.slice(0, 5).map(([k, e]) => ({
+    key:          k,
+    antecedentMM: e.data?.antecedentMM ?? null,
+    todayMM:      e.data?.todayMM      ?? null,
+    forecastMM:   e.data?.forecastMM   ?? null,
+    hourlyObsLen: e.data?.hourlyObs?.length ?? 0,
+    ageSeconds:   Math.round((now - e.ts) / 1000),
+  }));
+  res.json({
+    timestamp:      new Date().toISOString(),
+    GRID_DEG,
+    WEATHER_TTL_MS,
+    warmRunning,
+    cacheTotal:     all.length,
+    warmCells:      warm.length,
+    staleCells:     stale.length,
+    apiCallsTotal:  apiCallCount,
+    cacheHitsTotal: cacheHitCount,
+    buildGridSize:  buildDenmarkGrid().length,
+    sample,
+  });
+});
+
 // ── Health / cache stats ────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => {
   res.json({

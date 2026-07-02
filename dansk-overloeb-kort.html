@@ -1459,6 +1459,8 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 let hjemMap = null;
 let hjemUserMarker = null;
 let hjemNearestLayer = null;
+let hjemUserLat = null;  // set when GPS fix succeeds — used to re-render on weather retry
+let hjemUserLng = null;
 
 function initHjemMap() {
   if (hjemMap) return hjemMap;
@@ -1824,6 +1826,12 @@ function renderMap() {
   updateStatusTime();
   saveWarnPoints(warnPoints);  // persist for varsel-side.html
   colorKystvandByRisk();       // farv VP3 kystvand-polygoner + badevandspunkter efter max-risiko
+
+  // Opdater hjem-sektionen automatisk hvis bruger har GPS-fix og vejrdata er ny
+  if (hjemUserLat !== null && overflowPoints.some(p => p.precipMM !== null)) {
+    hjemRenderNearest(hjemUserLat, hjemUserLng);
+    hjemSetStatus('Din placering · opdateret');
+  }
 }
 
 function buildPopup(pt, risk, foreRisk) {
@@ -2047,41 +2055,13 @@ async function loadAll() {
       console.warn('Weather /all fetch failed:', e.message);
     }
 
-    // ── Trin 2: fallback til POST bulk hvis cache er næsten tom ─────────────
-    // Sker typisk i de første minutter efter server-opstart inden warmCache
-    // er færdig, eller hvis Open-Meteo bulk-kald fejlede.
-    if (cellResults.size < Math.min(50, cellEntries.length * 0.2)) {
-      console.info(`Cache kun ${cellResults.size} celler — falder tilbage til POST bulk`);
-      try {
-        const res = await fetch('api/weather/bulk', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cells: cellEntries.map(([, c]) => ({ lat: c.lat, lng: c.lng })) }),
-        });
-        if (res.ok) {
-          const hits   = parseInt(res.headers.get('X-Cache-Hits')   || '0');
-          const misses = parseInt(res.headers.get('X-Cache-Misses') || '0');
-          warmCoverage = hits / Math.max(hits + misses, 1);
-          const data   = await res.json();
-          for (const [key] of cellEntries) {
-            const cell      = gridCells.get(key);
-            const serverKey = `${cell.lat.toFixed(4)}:${cell.lng.toFixed(4)}`;
-            if (data[serverKey]) cellResults.set(key, data[serverKey]);
-          }
-        }
-      } catch(e) {
-        console.warn('Weather bulk fallback failed:', e.message);
-      }
-    }
-
-    // Server stadig ved at varme op — genforsøg om 60s (max 3 gange)
+    // Server stadig ved at varme op — genforsøg om 30s (max 5 gange)
     if (warmCoverage < 0.8) {
       const retries = (loadAll._retries = (loadAll._retries || 0) + 1);
-      if (retries <= 3) {
-        console.info(`Vejrcache ${(warmCoverage * 100).toFixed(0)}% varm — genforsøg ${retries}/3 om 60s`);
-        setTimeout(() => loadAll(), 60_000);
+      if (retries <= 5) {
+        console.info(`Vejrcache ${(warmCoverage * 100).toFixed(0)}% varm — genforsøg ${retries}/5 om 30s`);
+        setTimeout(() => loadAll(), 30_000);
       } else {
-        console.info('Vejrcache stadig ikke fuld efter 3 genforsøg — fortsætter med tilgængeligt data');
         loadAll._retries = 0;
       }
     } else {
@@ -2740,13 +2720,20 @@ async function hjemLocate() {
         radius: 8, color: '#fff', weight: 2, fillColor: '#3b82f6', fillOpacity: 1
       }).addTo(hjemMap).bindPopup('Din placering').openPopup();
 
+      // Gem koordinater — bruges til auto-opdatering når vejrdata arriver
+      hjemUserLat = lat;
+      hjemUserLng = lng;
+
       hjemSetStatus('Henter nærmeste udløb…');
       try {
         await hjemWaitForData();
         hjemRenderNearest(lat, lng);
         const hasWeather = overflowPoints.some(p => p.precipMM !== null);
-        const ageNote = hasWeather ? '' : ' (vejrdata ikke tilgængeligt endnu — prøv igen om lidt)';
-        hjemSetStatus(`Din placering · opdateret${ageNote}`);
+        if (hasWeather) {
+          hjemSetStatus('Din placering · opdateret');
+        } else {
+          hjemSetStatus('Din placering · vejrdata indlæses…');
+        }
       } catch(e) {
         hjemSetStatus('Kunne ikke hente udløbsdata: ' + e.message);
         document.getElementById('hjem-retry-btn').style.display = '';
