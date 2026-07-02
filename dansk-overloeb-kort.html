@@ -1935,6 +1935,7 @@ async function saveWarnPoints(pts) {
       foreRisk: p.foreRisk, todayMM: p.todayMM,
       forecastMM: p.forecastMM, totalRain7d: p.totalRain7d,
       precipMM: p.precipMM, quality: p.quality,
+      _weatherKey: p._weatherKey || null,
       hourlyObs:  p.hourlyObs  || [],
       hourlyFore: p.hourlyFore || [],
       ts: Date.now()
@@ -2073,10 +2074,18 @@ async function loadAll() {
       }
     }
 
-    // Server stadig ved at varme op — genforsøg om 60s
+    // Server stadig ved at varme op — genforsøg om 60s (max 3 gange)
     if (warmCoverage < 0.8) {
-      console.info(`Vejrcache ${(warmCoverage * 100).toFixed(0)}% varm — genforsøger om 60s`);
-      setTimeout(() => loadAll(), 60_000);
+      const retries = (loadAll._retries = (loadAll._retries || 0) + 1);
+      if (retries <= 3) {
+        console.info(`Vejrcache ${(warmCoverage * 100).toFixed(0)}% varm — genforsøg ${retries}/3 om 60s`);
+        setTimeout(() => loadAll(), 60_000);
+      } else {
+        console.info('Vejrcache stadig ikke fuld efter 3 genforsøg — fortsætter med tilgængeligt data');
+        loadAll._retries = 0;
+      }
+    } else {
+      loadAll._retries = 0;
     }
 
     // Assign cell weather to every point
@@ -2735,8 +2744,9 @@ async function hjemLocate() {
       try {
         await hjemWaitForData();
         hjemRenderNearest(lat, lng);
-        const ageNote = overflowPoints[0]?.precipMM === null ? ' (vejrdata indlæses stadig)' : '';
-        hjemSetStatus(`Din placering · opdateret nu${ageNote}`);
+        const hasWeather = overflowPoints.some(p => p.precipMM !== null);
+        const ageNote = hasWeather ? '' : ' (vejrdata ikke tilgængeligt endnu — prøv igen om lidt)';
+        hjemSetStatus(`Din placering · opdateret${ageNote}`);
       } catch(e) {
         hjemSetStatus('Kunne ikke hente udløbsdata: ' + e.message);
         document.getElementById('hjem-retry-btn').style.display = '';
@@ -2999,13 +3009,11 @@ function buildVarselCard(pt, isFavCard) {
       <div class="rain-cell"><span class="rv">${rainFore} mm</span><span class="rl">Prognose 24h</span></div>
       <div class="rain-cell"><span class="rv">${rain7d} mm</span><span class="rl">7 dage total</span></div>
     </div>
-    ${buildPrecipChart(pt.hourlyObs, pt.hourlyFore)}
-    <div id="chart-placeholder-${pt.id}"></div>
+    <div id="chart-placeholder-${pt.id}">${buildPrecipChart(pt.hourlyObs, pt.hourlyFore)}</div>
     <div style="margin-top:.55rem;padding:.45rem .55rem;background:rgba(26,107,138,.07);border-radius:5px;border-left:2px solid rgba(26,107,138,.4)">
       <div style="font-family:var(--mono);font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,237,230,.35);margin-bottom:.25rem">Varslingsgrundlag</div>
       <div style="font-size:.72rem;color:rgba(240,237,230,.75);line-height:1.5">
-        🌧 ${escHtml(basisText)}<br>
-        📊 ${escHtml(evText)} · ${escHtml(qualText)}<br>
+        ${escHtml(evText)} · ${escHtml(qualText)}<br>
         ⚠ Beregnet overløbsrisiko: <strong>${risk}%</strong> inden for 24 timer
       </div>
     </div>
@@ -3013,8 +3021,16 @@ function buildVarselCard(pt, isFavCard) {
       <button class="ctrl-btn" style="font-size:.65rem" onclick="goToPoint(${pt.id})">Vis på kort →</button>
     </div>` : ''}
   `;
+
+  // Fetch hourly arrays on-demand and inject chart when ready
+  if (!pt.hourlyObs?.length && pt._weatherKey) {
+    fetchHourly(pt).then(() => {
+      const ph = document.getElementById(`chart-placeholder-${pt.id}`);
+      if (ph) ph.innerHTML = buildPrecipChart(pt.hourlyObs, pt.hourlyFore) || ph.innerHTML;
+    });
+  }
+
   return div;
-}
 
 // Navigate to a point on the map and switch to kort tab
 function goToPoint(id) {
