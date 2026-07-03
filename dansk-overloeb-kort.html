@@ -1478,11 +1478,37 @@ function initHjemMap() {
   return hjemMap;
 }
 
-// Layer groups
-const pointsLayer   = L.layerGroup().addTo(map);
-const heatLayer     = { ref: null, visible: true };
-const viralHeatLayer = { ref: null, visible: false };  // viral pathogen heatmap
-const forecastLayer = L.layerGroup();
+// ── Lag-håndtering ───────────────────────────────────────────────────────────
+// Heatmaps oprettes ÉN gang og forbliver på kortet altid.
+// Synlighed styres med CSS display — ALDRIG addTo/removeLayer.
+// Det eliminerer det grundlæggende problem: L.heatLayer's canvas-element
+// kan overleve removeLayer() og efterlade et forældet lag i DOM'en.
+
+const pointsLayer    = L.layerGroup().addTo(map);
+const forecastLayer  = L.layerGroup();
+
+// Heatmap state — ref sættes første gang renderMap kører
+const heatLayer      = { ref: null, visible: true };
+const viralHeatLayer = { ref: null, visible: false };
+
+// Centraliseret heatmap-opdatering
+function updateHeatmap(state, data) {
+  if (!state.ref) {
+    // Første kald — opret og tilføj til kortet
+    const opts = state === heatLayer
+      ? { radius: 28, blur: 22, maxZoom: 12, max: 1,
+          gradient: { 0: '#2d7d4f', 0.3: '#d4a020', 0.6: '#c84b1f', 1.0: '#ff2200' } }
+      : { radius: 32, blur: 26, maxZoom: 12, max: 1,
+          gradient: { 0: '#1a1a4a', 0.25: '#4b0082', 0.55: '#8b00ff', 0.8: '#da00ff', 1.0: '#ff80ff' } };
+    state.ref = L.heatLayer([], opts).addTo(map);
+  }
+  // Opdatér data
+  state.ref.setLatLngs(state.visible && data.length > 0 ? data : []);
+  // Styr synlighed udelukkende via CSS
+  if (state.ref._canvas) {
+    state.ref._canvas.style.display = (state.visible && data.length > 0) ? '' : 'none';
+  }
+}
 
 // VP3 vandområde-lag
 let vp3KystvandLayer = null;
@@ -1713,27 +1739,6 @@ function riskColor(r) {
 // ═══════════════════════════════════════════════════════════════════════════
 function renderMap() {
   pointsLayer.clearLayers();
-
-  // Ryd begge heatmap-referencer — fjern lag + canvas-element eksplicit
-  if (heatLayer.ref) {
-    const c = heatLayer.ref._canvas;
-    map.removeLayer(heatLayer.ref);
-    if (c?.parentNode) c.parentNode.removeChild(c);
-    heatLayer.ref = null;
-  }
-  if (viralHeatLayer.ref) {
-    const c = viralHeatLayer.ref._canvas;
-    map.removeLayer(viralHeatLayer.ref);
-    if (c?.parentNode) c.parentNode.removeChild(c);
-    viralHeatLayer.ref = null;
-  }
-
-  // Fjern forældede heatmap-canvases fra DOM
-  // (klasse: leaflet-heatmap-layer — leaflet.heat tilføjer den selv)
-  map.getPanes().overlayPane
-    .querySelectorAll('canvas.leaflet-heatmap-layer')
-    .forEach(c => c.remove());
-
   forecastLayer.clearLayers();
 
   const heatData   = [];
@@ -1818,31 +1823,9 @@ function renderMap() {
     }
   });
 
-  // Heatmap — bacterial (guard: skip if no data or map not sized)
-  if (heatLayer.visible && heatData.length > 0) {
-    try {
-      heatLayer.ref = L.heatLayer(heatData, {
-        radius:  28,
-        blur:    22,
-        maxZoom: 12,
-        max:     1,
-        gradient: { 0: '#2d7d4f', 0.3: '#d4a020', 0.6: '#c84b1f', 1.0: '#ff2200' },
-      }).addTo(map);
-    } catch(e) { console.warn('Bacterial heatmap render error:', e.message); }
-  }
-
-  // Heatmap — viral (guard: skip if no data)
-  if (viralHeatLayer.visible && viralData.length > 0) {
-    try {
-    viralHeatLayer.ref = L.heatLayer(viralData, {
-      radius:  32,
-      blur:    26,
-      maxZoom: 12,
-      max:     1,
-      gradient: { 0: '#1a1a4a', 0.25: '#4b0082', 0.55: '#8b00ff', 0.8: '#da00ff', 1.0: '#ff80ff' },
-    }).addTo(map);
-    } catch(e) { console.warn('Viral heatmap render error:', e.message); }
-  }
+  // Opdatér heatmaps via CSS-synlighed — ingen addTo/removeLayer
+  updateHeatmap(heatLayer,      heatData);
+  updateHeatmap(viralHeatLayer, viralData);
 
   updateStatusTime();
   saveWarnPoints(warnPoints);  // persist for varsel-side.html
@@ -2151,28 +2134,22 @@ let showForecast = false;
 
 function toggleHeat() {
   showHeat = !showHeat;
-  document.getElementById('btn-heat').classList.toggle('active', showHeat);
   heatLayer.visible = showHeat;
-  if (!showHeat && heatLayer.ref) {
-    const c = heatLayer.ref._canvas;
-    map.removeLayer(heatLayer.ref);
-    if (c?.parentNode) c.parentNode.removeChild(c);
-    heatLayer.ref = null;
+  document.getElementById('btn-heat').classList.toggle('active', showHeat);
+  // CSS-only — heatmap-canvas forbliver i DOM, kun display skifter
+  if (heatLayer.ref?._canvas) {
+    heatLayer.ref._canvas.style.display = showHeat ? '' : 'none';
   }
-  else if (showHeat) renderMap();
 }
 
 function toggleViral() {
   showViral = !showViral;
-  document.getElementById('btn-viral').classList.toggle('active', showViral);
   viralHeatLayer.visible = showViral;
-  if (!showViral && viralHeatLayer.ref) {
-    const c = viralHeatLayer.ref._canvas;
-    map.removeLayer(viralHeatLayer.ref);
-    if (c?.parentNode) c.parentNode.removeChild(c);
-    viralHeatLayer.ref = null;
+  document.getElementById('btn-viral').classList.toggle('active', showViral);
+  if (viralHeatLayer.ref?._canvas) {
+    viralHeatLayer.ref._canvas.style.display = showViral ? '' : 'none';
   }
-  else if (showViral) renderMap();
+  if (showViral) renderMap();
 }
 
 function togglePoints() {
