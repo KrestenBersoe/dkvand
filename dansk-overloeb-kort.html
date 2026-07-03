@@ -1827,6 +1827,21 @@ function renderMap() {
   saveWarnPoints(warnPoints);  // persist for varsel-side.html
   colorKystvandByRisk();       // farv VP3 kystvand-polygoner + badevandspunkter efter max-risiko
 
+  // Håndhæv VP3-lag synlighed — forhindrer Leaflet SVG-renderer i at
+  // re-inserere detached path-elementer via setStyle() fra colorKystvandByRisk
+  if (vp3KystvandLayer) {
+    if (showVP3Kyst && !map.hasLayer(vp3KystvandLayer)) vp3KystvandLayer.addTo(map);
+    if (!showVP3Kyst && map.hasLayer(vp3KystvandLayer)) map.removeLayer(vp3KystvandLayer);
+  }
+  if (vp3BadevandLayer) {
+    if (showVP3Bade && !map.hasLayer(vp3BadevandLayer)) vp3BadevandLayer.addTo(map);
+    if (!showVP3Bade && map.hasLayer(vp3BadevandLayer)) map.removeLayer(vp3BadevandLayer);
+  }
+  if (vp3RbuLayer) {
+    if (showVP3Rbu && !map.hasLayer(vp3RbuLayer)) vp3RbuLayer.addTo(map);
+    if (!showVP3Rbu && map.hasLayer(vp3RbuLayer)) map.removeLayer(vp3RbuLayer);
+  }
+
   // Opdater hjem-sektionen automatisk hvis bruger har GPS-fix og vejrdata er ny
   if (hjemUserLat !== null && overflowPoints.some(p => p.precipMM !== null)) {
     hjemRenderNearest(hjemUserLat, hjemUserLng);
@@ -2190,6 +2205,14 @@ function riskTooltipText(risk) {
 function colorKystvandByRisk() {
   if (!vp3KystvandLayer || !overflowPoints || overflowPoints.length === 0) return;
 
+  // Sæt ikke styles på lag der er slukket — Leaflet's SVG-renderer
+  // re-inserter detached path-elementer ved setStyle(), hvilket får
+  // fjernede lag til at dukke op igen.
+  if (!showVP3Kyst) {
+    colorBadevandByRisk();  // badevand kan stadig være slået til
+    return;
+  }
+
   // ── Trin 1: PULS waterArea → max riskScore ──────────────────────────────
   const areaRisk = new Map();
   overflowPoints.forEach(pt => {
@@ -2237,6 +2260,7 @@ function colorKystvandByRisk() {
 
 function colorBadevandByRisk() {
   if (!vp3BadevandLayer || !overflowPoints || overflowPoints.length === 0) return;
+  if (!showVP3Bade) return;  // sæt ikke styles på slukket lag
 
   // Byg array af kystvand-centroider + risiko til hurtig opslag
   const kystCenters = [];
@@ -2728,9 +2752,16 @@ async function hjemLocate() {
       try {
         await hjemWaitForData();
         hjemRenderNearest(lat, lng);
-        const hasWeather = overflowPoints.some(p => p.precipMM !== null);
-        if (hasWeather) {
+        // Tjek om de nærmeste udløb specifikt har vejrdata
+        const nearest = overflowPoints
+          .filter(p => p.lat && p.lng)
+          .sort((a, b) => haversine(lat, lng, a.lat, a.lng) - haversine(lat, lng, b.lat, b.lng))
+          .slice(0, 5);
+        const nearestHasWeather = nearest.some(p => p.precipMM !== null);
+        if (nearestHasWeather) {
           hjemSetStatus('Din placering · opdateret');
+        } else if (overflowPoints.some(p => p.precipMM !== null)) {
+          hjemSetStatus('Din placering · vejrdata mangler for dette område (opdateres automatisk)');
         } else {
           hjemSetStatus('Din placering · vejrdata indlæses…');
         }

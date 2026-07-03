@@ -210,12 +210,14 @@ let warmRunning = false;
 async function warmCache() {
   if (warmRunning) return;
   warmRunning = true;
-  const cells = buildPulsGrid();   // only cells with real PULS points
-  const CONC  = 30;
+  const cells = buildPulsGrid();
+  const CONC  = 10;    // 10 parallelle kald — undgår burst rate-limit hos Open-Meteo
   let idx = 0, fetched = 0, skipped = 0, failed = 0;
   const t0 = Date.now();
 
-  async function worker() {
+  async function worker(workerIdx) {
+    // Stagger worker start times med 200ms — fordeler burst-toppen
+    await new Promise(r => setTimeout(r, workerIdx * 200));
     while (idx < cells.length) {
       const cell = cells[idx++];
       const key  = gridKey(cell.lat, cell.lng);
@@ -229,15 +231,17 @@ async function warmCache() {
         fetched++;
       } catch(e) {
         failed++;
-        const errMsg = `${key}: ${e.message}`;
-        console.warn('warmCache cell failed:', errMsg);
-        fetchErrors.push({ ts: new Date().toISOString(), key, error: e.message });
-        if (fetchErrors.length > 5) fetchErrors.shift();
+        const errMsg = e.message;
+        console.warn('warmCache cell failed:', key, errMsg);
+        fetchErrors.push({ ts: new Date().toISOString(), key, error: errMsg });
+        if (fetchErrors.length > 10) fetchErrors.shift();
+        // Vent 2s ved 429 inden næste forsøg i denne worker
+        if (errMsg.includes('429')) await new Promise(r => setTimeout(r, 2000));
       }
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(CONC, cells.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(CONC, cells.length) }, (_, i) => worker(i)));
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s — cache: ${weatherCache.size} cells`);
   warmRunning = false;
@@ -301,12 +305,15 @@ app.get('/api/weather/all', (req, res) => {
     }
   }
 
-  const etag = `"${warm}-${Math.floor(Date.now() / 60000)}"`;  // changes each minute
+  // ETag baseret på antal varme celler — ændres når cache-indhold ændrer sig
+  const etag = `"w${warm}"`;
   if (req.headers['if-none-match'] === etag) {
     return res.status(304).end();
   }
 
-  res.set('Cache-Control', 'public, max-age=10800');  // 3h
+  // no-cache: browser revaliderer altid via ETag.
+  // Forhindrer at en tom {} respons fra cold-start caches i 3 timer.
+  res.set('Cache-Control', 'no-cache');
   res.set('ETag', etag);
   res.set('X-Warm-Cells',  String(warm));
   res.set('X-Stale-Cells', String(stale));
