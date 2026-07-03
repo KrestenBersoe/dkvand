@@ -1113,11 +1113,11 @@
           <tr><td>🌡 Bakterielt kort</td><td>Varmekort over alle 21.556 udløbspunkter</td><td>Grøn → amber → rød efter bakteriel risikoscore</td></tr>
           <tr><td>🧬 Viralt kort</td><td>Varmekort med separat viral risikomodel</td><td>Lilla gradient — vira overlever markant længere om vinteren</td></tr>
           <tr><td>📍 Udløbspunkter</td><td>Individuelle PULS-udløb som cirkler</td><td>Radius og farve efter risikoniveau; grå/stiplet ved ingen data</td></tr>
-          <tr><td>⚡ 24h Varsling</td><td>Ring-markører ved udløb med forhøjet prognoserisiko</td><td>Rød stiplet ring ved forecastrisiko > 55 %</td></tr>
+          <tr><td>⚡ 24h Varsling</td><td>Ring-markører ved udløb med forhøjet prognoserisiko</td><td>Rød stiplet ring ved forecastrisiko > 55 % og aktiv nedbør > 5 mm</td></tr>
           <tr><td>🌊 Kystvande (VP3)</td><td>Polygoner for de 109 målsatte kystvandområder</td><td>Grøn/amber/rød udfyldning efter max-risiko fra PULS-udløb med matching vandområde</td></tr>
           <tr><td>🏖 Badevandsområder</td><td>EU badevandsovervågningsstationer fra VP3</td><td>Cirkelmarkør i grøn/amber/rød efter nærmeste PULS-udløbs risikoniveau inden for 15 km</td></tr>
         </table>
-        <p>VP3-lagene loades parallelt med vejrdata og farves automatisk når risikoberegningen er færdig. Kystvand-polygonerne følger de officielle afgrænsninger fra Vandområdeplanerne 2021–2027 efter genbesøget.</p>
+        <p>VP3-lagene indlæses fra statiske GeoJSON-filer ved opstart og farves når risikoberegningen er færdig. Alle lag håndhæves ved hvert vejrdatarefresh — slukket lag forbliver slukket selv ved automatisk opdatering.</p>
       </section>
 
       <section id="doc-kvalitet" class="doc-section">
@@ -1177,9 +1177,10 @@
           <div class="doc-formula-body">nedbør = Σ p(t) × e<sup>−alder(t) / τ<sub>H</sub></sup></div>
           <div class="doc-formula-note">τ<sub>H</sub> = 3,0 dage — hydrologisk hukommelse (jordmætning / kloakbelastning). Regn fra i går bidrager 72 %, fra 3 dage siden 37 %.</div>
         </div>
-        <p>Nedbør hentes fra Open-Meteo (<span class="doc-mono">best_match</span> — DMI HARMONIE-AROME for Danmark, ECMWF for Bornholm og randzoner) på et <strong>0,25°-gitter (~17×28 km)</strong>, ~220 celler over Danmark. Serveren opvarmer proaktivt alle celler hver 3. time via individuelle enkelt-lokationskald med 30 parallelle forbindelser — hele opvarmningen tager ~10 sekunder. Samlet API-forbrug: ~1.760 kald/dag ud af 10.000 tilladt. Cache-TTL: 3 timer.</p>
+        <p>Nedbør hentes fra Open-Meteo (<span class="doc-mono">best_match</span> — DMI HARMONIE-AROME for Danmark, ECMWF for Bornholm og randzoner) på et <strong>0,25°-gitter (~17×28 km)</strong> over de ~170 celler med faktiske PULS-udløbspunkter. Serveren opvarmer proaktivt alle celler ved opstart og hvert 6. time via individuelle enkelt-lokationskald med 10 parallelle forbindelser og 200 ms stagger. Samlet API-forbrug: ~1.360 kald/dag. Cache-TTL: 6 timer. Svar sendes med <span class="doc-mono">no-cache</span> + ETag — 304 Not Modified ved uændret data.</p>
         <div class="doc-arch">
-          <div class="doc-arch-row"><span class="doc-arch-k">GET /api/weather/all</span><span>Returnerer hele det opvarmede grid som ét JSON-svar med aggregerede metrics. Browseren cacher med <span class="doc-mono">max-age=3600</span> og ETag — genbesøg koster 0 bytes ved uændret data.</span></div>
+          <div class="doc-arch-row"><span class="doc-arch-k">GET /api/weather/all</span><span>Returnerer hele det opvarmede grid. Hourly-arrays ekskluderet for at holde payload lille. <span class="doc-mono">no-cache</span> + ETag — browser revaliderer altid, 304 ved uændret data.</span></div>
+          <div class="doc-arch-row"><span class="doc-arch-k">GET /api/debug</span><span>Diagnostik: cache-størrelse, varme celler, seneste fejl og sample-data.</span></div>
           <div class="doc-arch-row"><span class="doc-arch-k">GET /api/weather/hourly</span><span>Timevis nedbørsdata (<span class="doc-mono">hourlyObs</span> + <span class="doc-mono">hourlyFore</span>) hentes on-demand pr. celle når brugeren åbner et varselkort — ikke ved sideindlæsning. Reducerer initial payload markant.</span></div>
           <div class="doc-arch-row"><span class="doc-arch-k">Gzip</span><span>Alle API-svar komprimeres med gzip. JSON-payloads reduceres typisk 70–80% over wire.</span></div>
         </div>
@@ -1218,7 +1219,7 @@
         <h2>Begrænsninger</h2>
         <ul class="doc-list">
           <li>Overløbsfrekvens er kun reelt målt for ~22 % af punkter; resten er verificeret nul, estimeret eller markeret som utilstrækkelig.</li>
-          <li>Nedbør opløses på 0,5°-gitter (~35×55 km) — lokal variation udjævnes.</li>
+          <li>Nedbør opløses på 0,25°-gitter (~17×28 km) — konvektive byger under ~10 km diameter udjævnes.</li>
           <li>Tidspunkt for seneste faktiske overløbshændelse foreligger ikke som åbne data; residualmodellen aktiveres heuristisk.</li>
           <li>Tekstmatch mellem PULS <span class="doc-mono">waterArea</span> og VP3 <span class="doc-mono">ov_navn</span> dækker ikke alle kystvandområder — udløb til vandløb og søer kobles ikke til kystvand-polygoner.</li>
           <li>Modellen skelner ikke mellem salt-, brak- og ferskvand i patogenoverlevelse.</li>
@@ -1713,14 +1714,25 @@ function riskColor(r) {
 function renderMap() {
   pointsLayer.clearLayers();
 
-  // Ryd begge heatmap-referencer — forhindrer forældede canvas-elementer
-  if (heatLayer.ref)      { map.removeLayer(heatLayer.ref);      heatLayer.ref      = null; }
-  if (viralHeatLayer.ref) { map.removeLayer(viralHeatLayer.ref); viralHeatLayer.ref = null; }
+  // Ryd begge heatmap-referencer — fjern lag + canvas-element eksplicit
+  if (heatLayer.ref) {
+    const c = heatLayer.ref._canvas;
+    map.removeLayer(heatLayer.ref);
+    if (c?.parentNode) c.parentNode.removeChild(c);
+    heatLayer.ref = null;
+  }
+  if (viralHeatLayer.ref) {
+    const c = viralHeatLayer.ref._canvas;
+    map.removeLayer(viralHeatLayer.ref);
+    if (c?.parentNode) c.parentNode.removeChild(c);
+    viralHeatLayer.ref = null;
+  }
 
-  // Fjern også evt. forældede heatmap-canvases direkte fra DOM
+  // Fjern forældede heatmap-canvases fra DOM
+  // (klasse: leaflet-heatmap-layer — leaflet.heat tilføjer den selv)
   map.getPanes().overlayPane
-    .querySelectorAll('canvas')
-    .forEach(c => { if (!c.classList.contains('leaflet-zoom-animated')) c.remove(); });
+    .querySelectorAll('canvas.leaflet-heatmap-layer')
+    .forEach(c => c.remove());
 
   forecastLayer.clearLayers();
 
@@ -2141,7 +2153,12 @@ function toggleHeat() {
   showHeat = !showHeat;
   document.getElementById('btn-heat').classList.toggle('active', showHeat);
   heatLayer.visible = showHeat;
-  if (!showHeat && heatLayer.ref) { map.removeLayer(heatLayer.ref); heatLayer.ref = null; }
+  if (!showHeat && heatLayer.ref) {
+    const c = heatLayer.ref._canvas;
+    map.removeLayer(heatLayer.ref);
+    if (c?.parentNode) c.parentNode.removeChild(c);
+    heatLayer.ref = null;
+  }
   else if (showHeat) renderMap();
 }
 
@@ -2149,7 +2166,12 @@ function toggleViral() {
   showViral = !showViral;
   document.getElementById('btn-viral').classList.toggle('active', showViral);
   viralHeatLayer.visible = showViral;
-  if (!showViral && viralHeatLayer.ref) { map.removeLayer(viralHeatLayer.ref); viralHeatLayer.ref = null; }
+  if (!showViral && viralHeatLayer.ref) {
+    const c = viralHeatLayer.ref._canvas;
+    map.removeLayer(viralHeatLayer.ref);
+    if (c?.parentNode) c.parentNode.removeChild(c);
+    viralHeatLayer.ref = null;
+  }
   else if (showViral) renderMap();
 }
 
