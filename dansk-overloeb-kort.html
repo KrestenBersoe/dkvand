@@ -934,9 +934,8 @@
 
 <!-- Tab bar -->
 <div id="tab-bar">
-  <button class="tab-btn active" id="tab-btn-hjem"     onclick="switchTab('hjem')">📍 Hjem</button>
-  <button class="tab-btn"        id="tab-btn-kort"     onclick="switchTab('kort')">🗺 Danmark</button>
-  <button class="tab-btn"        id="tab-btn-varsler"  onclick="switchTab('varsler')">
+  <button class="tab-btn active" id="tab-btn-kort"    onclick="switchTab('kort')">🗺 Kort</button>
+  <button class="tab-btn"        id="tab-btn-varsler" onclick="switchTab('varsler')">
     🔔 Varsler <span class="tab-badge zero" id="varsler-badge">0</span>
   </button>
   <button class="tab-btn"        id="tab-btn-doc"      onclick="switchTab('doc')">📖 Dokumentation</button>
@@ -945,43 +944,8 @@
 <!-- Tab panels -->
 <div id="tab-panels">
 
-  <!-- Hjem-panel: fuldskærms lokalt kort til mobil -->
-  <div class="tab-panel active" id="tab-hjem">
-
-    <!-- Fuldskærms Leaflet-kort -->
-    <div id="hjem-map"></div>
-
-    <!-- Status-chip øverst -->
-    <div id="hjem-status-bar">
-      <span id="hjem-status-text">Finder din placering…</span>
-      <button id="hjem-retry-btn" onclick="hjemLocate()" style="display:none">↻</button>
-    </div>
-
-    <!-- GPS-afvist: centered overlay -->
-    <div id="hjem-no-gps" style="display:none">
-      <div class="hjem-empty">
-        <span class="icon">📍</span>
-        <h3>Lokation ikke tilgængelig</h3>
-        <p>Tillad placeringsadgang for at se vandmiljøet ved din lokation.</p>
-        <button class="ctrl-btn" onclick="hjemLocate()">📍 Find min placering</button>
-        <p style="margin-top:.6rem;font-size:.75rem">Eller se hele landet under <strong>Danmark</strong></p>
-      </div>
-    </div>
-
-    <!-- Swipe-op panel: nærmeste udløb -->
-    <div id="hjem-sheet" style="display:none">
-      <div id="hjem-sheet-handle" onclick="hjemToggleSheet()"></div>
-      <div id="hjem-sheet-head">
-        Nærmeste udløb
-        <span class="section-count" id="hjem-nearest-count">0</span>
-      </div>
-      <div id="hjem-nearest-grid"></div>
-    </div>
-
-  </div><!-- /tab-hjem -->
-
-  <!-- Kortpanel -->
-  <div class="tab-panel" id="tab-kort">
+  <!-- Kortpanel — aktivt som standard -->
+  <div class="tab-panel active" id="tab-kort">
     <div id="map"></div>
 
     <!-- Warnings top-left (inside kort panel) -->
@@ -992,6 +956,7 @@
 
   <!-- Controls: layer selector -->
   <div id="controls">
+    <button class="ctrl-btn active" id="btn-locate" onclick="locateUser()">📍 Min placering</button>
     <button class="ctrl-btn active" id="btn-heat"  onclick="toggleHeat()">🌡 Bakterielt kort</button>
     <button class="ctrl-btn"        id="btn-viral" onclick="toggleViral()">🧬 Viralt kort</button>
     <button class="ctrl-btn active" id="btn-pts"   onclick="togglePoints()">📍 Udløbspunkter</button>
@@ -1000,7 +965,6 @@
     <button class="ctrl-btn active" id="btn-vp3bade" onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
     <button class="ctrl-btn"        id="btn-vp3rbu"  onclick="toggleVP3Rbu()">🔴 RBU VP3-punkter</button>
     <button class="ctrl-btn"        onclick="refreshData()">↻ Opdater</button>
-    <button class="ctrl-btn" id="btn-locate" style="display:none" onclick="locateUser()">◎ Min placering</button>
   </div>
 
   <!-- Location detail panel -->
@@ -1521,42 +1485,49 @@ let showVP3Rbu       = false;
 // ═══════════════════════════════════════════════════════════════════════════
 // GEOLOCATION — zoom to device position on load; fallback = DK overview
 // ═══════════════════════════════════════════════════════════════════════════
-let userMarker = null;
+let userMarker       = null;
+let userAccCircle    = null;
 
 function locateUser() {
   if (!navigator.geolocation) return;
-  setLoader('Finder din placering…');
   navigator.geolocation.getCurrentPosition(
     pos => {
       const { latitude: lat, longitude: lng, accuracy } = pos.coords;
-      // Only act if position is plausibly within or near Denmark
       if (lat < 53 || lat > 60 || lng < 5 || lng > 18) return;
 
-      map.setView([lat, lng], 13);
+      // Fjern tidligere markør
+      if (userMarker)    { map.removeLayer(userMarker);    userMarker    = null; }
+      if (userAccCircle) { map.removeLayer(userAccCircle); userAccCircle = null; }
 
-      // Blue dot with accuracy circle
-      const circle = L.circle([lat, lng], {
+      // Nøjagtighedscirkel
+      userAccCircle = L.circle([lat, lng], {
         radius: Math.min(accuracy, 500),
         color: '#3b82f6', fillColor: '#3b82f6',
-        fillOpacity: 0.15, weight: 1.5
+        fillOpacity: 0.15, weight: 1.5,
       }).addTo(map);
 
+      // Blå prik
       userMarker = L.circleMarker([lat, lng], {
         radius: 8, color: '#fff', weight: 2,
-        fillColor: '#3b82f6', fillOpacity: 1
+        fillColor: '#3b82f6', fillOpacity: 1,
       }).addTo(map).bindPopup('Din placering');
 
-      // Locate button re-triggers this
-      document.getElementById('btn-locate').style.display = 'inline-block';
+      // Gem til varsel-filtrering
+      hjemUserLat = lat;
+      hjemUserLng = lng;
+
+      // Vis hele Danmark + brugerposition — zoom kun hvis kortet
+      // stadig viser standard-udsigten (zoom ≤ 7)
+      if (map.getZoom() <= 7) {
+        map.setView([lat, lng], 11);
+      }
     },
-    _err => {
-      // Silently fall back to DK overview — user denied or unavailable
-      document.getElementById('btn-locate').style.display = 'inline-block';
-    },
+    _err => { /* Stille fallback — danmarkskortet er stadig nyttigt */ },
     { timeout: 8000, maximumAge: 60000 }
   );
 }
 
+// Automatisk lokalisering ved opstart
 locateUser();
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1851,11 +1822,7 @@ function renderMap() {
     else              removeVP3Layer(vp3RbuLayer);
   }
 
-  // Opdater hjem-sektionen automatisk hvis bruger har GPS-fix og vejrdata er ny
-  if (hjemUserLat !== null && overflowPoints.some(p => p.precipMM !== null)) {
-    hjemRenderNearest(hjemUserLat, hjemUserLng);
-    hjemSetStatus('Din placering · opdateret');
-  }
+  // Ingen auto-render af Hjem-panel — Hjem er erstattet af dette kort
 }
 
 function buildPopup(pt, risk, foreRisk) {
@@ -2810,8 +2777,7 @@ async function hjemLocate() {
 // Boot: trigger GPS lookup immediately since Hjem is the default tab.
 // loadAll() is already invoked at script boot (bottom of file) — Hjem reuses
 // that same overflowPoints dataset via hjemWaitForData() rather than loading twice.
-initHjemMap();
-hjemLocate();
+// Boot
 
 async function registerSW() {
   if (!('serviceWorker' in navigator)) return;
@@ -2923,14 +2889,9 @@ function switchTab(name) {
   document.getElementById('tab-' + name).classList.add('active');
   document.getElementById('tab-btn-' + name).classList.add('active');
 
-  // Trigger map resize when switching to a tab containing a Leaflet map
   if (name === 'kort') {
     setTimeout(() => map && map.invalidateSize(), 50);
   }
-  if (name === 'hjem') {
-    setTimeout(() => hjemMap && hjemMap.invalidateSize(), 50);
-  }
-  // Reload varsler data when switching to varsler tab
   if (name === 'varsler') {
     loadVarselData();
     showPushBanner();
@@ -3056,9 +3017,9 @@ function buildVarselCard(pt, isFavCard) {
       <div class="rain-cell"><span class="rv">${rain7d} mm</span><span class="rl">7 dage total</span></div>
     </div>
     <div id="chart-placeholder-${pt.id}">${buildPrecipChart(pt.hourlyObs, pt.hourlyFore)}</div>
-    <div style="margin-top:.55rem;padding:.45rem .55rem;background:rgba(26,107,138,.07);border-radius:5px;border-left:2px solid rgba(26,107,138,.4)">
-      <div style="font-family:var(--mono);font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,237,230,.35);margin-bottom:.25rem">Varslingsgrundlag</div>
-      <div style="font-size:.72rem;color:rgba(240,237,230,.75);line-height:1.5">
+    <div style="margin-top:.55rem;padding:.45rem .55rem;background:rgba(26,107,138,.12);border-radius:5px;border-left:2px solid rgba(26,107,138,.5)">
+      <div style="font-family:var(--mono);font-size:.58rem;text-transform:uppercase;letter-spacing:.08em;color:rgba(240,237,230,.65);margin-bottom:.25rem">Varslingsgrundlag</div>
+      <div style="font-size:.72rem;color:rgba(240,237,230,.9);line-height:1.5">
         ${escHtml(evText)} · ${escHtml(qualText)}<br>
         ⚠ Beregnet overløbsrisiko: <strong>${risk}%</strong> inden for 24 timer
       </div>
@@ -3126,38 +3087,92 @@ async function loadVarselData() {
   const favCount   = document.getElementById('fav-count');
   if (!alarmGrid) return;
 
-  // ── Active alarms from saved warnPoints ───────────────────────────────────
+  // ── Aktive varsler — kompakt liste, expand ved klik ──────────────────────
   let alarms = [];
   try {
     const rec = await dbGet(STORE_WEATHER, '__warnpoints__');
-    if (rec && rec.data && Array.isArray(rec.data)) {
-      const ageMs  = Date.now() - rec.ts;
-      const ageMin = Math.round(ageMs / 60000);
+    if (rec?.data && Array.isArray(rec.data)) {
+      const ageMs = Date.now() - rec.ts;
       if (ageMs > 2 * 3600 * 1000) {
-        // Stale data — tell user to refresh the map
         alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">🕐</span>Varsler forældede — åbn kortet og tryk Opdater</div>';
         alarmCount.textContent = '—';
         updateVarslerBadge(0);
         setVarselStatus('Varsler er forældede (> 2 timer) — opdater kortet');
+        alarms = [];
       } else {
         alarms = rec.data;
-        setVarselStatus(`Opdateret ${ageMin < 1 ? '< 1 min' : ageMin + ' min'} siden`);
+        setVarselStatus(`Opdateret ${Math.round(ageMs/60000) < 1 ? '< 1 min' : Math.round(ageMs/60000) + ' min'} siden`);
       }
     }
   } catch(e) {}
 
-  alarmGrid.innerHTML = '';
-  alarmCount.textContent = alarms.length;
-  updateVarslerBadge(alarms.length);
-
-  if (alarms.length === 0) {
-    alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">✅</span>Ingen aktive varsler — alle nedbørsmålinger er under overløbstærsklen</div>';
+  // Filtrer til Hjem-lokation hvis sat (nærmeste 20 inden for 50 km)
+  let filtered = alarms;
+  let locationNote = '';
+  if (hjemUserLat !== null && hjemUserLng !== null) {
+    filtered = alarms
+      .map(pt => ({ ...pt, _distKm: hjemHaversine(hjemUserLat, hjemUserLng, pt.lat, pt.lng) }))
+      .filter(pt => pt._distKm <= 50)
+      .sort((a, b) => (b.foreRisk||0) - (a.foreRisk||0))
+      .slice(0, 20);
+    locationNote = `Viser varsler inden for 50 km af din placering`;
   } else {
-    alarms.sort((a,b) => (b.foreRisk||0) - (a.foreRisk||0))
-          .forEach(pt => alarmGrid.appendChild(buildVarselCard(pt, false)));
+    filtered = alarms.sort((a,b) => (b.foreRisk||0) - (a.foreRisk||0)).slice(0, 20);
+    locationNote = `Indstil din placering på Hjem-fanen for at se lokale varsler`;
   }
 
-  // ── Favourites ─────────────────────────────────────────────────────────────
+  alarmGrid.innerHTML = '';
+  alarmCount.textContent = filtered.length;
+  updateVarslerBadge(filtered.length);
+
+  if (filtered.length === 0) {
+    alarmGrid.innerHTML = `<div class="v-empty"><span class="icon">✅</span>Ingen aktive varsler${hjemUserLat ? ' inden for 50 km' : ''}</div>`;
+  } else {
+    // Note om filtrering
+    const note = document.createElement('div');
+    note.style.cssText = 'font-size:.7rem;color:rgba(240,237,230,.45);padding:.3rem .1rem .6rem;';
+    note.textContent = locationNote;
+    alarmGrid.appendChild(note);
+
+    filtered.forEach(pt => {
+      const rl   = riskLabel(pt.foreRisk || 0);
+      const risk = Math.round((pt.foreRisk || 0) * 100);
+      const dist = pt._distKm != null ? ` · ${pt._distKm.toFixed(1)} km` : '';
+
+      // Kompakt række
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:.6rem;padding:.6rem .4rem;border-bottom:1px solid rgba(26,107,138,.15);cursor:pointer;';
+      row.innerHTML = `
+        <span class="chip ${rl.cls}" style="flex-shrink:0;min-width:4.5rem;text-align:center">${rl.label}<br><span style="font-size:.75em">${risk}%</span></span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(pt.name)}</div>
+          <div style="font-size:.7rem;opacity:.55;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(pt.municipality)}${dist}</div>
+        </div>
+        <span style="opacity:.4;font-size:1.1rem;flex-shrink:0" class="chevron-${pt.id}">›</span>`;
+
+      // Detalje-panel (skjult til start)
+      const detail = document.createElement('div');
+      detail.id = `alarm-detail-${pt.id}`;
+      detail.style.display = 'none';
+
+      row.addEventListener('click', () => {
+        const open = detail.style.display !== 'none';
+        detail.style.display = open ? 'none' : 'block';
+        const chev = row.querySelector(`.chevron-${pt.id}`);
+        if (chev) chev.textContent = open ? '›' : '⌄';
+        // Byg fuldt kort første gang det åbnes
+        if (!open && !detail.dataset.built) {
+          detail.dataset.built = '1';
+          detail.appendChild(buildVarselCard(pt, false));
+        }
+      });
+
+      alarmGrid.appendChild(row);
+      alarmGrid.appendChild(detail);
+    });
+  }
+
+  // ── Favoritter ─────────────────────────────────────────────────────────────
   try {
     const favKeys = await dbGetAllKeys(_favDb, STORE_FAVS);
     favCount.textContent = favKeys.length;
@@ -3170,7 +3185,7 @@ async function loadVarselData() {
         const rec  = await dbGet_fav(key);
         const data = rec || {};
         const live = (overflowPoints || []).find(p => String(p.id) === String(key));
-        const pt = live
+        const pt   = live
           ? { ...live, foreRisk: live.foreRisk || 0 }
           : { id: key, name: data.name || `Punkt ${key}`, municipality: data.municipality || '—',
               waterArea: '', foreRisk: 0, todayMM: null, forecastMM: null, totalRain7d: null };
