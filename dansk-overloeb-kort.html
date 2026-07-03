@@ -1712,7 +1712,16 @@ function riskColor(r) {
 // ═══════════════════════════════════════════════════════════════════════════
 function renderMap() {
   pointsLayer.clearLayers();
-  if (heatLayer.ref) { map.removeLayer(heatLayer.ref); heatLayer.ref = null; }
+
+  // Ryd begge heatmap-referencer — forhindrer forældede canvas-elementer
+  if (heatLayer.ref)      { map.removeLayer(heatLayer.ref);      heatLayer.ref      = null; }
+  if (viralHeatLayer.ref) { map.removeLayer(viralHeatLayer.ref); viralHeatLayer.ref = null; }
+
+  // Fjern også evt. forældede heatmap-canvases direkte fra DOM
+  map.getPanes().overlayPane
+    .querySelectorAll('canvas')
+    .forEach(c => { if (!c.classList.contains('leaflet-zoom-animated')) c.remove(); });
+
   forecastLayer.clearLayers();
 
   const heatData   = [];
@@ -1826,6 +1835,12 @@ function renderMap() {
   updateStatusTime();
   saveWarnPoints(warnPoints);  // persist for varsel-side.html
   colorKystvandByRisk();       // farv VP3 kystvand-polygoner + badevandspunkter efter max-risiko
+
+  // Håndhæv synlighed for points- og forecast-lag
+  if (showPoints) { if (!map.hasLayer(pointsLayer)) pointsLayer.addTo(map); }
+  else            { if (map.hasLayer(pointsLayer))  map.removeLayer(pointsLayer); }
+  if (showForecast) { if (!map.hasLayer(forecastLayer)) forecastLayer.addTo(map); }
+  else              { if (map.hasLayer(forecastLayer))  map.removeLayer(forecastLayer); }
 
   // Håndhæv VP3-lag synlighed — fjerner både parent og children
   if (vp3KystvandLayer) {
