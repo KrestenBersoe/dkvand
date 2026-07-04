@@ -271,38 +271,40 @@
   .bv-btn:hover { opacity: .85; }
 
  (erstatter #right-col controls) ──────────── */
+  /* Kortlagsvælger — flydende ikon, samme mønster som legenden */
   #layer-control {
     position: fixed;
     top: 14px; right: 14px;
     z-index: 900;
     font-size: .78rem;
-    background: var(--paper);
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    box-shadow: var(--shadow-lg);
-    overflow: hidden;
   }
 
   #layer-toggle-btn {
     display: flex;
     width: 36px; height: 36px;
-    align-items: center;
-    justify-content: center;
-    background: none;
-    border: none;
+    align-items: center; justify-content: center;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    box-shadow: var(--shadow);
     cursor: pointer;
     color: var(--accent);
-    font-size: 1.1rem;
-    margin: 0;
+    font-size: 1.2rem;
   }
 
   #layer-body {
+    position: absolute;
+    top: 40px; right: 0;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
     display: flex;
     flex-direction: column;
-    gap: .3rem;
+    gap: .25rem;
     padding: .5rem .6rem .6rem;
-    min-width: 190px;
-    max-height: calc(100vh - 120px);
+    min-width: 200px;
+    max-height: calc(100vh - 80px);
     overflow-y: auto;
   }
 
@@ -2142,61 +2144,49 @@ function closePointPanel() {
 
 function updatePanel(pt, risk, foreRisk) {
   const rl  = riskLabel(risk);
-  const fr  = riskLabel(foreRisk);
-  const vrl = riskLabel(pt.viralScore || 0);
-  const { tauV } = computeViralRisk(pt);
-  const { tau }  = computeRisk(pt);
-  const decayHrs = pt.lastEventAge !== null
-    ? ` · ${(pt.lastEventAge * 24).toFixed(0)} timer siden overløb`
-    : '';
-  document.getElementById('point-panel-title').textContent = pt.name;
+  const riskPct = risk !== null ? Math.round(risk * 100) : null;
+
   document.getElementById('point-panel-title').innerHTML =
     `${escHtml(pt.name)} <span data-fav-id="${pt.id}" class="fav-btn"
       onclick="toggleFav(${pt.id})" title="Favorit">${isFav(pt.id)?'❤️':'🤍'}</span>`;
+
   document.getElementById('point-panel').classList.add('open');
+
+  // Find nærmeste badevandslokalitet til dette udløb (til link)
+  let nearestBv = null;
+  if (vp3BadevandLayer) {
+    let minD = Infinity;
+    vp3BadevandLayer.eachLayer(layer => {
+      try {
+        const ll = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter();
+        const d  = Math.hypot(ll.lat - pt.lat, ll.lng - pt.lng);
+        if (d < minD) { minD = d; nearestBv = layer.feature; }
+      } catch(e) {}
+    });
+  }
+
+  const bvBtn = nearestBv
+    ? `<button onclick="closePointPanel();showBadevandPanel(nearestBvFeature_${pt.id}())"
+         style="width:100%;margin-top:.5rem;padding:.5rem;border:1.5px solid #1a6b8a;border-radius:7px;background:#fff;color:#1a6b8a;font-size:.78rem;font-weight:600;cursor:pointer">
+         🏖 Se badevandsside →</button>`
+    : '';
+
+  // Gem reference til nearest bv for brug i onclick
+  window[`nearestBvFeature_${pt.id}`] = () => nearestBv;
+
   document.getElementById('point-panel-body').innerHTML = `
-    <div class="label">Kommune</div>
-    <div class="value">${escHtml(pt.municipality)}</div>
-
-    <div class="label">Datakvalitet</div>
-    <div class="value" style="font-size:.78rem;font-weight:400">${
-      pt.quality===0 ? '✅ Reelle PULS-data' :
-      pt.quality===1 ? '✅ Verificeret: nul overløb' :
-      pt.quality===2 ? '⚠️ Estimeret fra volumen' :
-                       '❌ Utilstrækkelige data'
-    }</div>
-
-    <div class="label">Historik</div>
-    <div class="value">${pt.eventsPerYear.toFixed(0)} overløb/år · ${formatL(pt.volumeM3Year)}/år</div>
-
-    <div class="label">Gn. volumen pr. hændelse</div>
-    <div class="value">${formatL(pt.meanVolumePerEvent)} pr. hændelse</div>
-
-    <div class="label">Nedbør seneste 24h (rå)${decayHrs}</div>
-    <div class="value">${(pt.todayMM||0).toFixed(1)} mm</div>
-
-    <div class="label">Total nedbør seneste 7 dage</div>
-    <div class="value">${(pt.totalRain7d||0).toFixed(1)} mm</div>
-
-    <div class="label">Vægtet antecedent nedbør (7 dage, τ=${tau.toFixed(1)} d)</div>
-    <div class="value">${(pt.precipMM||0).toFixed(1)} mm-ekv.</div>
-
-    <hr style="border-color:rgba(26,107,138,.15);margin:.5rem 0">
-
-    <div class="label">🦠 Bakteriel forureningsrisiko</div>
-    <div class="value">${risk !== null
-      ? `<span class="risk-chip ${rl.cls}">${rl.label} · ${(risk*100).toFixed(0)}%</span>`
-      : '<span style="color:rgba(240,237,230,.4);font-size:.78rem">Ingen nedbørsdata — risiko kan ikke beregnes</span>'
-    }</div>
-    <div class="label" style="font-size:.62rem">τ = ${tau.toFixed(1)} dage · E. coli + enterokokker · +20% sedimentrebound</div>
-
-    <div class="label" style="margin-top:.5rem">🧬 Viral forureningsrisiko</div>
-    <div class="value"><span class="risk-chip ${vrl.cls}" style="border-color:#8b00ff">${vrl.label} · ${((pt.viralScore||0)*100).toFixed(0)}%</span></div>
-    <div class="label" style="font-size:.62rem">τ = ${tauV.toFixed(1)} dage · Norovirus + coliphager · temperaturdominent</div>
-
-    <div class="label" style="margin-top:.5rem">24h varsling (bakteriel)</div>
-    <div class="value"><span class="risk-chip ${fr.cls}">${fr.label} · ${(foreRisk*100).toFixed(0)}%</span></div>
-  `;
+    <div style="margin:.2rem 0 .6rem;display:flex;align-items:center;gap:.6rem">
+      ${risk !== null
+        ? `<span class="risk-chip ${rl.cls}" style="font-size:.9rem;padding:.25rem .75rem">${rl.label} ${riskPct}%</span>`
+        : '<span style="color:#5a6b78;font-size:.8rem">Ingen vejrdata</span>'
+      }
+      <span style="font-size:.72rem;color:#5a6b78">${escHtml(pt.municipality)}</span>
+    </div>
+    <div style="font-size:.72rem;color:#5a6b78;line-height:1.5">
+      ${pt.waterArea ? `Recipient: ${escHtml(pt.waterArea)}<br>` : ''}
+      ${pt.eventsPerYear != null ? `${pt.eventsPerYear.toFixed(0)} overløb/år` : ''}
+    </div>
+    ${bvBtn}`;
 }
 
 async function saveWarnPoints(pts) {
@@ -3122,6 +3112,27 @@ async function registerSW() {
   }
 }
 
+async function subscribeBadevandNotify() {
+  const btn = document.getElementById('bv-notify-btn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Aktiverer…'; }
+  try {
+    await requestPushPermission();
+    const body = document.getElementById('bv-body');
+    const ok = document.createElement('div');
+    ok.style.cssText = 'background:#edf7f0;border:1px solid #2d7d4f;border-radius:8px;padding:.65rem .9rem;font-size:.78rem;color:#1e5c39;margin-top:.6rem';
+    ok.innerHTML = '<strong>✅ Varsler aktiveret</strong><br>Du modtager push-notifikationer i denne browser når der er høj overløbsrisiko.';
+    if (body) body.appendChild(ok);
+    if (btn) btn.textContent = '✅ Aktiveret';
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '🔔 Modtag varsler'; }
+    const body = document.getElementById('bv-body');
+    const err = document.createElement('div');
+    err.style.cssText = 'background:#fef0ee;border:1px solid #c84b1f;border-radius:8px;padding:.65rem .9rem;font-size:.78rem;color:#9a3518;margin-top:.6rem';
+    err.textContent = '⚠️ Notifikationer blokeret — tillad i browserindstillinger og prøv igen.';
+    if (body) body.appendChild(err);
+  }
+}
+
 // ── Web Push subscription ─────────────────────────────────────────────────
 let _pushSubscription = null;
 
@@ -3213,6 +3224,14 @@ function toggleLegend() {
 function toggleLayerControl() {
   document.getElementById('layer-control').classList.toggle('collapsed');
 }
+
+// Luk lag-menu ved klik udenfor
+document.addEventListener('click', e => {
+  const lc = document.getElementById('layer-control');
+  if (lc && !lc.classList.contains('collapsed') && !lc.contains(e.target)) {
+    lc.classList.add('collapsed');
+  }
+});
 
 function toggleRightCol() {
   document.getElementById('right-col').classList.toggle('collapsed');
