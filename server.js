@@ -331,32 +331,46 @@ app.get('/api/weather/all', (req, res) => {
 
 // ── GET /api/weather/weekly?key= — 7-day hourly arrays for bathing water detail
 app.get('/api/weather/weekly', async (req, res) => {
-  const key    = req.query.key;
-  let   cached = key ? weatherCache.get(key) : null;
+  const key = req.query.key;
+  if (!key) return res.status(400).json({ error: 'key required' });
 
-  // Hvis ikke i cache — hent individuelt (sker ved cold start)
+  let cached = weatherCache.get(key);
+
+  // Exact cache miss — try nearest cached cell (badevand may be in uncached coastal cell)
   if (!cached || Date.now() - cached.ts >= WEATHER_TTL_MS) {
-    if (!key) return res.status(400).json({ error: 'key required' });
     const parts = key.split(':');
     const lat = parseFloat(parts[0]), lng = parseFloat(parts[1]);
     if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'invalid key' });
-    try {
-      apiCallCount++;
-      const raw  = await fetchOpenMeteo(lat, lng);
-      const data = computeMetrics(raw);
-      weatherCache.set(key, { ts: Date.now(), data });
-      cached = { data };
-    } catch(e) {
-      return res.status(502).json({ error: e.message });
+
+    // Find nearest warm cell in cache
+    let minDist = Infinity;
+    for (const [k, entry] of weatherCache) {
+      if (Date.now() - entry.ts >= WEATHER_TTL_MS) continue;
+      const [kLat, kLng] = k.split(':').map(Number);
+      const d = Math.hypot(kLat - lat, kLng - lng);
+      if (d < minDist) { minDist = d; cached = entry; }
+    }
+
+    // If still no cached cell or too far away (>0.5° ≈ 55km), fetch directly
+    if (!cached || minDist > 0.5) {
+      try {
+        apiCallCount++;
+        const raw  = await fetchOpenMeteo(lat, lng);
+        const data = computeMetrics(raw);
+        weatherCache.set(key, { ts: Date.now(), data });
+        cached = { data };
+      } catch(e) {
+        return res.status(502).json({ error: `Open-Meteo: ${e.message}` });
+      }
     }
   }
 
   const d = cached.data;
   res.set('Cache-Control', 'public, max-age=3600');
   res.json({
-    hourlyObs:   d.hourlyObs   || [],
-    hourlyFore:  d.hourlyFore  || [],
-    hourlyWeek:  d.hourlyWeek  || [],
+    hourlyObs:   d.hourlyObs  || [],
+    hourlyFore:  d.hourlyFore || [],
+    hourlyWeek:  d.hourlyWeek || [],
     todayMM:     d.todayMM,
     forecastMM:  d.forecastMM,
     totalRain7d: d.totalRain7d,

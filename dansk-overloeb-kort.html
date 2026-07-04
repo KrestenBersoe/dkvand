@@ -1112,7 +1112,7 @@
 
 
     <!-- Right column: layer controls + location detail, single column no overlap -->
-<div id="right-col" onclick="if(window.innerWidth<=720 && event.target===this) toggleRightCol()">
+<div id="right-col" style="display:none">
 
   <!-- Controls er flyttet til #layer-control (flydende lag-menu) -->
 
@@ -1146,6 +1146,16 @@
 </div>
 
   </div><!-- /tab-kort -->
+
+
+<!-- Flydende punktdetalje -->
+<div id="point-panel">
+  <div id="point-panel-head">
+    <span id="point-panel-title"></span>
+    <button id="point-panel-close" onclick="closePointPanel()" title="Luk">✕</button>
+  </div>
+  <div id="point-panel-body"></div>
+</div>
 
 <!-- 5-sekunders hint der forsvinder automatisk -->
 <div id="map-hint">📍 Klik på et udløbspunkt for at se risikoanalyse</div>
@@ -2097,6 +2107,11 @@ function buildPopup(pt, risk, foreRisk) {
   `;
 }
 
+
+function closePointPanel() {
+  document.getElementById('point-panel').classList.remove('open');
+}
+
 function updatePanel(pt, risk, foreRisk) {
   const rl  = riskLabel(risk);
   const fr  = riskLabel(foreRisk);
@@ -2106,11 +2121,12 @@ function updatePanel(pt, risk, foreRisk) {
   const decayHrs = pt.lastEventAge !== null
     ? ` · ${(pt.lastEventAge * 24).toFixed(0)} timer siden overløb`
     : '';
-  document.getElementById('panel-header').textContent = pt.name;
-  document.getElementById('panel-header').innerHTML =
+  document.getElementById('point-panel-title').textContent = pt.name;
+  document.getElementById('point-panel-title').innerHTML =
     `${escHtml(pt.name)} <span data-fav-id="${pt.id}" class="fav-btn"
       onclick="toggleFav(${pt.id})" title="Favorit">${isFav(pt.id)?'❤️':'🤍'}</span>`;
-  document.getElementById('panel-body').innerHTML = `
+  document.getElementById('point-panel').classList.add('open');
+  document.getElementById('point-panel-body').innerHTML = `
     <div class="label">Kommune</div>
     <div class="value">${escHtml(pt.municipality)}</div>
 
@@ -2257,6 +2273,22 @@ async function loadAll() {
     const cellEntries = [...gridCells.entries()];
     let   warmCoverage = 0;
 
+    // ── Trin 0: Tjek lokal IDB-cache (TTL 1 time) ────────────────────────────
+    const W_CACHE_KEY = '__weather_v1__';
+    const W_CACHE_TTL = 3600 * 1000;
+    try {
+      const cached = await dbGet(STORE_WEATHER, W_CACHE_KEY);
+      if (cached && (Date.now() - cached.ts) < W_CACHE_TTL && cached.cells) {
+        for (const [key] of cellEntries) {
+          const cell = gridCells.get(key);
+          const sk   = `${cell.lat.toFixed(4)}:${cell.lng.toFixed(4)}`;
+          if (cached.cells[sk]) cellResults.set(key, cached.cells[sk]);
+        }
+        warmCoverage = cellResults.size / Math.max(cellEntries.length, 1);
+        setLoader(`Vejrdata fra lokal cache (${Math.round((Date.now()-cached.ts)/60000)} min gammel)…`);
+      }
+    } catch(_) {}
+
     // ── Trin 1: GET /api/weather/all — hent hele det opvarmede grid ──────────
     try {
       const res = await fetch('api/weather/all');
@@ -2324,6 +2356,15 @@ async function loadAll() {
       pt.hourlyFore  = [];
       pt.lastEventAge = w && w.antecedentMM > 5 ? Math.random() * 2 : null;
     });
+
+    // Gem i lokal IDB-cache
+    if (cellResults.size > 0) {
+      try {
+        const cellsObj = {};
+        for (const [k, v] of cellResults) cellsObj[k] = v;
+        await dbPut(STORE_WEATHER, W_CACHE_KEY, { ts: Date.now(), cells: cellsObj });
+      } catch(_) {}
+    }
 
     const hasWeather = overflowPoints.some(p => p.precipMM !== null);
 
@@ -3258,6 +3299,7 @@ document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
     if (document.getElementById('badevand-panel').classList.contains('open')) closeBadevandPanel();
     else if (!document.getElementById('layer-control').classList.contains('collapsed')) toggleLayerControl();
+    else closePointPanel();
   }
 });
 
