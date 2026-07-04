@@ -2219,6 +2219,7 @@ async function loadAll() {
     // Server warms ~220 cells every 3h via individual single-location calls.
     setLoader('Beregner nedbørsgitter…');
 
+    const GRID_DEG = 0.25;
     function cellKey(lat, lng) {
       const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
       const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
