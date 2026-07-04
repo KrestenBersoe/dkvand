@@ -816,32 +816,6 @@
     }
     .tab-badge { font-size: .65rem; padding: .08rem .4rem; }
 
-    /* Højrekolonne → bundskuffe */
-    #right-col {
-      position: absolute;
-      top: auto; right: 0; left: 0; bottom: 0;
-      width: 100%;
-      max-height: 52vh;           /* mere luft til indhold */
-      border-radius: 14px 14px 0 0;
-      background: var(--paper);
-      box-shadow: 0 -4px 20px rgba(26,39,51,.18);
-      padding: .5rem .9rem calc(.8rem + env(safe-area-inset-bottom));
-      pointer-events: all;
-      transition: max-height .25s ease;
-      overflow-y: auto;
-    }
-    #right-col.collapsed { max-height: 48px; overflow: hidden; }
-
-    #right-col::before {
-      content: '';
-      display: block;
-      width: 40px; height: 4px;
-      background: var(--line);
-      border-radius: 2px;
-      margin: .35rem auto .6rem;
-      cursor: pointer;
-      flex-shrink: 0;
-    }
 
     /* Kontrolknapper: sans-serif, større, grid-layout */
     #controls {
@@ -936,7 +910,6 @@
     .ctrl-btn { font-size: .74rem; padding: .45rem .45rem; }
     .rain-grid { grid-template-columns: 1fr 1fr; }
     .rain-cell .rl { font-size: .65rem; }
-    #right-col { max-height: 55vh; }
   }
 
   /* Touch-enheder: større tap-targets uanset skærmbredde */
@@ -1244,24 +1217,7 @@
 </div>
 
 <!-- Flydende lag-kontrol — top-højre collapsible som legenden -->
-<div id="layer-control" class="collapsed">
-  <button id="layer-toggle-btn" onclick="toggleLayerControl()" title="Kortlag">&#9776;</button>
-  <div id="layer-body">
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem .2rem .6rem;border-bottom:1px solid #dde3e8;margin-bottom:.4rem">
-      <span style="font-family:var(--mono);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">Kortlag</span>
-      <button onclick="toggleLayerControl()" style="background:none;border:none;cursor:pointer;font-size:.9rem;color:#5a6b78;padding:.1rem .3rem;border-radius:4px" title="Luk">✕</button>
-    </div>
-    <button class="ctrl-btn active" id="btn-locate"   onclick="locateUser()">📍 Min placering</button>
-    <button class="ctrl-btn active" id="btn-heat"     onclick="toggleHeat()">🌡 Bakterielt kort</button>
-    <button class="ctrl-btn"        id="btn-viral"    onclick="toggleViral()">🧬 Viralt kort</button>
-    <button class="ctrl-btn active" id="btn-pts"      onclick="togglePoints()">📍 Udløbspunkter</button>
-    <button class="ctrl-btn"        id="btn-fore"     onclick="toggleForecast()">⚡ 24h Varsling</button>
-    <button class="ctrl-btn active" id="btn-vp3kyst"  onclick="toggleVP3Kyst()">🌊 Kystvande (VP3)</button>
-    <button class="ctrl-btn active" id="btn-vp3bade"  onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
-    <button class="ctrl-btn"        id="btn-vp3rbu"   onclick="toggleVP3Rbu()">🔴 RBU VP3-punkter</button>
-    <button class="ctrl-btn"        onclick="refreshData()">↻ Opdater</button>
-  </div>
-</div>
+
 
   <!-- Varsler tab panel -->
   <div class="tab-panel" id="tab-varsler">
@@ -2020,7 +1976,7 @@ function renderMap() {
     });
 
     marker.bindPopup(buildPopup(pt, risk, foreRisk), { maxWidth: 280 });
-    marker.on('click', () => updatePanel(pt, risk, foreRisk));
+    marker.on('click', (e) => { L.DomEvent.stopPropagation(e); closeBadevandPanel(); updatePanel(pt, risk, foreRisk); });
     pointsLayer.addLayer(marker);
 
     // Forecast warning markers
@@ -2692,7 +2648,7 @@ async function loadVP3Layers() {
           const p = f.properties || {};
           const navn = p.pkt_navn || p.navn || p.id || 'Badevandslokalitet';
           l.bindTooltip(`<strong>🏖 ${escHtml(String(navn))}</strong><br><span style="font-size:.7rem;opacity:.7">Klik for detaljer</span>`, { sticky: true });
-          l.on('click', () => showBadevandPanel(f));
+          l.on('click', (e) => { L.DomEvent.stopPropagation(e); showBadevandPanel(f); });
         }
       });
       if (showVP3Bade) vp3BadevandLayer.addTo(map);
@@ -3832,5 +3788,24 @@ setTimeout(() => {
 }, 5000);
 registerSW().then(() => restorePushSubscription());
 </script>
+
+<div id="layer-control" class="collapsed">
+  <button id="layer-toggle-btn" onclick="toggleLayerControl()" title="Kortlag">&#9776;</button>
+  <div id="layer-body">
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem .2rem .6rem;border-bottom:1px solid #dde3e8;margin-bottom:.4rem">
+      <span style="font-family:var(--mono);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">Kortlag</span>
+      <button onclick="toggleLayerControl()" style="background:none;border:none;cursor:pointer;font-size:.9rem;color:#5a6b78;padding:.1rem .3rem;border-radius:4px" title="Luk">✕</button>
+    </div>
+    <button class="ctrl-btn active" id="btn-locate"   onclick="locateUser()">📍 Min placering</button>
+    <button class="ctrl-btn active" id="btn-heat"     onclick="toggleHeat()">🌡 Bakterielt kort</button>
+    <button class="ctrl-btn"        id="btn-viral"    onclick="toggleViral()">🧬 Viralt kort</button>
+    <button class="ctrl-btn active" id="btn-pts"      onclick="togglePoints()">📍 Udløbspunkter</button>
+    <button class="ctrl-btn"        id="btn-fore"     onclick="toggleForecast()">⚡ 24h Varsling</button>
+    <button class="ctrl-btn active" id="btn-vp3kyst"  onclick="toggleVP3Kyst()">🌊 Kystvande (VP3)</button>
+    <button class="ctrl-btn active" id="btn-vp3bade"  onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
+    <button class="ctrl-btn"        id="btn-vp3rbu"   onclick="toggleVP3Rbu()">🔴 RBU VP3-punkter</button>
+    <button class="ctrl-btn"        onclick="refreshData()">↻ Opdater</button>
+  </div>
+</div>
 </body>
 </html>
