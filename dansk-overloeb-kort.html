@@ -542,7 +542,7 @@
   }
   .fav-btn:hover { transform: scale(1.25); }
 
-  #fav-toast {
+  #fav-toast { z-index: 9999;
     position: fixed;
     bottom: 60px; left: 50%; transform: translateX(-50%);
     background: var(--ink);
@@ -1210,7 +1210,7 @@
     <!-- Handlinger -->
     <div class="bv-actions">
       <button class="bv-btn primary" onclick="closeBadevandPanel(); switchTab('kort')">🗺 Vis på kort</button>
-      <button class="bv-btn" id="bv-notify-btn" onclick="subscribeBadevandNotify()">🔔 Modtag varsler</button>
+      <button class="bv-btn" id="bv-fav-btn2" onclick="toggleBadevandFav()">❤ Favorit + varsler</button>
     </div>
 
   </div>
@@ -1300,7 +1300,7 @@
           <tr><td>📍 Udløbspunkter</td><td>Individuelle PULS-udløb som cirkler</td><td>Radius og farve efter risikoniveau; grå/stiplet ved ingen data</td></tr>
           <tr><td>⚡ 24h Varsling</td><td>Ring-markører ved udløb med forhøjet prognoserisiko</td><td>Rød stiplet ring ved forecastrisiko > 55 % og aktiv nedbør > 5 mm</td></tr>
           <tr><td>🌊 Kystvande (VP3)</td><td>Polygoner for de 109 målsatte kystvandområder</td><td>Grøn/amber/rød udfyldning efter max-risiko fra PULS-udløb med matching vandområde</td></tr>
-          <tr><td>🏖 Badevandsområder</td><td>EU badevandsovervågningsstationer fra VP3</td><td>Cirkelmarkør i grøn/amber/rød efter nærmeste PULS-udløbs risikoniveau inden for 15 km</td></tr>
+          <tr><td>🏖 Badevandsområder</td><td>EU badevandsovervågningsstationer fra VP3. Klik åbner badevandsside med 7-dages nedbørsgraf, risikooversigt og nærliggende udløb</td><td>Cirkelmarkør i grøn/amber/rød efter nærmeste PULS-udløbs risikoniveau inden for 15 km</td></tr>
         </table>
         <p>VP3-lagene indlæses fra statiske GeoJSON-filer ved opstart og farves når risikoberegningen er færdig. Alle lag håndhæves ved hvert vejrdatarefresh — slukket lag forbliver slukket selv ved automatisk opdatering.</p>
       </section>
@@ -1733,9 +1733,10 @@ function locateUser() {
         fillColor: '#3b82f6', fillOpacity: 1,
       }).addTo(map).bindPopup('Din placering');
 
-      // Gem til varsel-filtrering
+      // Gem til varsel-filtrering + sessionStorage
       hjemUserLat = lat;
       hjemUserLng = lng;
+      try { sessionStorage.setItem('userLat', lat); sessionStorage.setItem('userLng', lng); } catch(_) {}
 
       // Opdater varsler-tab hvis den er åben
       if (document.getElementById('tab-varsler')?.classList.contains('active')) {
@@ -1976,7 +1977,7 @@ function renderMap() {
     });
 
     marker.bindPopup(buildPopup(pt, risk, foreRisk), { maxWidth: 280 });
-    marker.on('click', (e) => { L.DomEvent.stopPropagation(e); closeBadevandPanel(); updatePanel(pt, risk, foreRisk); });
+    marker.on('click', (e) => { L.DomEvent.stopPropagation(e); if(window._mapClickHandled) return; window._mapClickHandled=true; setTimeout(()=>window._mapClickHandled=false,200); closeBadevandPanel(); updatePanel(pt, risk, foreRisk); });
     pointsLayer.addLayer(marker);
 
     // Forecast warning markers
@@ -2648,7 +2649,7 @@ async function loadVP3Layers() {
           const p = f.properties || {};
           const navn = p.pkt_navn || p.navn || p.id || 'Badevandslokalitet';
           l.bindTooltip(`<strong>🏖 ${escHtml(String(navn))}</strong><br><span style="font-size:.7rem;opacity:.7">Klik for detaljer</span>`, { sticky: true });
-          l.on('click', (e) => { L.DomEvent.stopPropagation(e); showBadevandPanel(f); });
+          l.on('click', (e) => { L.DomEvent.stopPropagation(e); if(window._mapClickHandled) return; window._mapClickHandled=true; setTimeout(()=>window._mapClickHandled=false,200); showBadevandPanel(f); });
         }
       });
       if (showVP3Bade) vp3BadevandLayer.addTo(map);
@@ -3075,6 +3076,7 @@ async function subscribeBadevandNotify() {
     await requestPushPermission();
     const body = document.getElementById('bv-body');
     const ok = document.createElement('div');
+    ok.className = 'bv-notify-confirm';
     ok.style.cssText = 'background:#edf7f0;border:1px solid #2d7d4f;border-radius:8px;padding:.65rem .9rem;font-size:.78rem;color:#1e5c39;margin-top:.6rem';
     ok.innerHTML = '<strong>✅ Varsler aktiveret</strong><br>Du modtager push-notifikationer i denne browser når der er høj overløbsrisiko.';
     if (body) body.appendChild(ok);
@@ -3331,6 +3333,28 @@ function buildWeeklyChart(weekObs, fore, totalMM) {
 // ═══════════════════════════════════════════════════════════════════════════
 let _currentBvFeature = null;
 
+async function toggleBadevandFav() {
+  const btn  = document.getElementById('bv-fav-btn') || document.getElementById('bv-fav-btn2');
+  const p    = _currentBvFeature?.properties || {};
+  const navn = p.pkt_navn || p.navn || 'Badevandslokalitet';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Aktiverer…'; }
+  try {
+    await requestPushPermission();
+    document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
+    const ok = document.createElement('div');
+    ok.className = 'bv-notify-confirm';
+    ok.style.cssText = 'background:#edf7f0;border:1px solid #2d7d4f;border-radius:8px;padding:.65rem .9rem;font-size:.78rem;color:#1e5c39;margin-top:.6rem';
+    ok.innerHTML = `<strong>❤ ${escHtml(navn)}</strong><br>Gemt som favorit. Du modtager push-varsler ved høj overløbsrisiko.`;
+    const body = document.getElementById('bv-body');
+    if (body) body.insertBefore(ok, body.firstChild);
+    if (btn) { btn.textContent = '✅ Favorit + varsler aktiveret'; }
+    showToast('❤️ ' + escHtml(navn) + ' — varsler aktiveret');
+  } catch(e) {
+    if (btn) { btn.disabled = false; btn.textContent = '❤ Favorit + varsler'; }
+    showToast('⚠️ Tillad notifikationer i browserindstillinger');
+  }
+}
+
 function closeBadevandPanel() {
   document.getElementById('badevand-panel').classList.remove('open');
   _currentBvFeature = null;
@@ -3366,7 +3390,11 @@ async function showBadevandPanel(feature) {
   document.getElementById('bv-outlets').textContent  = 'Indlæser…';
   document.getElementById('bv-chart-wrap').innerHTML = '<div style="padding:.5rem 0;color:#5a6b78;font-size:.8rem">Indlæser vejrdata…</div>';
   document.getElementById('badevand-panel').classList.add('open');
-  closePointPanel(); // luk evt. åbent punktpanel
+  closePointPanel();
+  // Nulstil notifikationsknap for ny lokation
+  const _nb = document.getElementById('bv-notify-btn');
+  if (_nb) { _nb.disabled = false; _nb.textContent = '🔔 Modtag varsler'; }
+  document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
 
   // Nulstil risikobarer
   ['bv-bact-bar','bv-viral-bar','bv-total-bar'].forEach(id => {
@@ -3625,9 +3653,12 @@ async function loadVarselData() {
   // Filtrer til Hjem-lokation hvis sat (nærmeste 20 inden for 50 km)
   let filtered = alarms;
   let locationNote = '';
-  if (hjemUserLat !== null && hjemUserLng !== null) {
+  // Fallback: brug sessionStorage hvis GPS ikke er klar endnu
+  const _lat = hjemUserLat ?? parseFloat(sessionStorage.getItem('userLat') || '');
+  const _lng = hjemUserLng ?? parseFloat(sessionStorage.getItem('userLng') || '');
+  if (_lat && _lng && !isNaN(_lat) && !isNaN(_lng)) {
     filtered = alarms
-      .map(pt => ({ ...pt, _distKm: hjemHaversine(hjemUserLat, hjemUserLng, pt.lat, pt.lng) }))
+      .map(pt => ({ ...pt, _distKm: hjemHaversine(_lat, _lng, pt.lat, pt.lng) }))
       .filter(pt => pt._distKm <= 50)
       .sort((a, b) => (b.foreRisk||0) - (a.foreRisk||0))
       .slice(0, 20);
