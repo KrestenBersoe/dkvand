@@ -119,36 +119,38 @@
   #tab-kort { position: relative; overflow: hidden; }
 
   /* ── Right column: controls + detail panel, single non-overlapping column ── */
-  /* ── Flydende punktdetalje-overlay ──────────────────────────────────────── */
+  /* ── Punkt-overlay — ét vindue ──────────────────────────────────────── */
   #point-panel {
-    position: fixed; bottom: 28px; left: 14px; z-index: 850;
-    background: #fff; color: #1a2733;
-    border: 1px solid #dde3e8; border-radius: 10px;
-    box-shadow: 0 4px 20px rgba(0,0,0,.18);
-    min-width: 280px; max-width: 340px; max-height: 65vh;
-    overflow-y: auto; display: none;
+    position: fixed;
+    bottom: 24px; left: 14px;
+    z-index: 850;
+    background: #fff;
+    color: #1a2733;
+    border: 1px solid #dde3e8;
+    border-radius: 10px;
+    box-shadow: 0 4px 20px rgba(0,0,0,.15);
+    width: 280px;
+    max-height: 60vh;
+    overflow-y: auto;
+    display: none;
   }
   #point-panel.open { display: block; }
   #point-panel-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: .6rem .8rem .4rem; border-bottom: 1px solid #eef2f5;
-    font-size: .82rem; font-weight: 700; gap: .5rem;
-    position: sticky; top: 0; background: #fff; z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .65rem .8rem .45rem;
+    border-bottom: 1px solid #eef2f5;
+    position: sticky; top: 0;
+    background: #fff;
   }
+  #point-panel-title { font-size: .85rem; font-weight: 700; flex: 1; }
   #point-panel-close {
     background: none; border: none; cursor: pointer;
-    font-size: 1.1rem; color: #5a6b78; padding: .1rem .4rem;
-    border-radius: 4px; flex-shrink: 0; line-height: 1;
+    font-size: 1.1rem; color: #5a6b78; padding: 0 .3rem;
   }
-  #point-panel-body { padding: .65rem .8rem .8rem; font-size: .78rem; }
-  #point-panel-body .label {
-    font-family: var(--mono); font-size: .62rem; text-transform: uppercase;
-    letter-spacing: .08em; color: #5a6b78; margin-top: .55rem; display: block;
-  }
-  #point-panel-body .value {
-    font-size: .85rem; font-weight: 600; color: #1a2733;
-    margin-top: .1rem; display: block;
-  }
+  #point-panel-body { padding: .6rem .8rem .8rem; font-size: .78rem; color: #1a2733; }
+
 
   /* Kort-hint overlay — vises 5 sekunder ved første besøg */
   #map-hint {
@@ -271,43 +273,34 @@
   .bv-btn:hover { opacity: .85; }
 
  (erstatter #right-col controls) ──────────── */
-  /* Kortlagsvælger — identisk mønster med #legend */
+  /* Kortlagsvælger — præcis samme mønster som #legend */
   #layer-control {
-    position: fixed;
-    top: 14px;
-    right: 14px;
+    position: absolute;
+    bottom: 30px; right: 14px;
     z-index: 900;
+    font-size: .72rem;
   }
   #layer-toggle-btn {
-    display: block;
-    width: 34px; height: 34px;
-    border-radius: 8px;
+    width: 32px; height: 32px;
+    border-radius: 50%;
     background: var(--paper);
     border: 1px solid var(--line);
     color: var(--accent);
-    font-size: 1.1rem;
+    font-size: .85rem;
     cursor: pointer;
     box-shadow: var(--shadow);
-    line-height: 34px;
-    text-align: center;
-    padding: 0;
+    display: none;
   }
   #layer-body {
-    position: absolute;
-    top: 38px; right: 0;
-    min-width: 200px;
     background: var(--paper);
     border: 1px solid var(--line);
-    border-radius: 10px;
-    box-shadow: var(--shadow-lg);
-    padding: .5rem .6rem .7rem;
-    display: flex;
-    flex-direction: column;
-    gap: .3rem;
-    max-height: calc(100vh - 70px);
-    overflow-y: auto;
+    border-radius: 8px;
+    padding: .75rem 1rem;
+    box-shadow: var(--shadow);
+    min-width: 180px;
   }
-  #layer-control.collapsed #layer-body { display: none; }
+  #layer-control.collapsed #layer-toggle-btn { display: block; }
+  #layer-control.collapsed #layer-body       { display: none; }
 
 
 
@@ -1138,6 +1131,23 @@
     <div class="leg-row" style="font-size:.65rem; color:rgba(240,237,230,.4)" id="leg-tau">
       Bakteriel τ: — · Viral τ: —
     </div>
+  </div>
+</div>
+
+<div id="layer-control" class="collapsed">
+  <button id="layer-toggle-btn" onclick="toggleLayerControl()" title="Kortlag">⊞</button>
+  <div id="layer-body" onclick="toggleLayerControl()" style="cursor:pointer" title="Klik for at lukke">
+    <h4 style="font-family:var(--mono);font-size:.65rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:.55rem">Kortlag</h4>
+    <button class="ctrl-btn active" id="btn-heat"    onclick="event.stopPropagation();toggleHeat()">🌡 Bakterielt kort</button>
+    <button class="ctrl-btn"        id="btn-viral"   onclick="event.stopPropagation();toggleViral()">🧬 Viralt kort</button>
+    <button class="ctrl-btn active" id="btn-pts"     onclick="event.stopPropagation();togglePoints()">📍 Udløbspunkter</button>
+    <button class="ctrl-btn"        id="btn-fore"    onclick="event.stopPropagation();toggleForecast()">⚡ 24h Varsling</button>
+    <button class="ctrl-btn active" id="btn-vp3kyst" onclick="event.stopPropagation();toggleVP3Kyst()">🌊 Kystvande</button>
+    <button class="ctrl-btn active" id="btn-vp3bade" onclick="event.stopPropagation();toggleVP3Bade()">🏖 Badevandsområder</button>
+    <button class="ctrl-btn"        id="btn-vp3rbu"  onclick="event.stopPropagation();toggleVP3Rbu()">🔴 RBU-punkter</button>
+    <hr style="border-color:rgba(26,107,138,.2);margin:.4rem 0">
+    <button class="ctrl-btn" onclick="event.stopPropagation();locateUser()">📍 Min placering</button>
+    <button class="ctrl-btn" onclick="event.stopPropagation();refreshData()">↻ Opdater</button>
   </div>
 </div>
 
@@ -3546,95 +3556,86 @@ async function loadVarselData() {
   const favCount   = document.getElementById('fav-count');
   if (!alarmGrid) return;
 
-  // ── Aktive varsler — kompakt liste, expand ved klik ──────────────────────
+  // ── Hent gemte varsler fra IndexedDB ────────────────────────────────────
   let alarms = [];
+  let ageMin = 0;
   try {
     const rec = await dbGet(STORE_WEATHER, '__warnpoints__');
-    if (rec?.data && Array.isArray(rec.data)) {
-      const ageMs = Date.now() - rec.ts;
-      if (ageMs > 2 * 3600 * 1000) {
-        alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">🕐</span>Varsler forældede — åbn kortet og tryk Opdater</div>';
-        alarmCount.textContent = '—';
+    if (rec && rec.data && Array.isArray(rec.data) && rec.data.length > 0) {
+      ageMin = Math.round((Date.now() - rec.ts) / 60000);
+      if (Date.now() - rec.ts > 2 * 3600 * 1000) {
+        alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">🕐</span>Varsler forældede — gå til Kortet og tryk ↻ Opdater</div>';
+        if (alarmCount) alarmCount.textContent = '0';
         updateVarslerBadge(0);
-        setVarselStatus('Varsler er forældede (> 2 timer) — opdater kortet');
-        alarms = [];
-      } else {
-        alarms = rec.data;
-        setVarselStatus(`Opdateret ${Math.round(ageMs/60000) < 1 ? '< 1 min' : Math.round(ageMs/60000) + ' min'} siden`);
+        return;
       }
+      alarms = rec.data;
     }
-  } catch(e) {}
+  } catch(e) { console.warn('loadVarselData IDB fejl:', e); }
 
-  // Filtrer til Hjem-lokation hvis sat (nærmeste 20 inden for 50 km)
-  let filtered = alarms;
-  let locationNote = '';
-  // Hent brugerposition — GPS eller sessionStorage
-  let _lat = hjemUserLat;
-  let _lng = hjemUserLng;
-  if (_lat === null || _lat === undefined) {
-    try { _lat = parseFloat(sessionStorage.getItem('userLat')); } catch(_) {}
-  }
-  if (_lng === null || _lng === undefined) {
-    try { _lng = parseFloat(sessionStorage.getItem('userLng')); } catch(_) {}
-  }
-  const hasLoc = typeof _lat === 'number' && typeof _lng === 'number' && !isNaN(_lat) && !isNaN(_lng);
-  if (hasLoc) {
-    const withDist = alarms
-      .filter(pt => pt.lat != null && pt.lng != null)
-      .map(pt => ({ ...pt, _distKm: hjemHaversine(_lat, _lng, Number(pt.lat), Number(pt.lng)) }));
+  // ── Brugerposition — direkte fra globale variable ─────────────────────
+  // hjemUserLat/hjemUserLng sættes af locateUser() ved GPS-fix
+  const uLat = (typeof hjemUserLat === 'number') ? hjemUserLat : NaN;
+  const uLng = (typeof hjemUserLng === 'number') ? hjemUserLng : NaN;
+  const hasPos = !isNaN(uLat) && !isNaN(uLng);
+
+  // ── Filtrer og sortér ─────────────────────────────────────────────────
+  let filtered, note;
+  if (hasPos && alarms.length > 0) {
+    // Tilføj afstand til alle alarmer
+    const withDist = alarms.map(a => ({
+      ...a,
+      dist: hjemHaversine(uLat, uLng, parseFloat(a.lat) || 0, parseFloat(a.lng) || 0)
+    }));
     filtered = withDist
-      .filter(pt => pt._distKm <= 50)
-      .sort((a, b) => (b.foreRisk||0) - (a.foreRisk||0))
-      .slice(0, 20);
-    locationNote = filtered.length
-      ? `${filtered.length} varsel(er) inden for 50 km`
+      .filter(a => a.dist <= 50)
+      .sort((a, b) => a.dist - b.dist)  // nærmeste først
+      .slice(0, 25);
+    note = filtered.length
+      ? `${filtered.length} varsel${filtered.length !== 1 ? 'er' : ''} inden for 50 km · opdateret ${ageMin < 1 ? '< 1' : ageMin} min siden`
       : `Ingen aktive varsler inden for 50 km`;
+  } else if (!hasPos) {
+    filtered = [];
+    note = '📍 Tryk "Min placering" på kortet for at se varsler i dit område';
   } else {
-    filtered = alarms.sort((a,b) => (b.foreRisk||0) - (a.foreRisk||0)).slice(0, 20);
-    locationNote = `📍 Klik "Min placering" på kortet for at se lokale varsler`;
+    filtered = alarms.sort((a,b) => (b.foreRisk||0) - (a.foreRisk||0)).slice(0, 25);
+    note = `Alle ${filtered.length} varsler — aktivér lokation for lokal filtrering`;
   }
 
-  alarmGrid.innerHTML = '';
-  alarmCount.textContent = filtered.length;
+  // ── Render ────────────────────────────────────────────────────────────
+  if (alarmCount) alarmCount.textContent = filtered.length;
   updateVarslerBadge(filtered.length);
+  setVarselStatus(note);
+  alarmGrid.innerHTML = '';
 
-  if (filtered.length === 0) {
-    alarmGrid.innerHTML = `<div class="v-empty"><span class="icon">✅</span>Ingen aktive varsler${hjemUserLat ? ' inden for 50 km' : ''}</div>`;
+  if (filtered.length === 0 && hasPos) {
+    alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">✅</span>Ingen aktive overløbsvarsler inden for 50 km</div>';
+  } else if (filtered.length === 0) {
+    alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">📍</span>' + note + '</div>';
   } else {
-    // Note om filtrering
-    const note = document.createElement('div');
-    note.style.cssText = 'font-size:.7rem;color:rgba(240,237,230,.45);padding:.3rem .1rem .6rem;';
-    note.textContent = locationNote;
-    alarmGrid.appendChild(note);
-
     filtered.forEach(pt => {
       const rl   = riskLabel(pt.foreRisk || 0);
       const risk = Math.round((pt.foreRisk || 0) * 100);
-      const dist = pt._distKm != null ? ` · ${pt._distKm.toFixed(1)} km` : '';
+      const dist = pt.dist != null ? pt.dist.toFixed(1) + ' km' : '';
 
-      // Kompakt række
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:.6rem;padding:.6rem .4rem;border-bottom:1px solid rgba(26,107,138,.15);cursor:pointer;color:#1a2733;background:#fff;';
-      row.innerHTML = `
-        <span class="chip ${rl.cls}" style="flex-shrink:0;min-width:4.5rem;text-align:center">${rl.label}<br><span style="font-size:.75em">${risk}%</span></span>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:.82rem;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(pt.name)}</div>
-          <div style="font-size:.7rem;opacity:.55;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml(pt.municipality)}${dist}</div>
-        </div>
-        <span style="opacity:.4;font-size:1.1rem;flex-shrink:0" class="chevron-${pt.id}">›</span>`;
+      row.style.cssText = 'display:flex;align-items:center;gap:.6rem;padding:.6rem .4rem;border-bottom:1px solid #eef2f5;cursor:pointer;color:#1a2733;background:#fff;';
+      row.innerHTML =
+        `<span class="chip ${rl.cls}" style="flex-shrink:0;min-width:3.5rem;text-align:center;font-size:.78rem">${risk}%</span>
+         <div style="flex:1;min-width:0">
+           <div style="font-size:.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(pt.name || '—')}</div>
+           <div style="font-size:.7rem;color:#5a6b78">${escHtml(pt.municipality || '')}${dist ? ' · ' + dist : ''}</div>
+         </div>
+         <span class="alarm-chev" style="opacity:.4">›</span>`;
 
-      // Detalje-panel (skjult til start)
       const detail = document.createElement('div');
-      detail.id = `alarm-detail-${pt.id}`;
-      detail.style.display = 'none';
+      detail.style.cssText = 'display:none;padding:.5rem .4rem .8rem;border-bottom:1px solid #eef2f5;background:#fafbfc;';
 
       row.addEventListener('click', () => {
-        const open = detail.style.display !== 'none';
-        detail.style.display = open ? 'none' : 'block';
-        const chev = row.querySelector(`.chevron-${pt.id}`);
-        if (chev) chev.textContent = open ? '›' : '⌄';
-        // Byg fuldt kort første gang det åbnes
-        if (!open && !detail.dataset.built) {
+        const isOpen = detail.style.display !== 'none';
+        detail.style.display = isOpen ? 'none' : 'block';
+        row.querySelector('.alarm-chev').textContent = isOpen ? '›' : '⌄';
+        if (!isOpen && !detail.dataset.built) {
           detail.dataset.built = '1';
           detail.appendChild(buildVarselCard(pt, false));
         }
@@ -3645,32 +3646,28 @@ async function loadVarselData() {
     });
   }
 
-  // ── Favoritter ─────────────────────────────────────────────────────────────
+  // ── Favoritter ──────────────────────────────────────────────────────────
   try {
     const favKeys = await dbGetAllKeys(_favDb, STORE_FAVS);
-    favCount.textContent = favKeys.length;
+    if (favCount) favCount.textContent = favKeys.length;
     favGrid.innerHTML = '';
-
-    if (favKeys.length === 0) {
-      favGrid.innerHTML = '<div class="v-empty"><span class="icon">🤍</span>Ingen favoritter — klik ❤️ på et punkt i kortet</div>';
+    if (!favKeys.length) {
+      favGrid.innerHTML = '<div class="v-empty"><span class="icon">🤍</span>Ingen favoritter endnu — klik 🤍 på et udløbspunkt</div>';
     } else {
       for (const key of favKeys) {
         const rec  = await dbGet_fav(key);
-        const data = rec || {};
-        const live = (overflowPoints || []).find(p => String(p.id) === String(key));
+        const live = (overflowPoints||[]).find(p => String(p.id) === String(key));
         const pt   = live
           ? { ...live, foreRisk: live.foreRisk || 0 }
-          : { id: key, name: data.name || `Punkt ${key}`, municipality: data.municipality || '—',
+          : { id: key, name: (rec||{}).name || `Punkt ${key}`, municipality: (rec||{}).municipality || '—',
               waterArea: '', foreRisk: 0, todayMM: null, forecastMM: null, totalRain7d: null };
         favGrid.appendChild(buildVarselCard(pt, true));
       }
     }
-  } catch(e) {
-    favGrid.innerHTML = '<div class="v-empty">Fejl ved indlæsning af favoritter</div>';
-  }
+  } catch(e) { if (favGrid) favGrid.innerHTML = '<div class="v-empty">Fejl ved indlæsning af favoritter</div>'; }
 }
 
-// Helpers using existing DBs
+
 async function dbGet_fav(key) {
   return new Promise((res, rej) => {
     const req = _favDb.transaction(STORE_FAVS, 'readonly').objectStore(STORE_FAVS).get(String(key));
@@ -3746,20 +3743,7 @@ setTimeout(() => {
 registerSW().then(() => restorePushSubscription());
 </script>
 
-<div id="layer-control" class="collapsed">
-  <button id="layer-toggle-btn" onclick="toggleLayerControl()" title="Kortlag">⊞</button>
-  <div id="layer-body">
-    <button class="ctrl-btn active" id="btn-heat"    onclick="toggleHeat()">🌡 Bakterielt kort</button>
-    <button class="ctrl-btn"        id="btn-viral"   onclick="toggleViral()">🧬 Viralt kort</button>
-    <button class="ctrl-btn active" id="btn-pts"     onclick="togglePoints()">📍 Udløbspunkter</button>
-    <button class="ctrl-btn"        id="btn-fore"    onclick="toggleForecast()">⚡ 24h Varsling</button>
-    <button class="ctrl-btn active" id="btn-vp3kyst" onclick="toggleVP3Kyst()">🌊 Kystvande</button>
-    <button class="ctrl-btn active" id="btn-vp3bade" onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
-    <button class="ctrl-btn"        id="btn-vp3rbu"  onclick="toggleVP3Rbu()">🔴 RBU-punkter</button>
-    <button class="ctrl-btn"        onclick="locateUser()">📍 Min placering</button>
-    <button class="ctrl-btn"        onclick="refreshData()">↻ Opdater</button>
-  </div>
-</div>
+
     <button class="ctrl-btn active" id="btn-locate"   onclick="locateUser()">📍 Min placering</button>
     <button class="ctrl-btn active" id="btn-heat"     onclick="toggleHeat()">🌡 Bakterielt kort</button>
     <button class="ctrl-btn"        id="btn-viral"    onclick="toggleViral()">🧬 Viralt kort</button>
@@ -3788,11 +3772,12 @@ registerSW().then(() => restorePushSubscription());
 <div id="badevand-panel">
   <div id="bv-header">
     <button id="bv-back-btn" onclick="closeBadevandPanel()">← Tilbage</button>
-    <div>
+    <div style="flex:1">
       <div id="bv-title">Badevandslokalitet</div>
       <div id="bv-subtitle"></div>
     </div>
-    <button id="bv-fav-btn" onclick="toggleBadevandFav()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;padding:.2rem .4rem;line-height:1" title="Gem som favorit + aktivér varsler">🤍</button>
+    <button id="bv-fav-btn" onclick="toggleBadevandFav()" title="Gem som favorit og modtag varsler"
+      style="background:none;border:1.5px solid #dde3e8;border-radius:8px;font-size:1.3rem;cursor:pointer;padding:.3rem .5rem;line-height:1;color:#1a2733">🤍</button>
   </div>
   <div id="bv-body">
 
