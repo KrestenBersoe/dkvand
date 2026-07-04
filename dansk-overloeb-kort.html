@@ -1145,76 +1145,11 @@
   </div><!-- /tab-kort -->
 
 
-<!-- Flydende punktdetalje -->
-<div id="point-panel">
-  <div id="point-panel-head">
-    <span id="point-panel-title"></span>
-    <button id="point-panel-close" onclick="closePointPanel()" title="Luk">✕</button>
-  </div>
-  <div id="point-panel-body"></div>
-</div>
 
-<!-- 5-sekunders hint der forsvinder automatisk -->
-<div id="map-hint">📍 Klik på et udløbspunkt for at se risikoanalyse</div>
 
-<!-- Badevandsside — fuld-skærms overlay -->
-<div id="badevand-panel">
-  <div id="bv-header">
-    <button id="bv-back-btn" onclick="closeBadevandPanel()">← Tilbage</button>
-    <div>
-      <div id="bv-title">Badevandslokalitet</div>
-      <div id="bv-subtitle"></div>
-    </div>
-    <button class="bv-btn" id="bv-fav-btn" style="flex:0;min-width:auto;padding:.4rem .75rem;font-size:.78rem" onclick="toggleBadevandFav()">❤ Favorit</button>
-  </div>
-  <div id="bv-body">
 
-    <!-- Samlet risiko — fremhævet øverst -->
-    <div style="background:#fff;border-radius:10px;border:1px solid #dde3e8;padding:.8rem 1rem;text-align:center;margin-bottom:.2rem">
-      <div style="font-size:.62rem;text-transform:uppercase;letter-spacing:.1em;color:#1a6b8a;font-weight:700;margin-bottom:.4rem">Samlet forureningsrisiko</div>
-      <div id="bv-total-pct" style="font-size:2.2rem;font-weight:800;color:#1a2733;line-height:1">—</div>
-      <div style="margin:.5rem 0 .3rem">
-        <div style="background:#eef4f7;border-radius:6px;height:10px;overflow:hidden">
-          <div id="bv-total-bar" style="height:100%;border-radius:6px;width:0;background:#ccc;transition:width .5s ease"></div>
-        </div>
-      </div>
-    </div>
 
-    <!-- Bakterier + Virus -->
-    <div class="bv-card" id="bv-risk-card">
-      <div class="bv-card-title">Opdelt risiko</div>
-      <div class="bv-risk-row">
-        <span class="bv-risk-label">🦠 Bakterier</span>
-        <div class="bv-risk-bar-wrap"><div class="bv-risk-bar" id="bv-bact-bar"></div></div>
-        <span class="bv-risk-pct" id="bv-bact-pct">—</span>
-      </div>
-      <div class="bv-risk-row">
-        <span class="bv-risk-label">🧬 Virus</span>
-        <div class="bv-risk-bar-wrap"><div class="bv-risk-bar" id="bv-viral-bar"></div></div>
-        <span class="bv-risk-pct" id="bv-viral-pct">—</span>
-      </div>
-    </div>
 
-    <!-- 7-dages nedbørsgraf -->
-    <div class="bv-card">
-      <div class="bv-card-title">Nedbør — 7 dage · nu · prognose</div>
-      <div id="bv-chart-wrap">Indlæser vejrdata…</div>
-    </div>
-
-    <!-- Udløb der påvirker badevandet -->
-    <div class="bv-card">
-      <div class="bv-card-title">Udløb der påvirker badevandet</div>
-      <div id="bv-outlets">Indlæser…</div>
-    </div>
-
-    <!-- Handlinger -->
-    <div class="bv-actions">
-      <button class="bv-btn primary" onclick="closeBadevandPanel(); switchTab('kort')">🗺 Vis på kort</button>
-      <button class="bv-btn" id="bv-fav-btn2" onclick="toggleBadevandFav()">❤ Favorit + varsler</button>
-    </div>
-
-  </div>
-</div>
 
 <!-- Flydende lag-kontrol — top-højre collapsible som legenden -->
 
@@ -1977,7 +1912,7 @@ function renderMap() {
     });
 
     marker.bindPopup(buildPopup(pt, risk, foreRisk), { maxWidth: 280 });
-    marker.on('click', (e) => { L.DomEvent.stopPropagation(e); if(window._mapClickHandled) return; window._mapClickHandled=true; setTimeout(()=>window._mapClickHandled=false,200); closeBadevandPanel(); updatePanel(pt, risk, foreRisk); });
+    marker.on('click', function(e) { if(e.originalEvent) e.originalEvent.stopPropagation(); closePointPanel(); closeBadevandPanel(); updatePanel(pt, risk, foreRisk); });
     pointsLayer.addLayer(marker);
 
     // Forecast warning markers
@@ -2109,28 +2044,6 @@ function updatePanel(pt, risk, foreRisk) {
 
   document.getElementById('point-panel').classList.add('open');
 
-  // Find nærmeste badevandslokalitet til dette udløb (til link)
-  let nearestBv = null;
-  if (vp3BadevandLayer) {
-    let minD = Infinity;
-    vp3BadevandLayer.eachLayer(layer => {
-      try {
-        const ll = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter();
-        const d  = Math.hypot(ll.lat - pt.lat, ll.lng - pt.lng);
-        if (d < minD) { minD = d; nearestBv = layer.feature; }
-      } catch(e) {}
-    });
-  }
-
-  const bvBtn = nearestBv
-    ? `<button onclick="closePointPanel();showBadevandPanel(nearestBvFeature_${pt.id}())"
-         style="width:100%;margin-top:.5rem;padding:.5rem;border:1.5px solid #1a6b8a;border-radius:7px;background:#fff;color:#1a6b8a;font-size:.78rem;font-weight:600;cursor:pointer">
-         🏖 Se badevandsside →</button>`
-    : '';
-
-  // Gem reference til nearest bv for brug i onclick
-  window[`nearestBvFeature_${pt.id}`] = () => nearestBv;
-
   document.getElementById('point-panel-body').innerHTML = `
     <div style="margin:.2rem 0 .6rem;display:flex;align-items:center;gap:.6rem">
       ${risk !== null
@@ -2143,7 +2056,7 @@ function updatePanel(pt, risk, foreRisk) {
       ${pt.waterArea ? `Recipient: ${escHtml(pt.waterArea)}<br>` : ''}
       ${pt.eventsPerYear != null ? `${pt.eventsPerYear.toFixed(0)} overløb/år` : ''}
     </div>
-    ${bvBtn}`;
+`;
 }
 
 async function saveWarnPoints(pts) {
@@ -2649,7 +2562,7 @@ async function loadVP3Layers() {
           const p = f.properties || {};
           const navn = p.pkt_navn || p.navn || p.id || 'Badevandslokalitet';
           l.bindTooltip(`<strong>🏖 ${escHtml(String(navn))}</strong><br><span style="font-size:.7rem;opacity:.7">Klik for detaljer</span>`, { sticky: true });
-          l.on('click', (e) => { L.DomEvent.stopPropagation(e); if(window._mapClickHandled) return; window._mapClickHandled=true; setTimeout(()=>window._mapClickHandled=false,200); showBadevandPanel(f); });
+          l.on('click', function(e) { if(e.originalEvent) e.originalEvent.stopPropagation(); closePointPanel(); showBadevandPanel(f); });
         }
       });
       if (showVP3Bade) vp3BadevandLayer.addTo(map);
@@ -3836,6 +3749,77 @@ registerSW().then(() => restorePushSubscription());
     <button class="ctrl-btn active" id="btn-vp3bade"  onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
     <button class="ctrl-btn"        id="btn-vp3rbu"   onclick="toggleVP3Rbu()">🔴 RBU VP3-punkter</button>
     <button class="ctrl-btn"        onclick="refreshData()">↻ Opdater</button>
+  </div>
+</div>
+
+<!-- Flydende punktdetalje -->
+<div id="point-panel">
+  <div id="point-panel-head">
+    <span id="point-panel-title"></span>
+    <button id="point-panel-close" onclick="closePointPanel()" title="Luk">✕</button>
+  </div>
+  <div id="point-panel-body"></div>
+</div>
+
+<!-- 5-sekunders hint der forsvinder automatisk -->
+<div id="map-hint">📍 Klik på et udløbspunkt for at se risikoanalyse</div>
+
+<!-- Badevandsside — fuld-skærms overlay -->
+<div id="badevand-panel">
+  <div id="bv-header">
+    <button id="bv-back-btn" onclick="closeBadevandPanel()">← Tilbage</button>
+    <div>
+      <div id="bv-title">Badevandslokalitet</div>
+      <div id="bv-subtitle"></div>
+    </div>
+    <button id="bv-fav-btn" onclick="toggleBadevandFav()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;padding:.2rem .4rem;line-height:1" title="Gem som favorit + aktivér varsler">🤍</button>
+  </div>
+  <div id="bv-body">
+
+    <!-- Samlet risiko — fremhævet øverst -->
+    <div style="background:#fff;border-radius:10px;border:1px solid #dde3e8;padding:.8rem 1rem;text-align:center;margin-bottom:.2rem">
+      <div style="font-size:.62rem;text-transform:uppercase;letter-spacing:.1em;color:#1a6b8a;font-weight:700;margin-bottom:.4rem">Samlet forureningsrisiko</div>
+      <div id="bv-total-pct" style="font-size:2.2rem;font-weight:800;color:#1a2733;line-height:1">—</div>
+      <div style="margin:.5rem 0 .3rem">
+        <div style="background:#eef4f7;border-radius:6px;height:10px;overflow:hidden">
+          <div id="bv-total-bar" style="height:100%;border-radius:6px;width:0;background:#ccc;transition:width .5s ease"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bakterier + Virus -->
+    <div class="bv-card" id="bv-risk-card">
+      <div class="bv-card-title">Opdelt risiko</div>
+      <div class="bv-risk-row">
+        <span class="bv-risk-label">🦠 Bakterier</span>
+        <div class="bv-risk-bar-wrap"><div class="bv-risk-bar" id="bv-bact-bar"></div></div>
+        <span class="bv-risk-pct" id="bv-bact-pct">—</span>
+      </div>
+      <div class="bv-risk-row">
+        <span class="bv-risk-label">🧬 Virus</span>
+        <div class="bv-risk-bar-wrap"><div class="bv-risk-bar" id="bv-viral-bar"></div></div>
+        <span class="bv-risk-pct" id="bv-viral-pct">—</span>
+      </div>
+    </div>
+
+    <!-- 7-dages nedbørsgraf -->
+    <div class="bv-card">
+      <div class="bv-card-title">Nedbør — 7 dage · nu · prognose</div>
+      <div id="bv-chart-wrap">Indlæser vejrdata…</div>
+    </div>
+
+    <!-- Udløb der påvirker badevandet -->
+    <div class="bv-card">
+      <div class="bv-card-title">Udløb der påvirker badevandet</div>
+      <div id="bv-outlets">Indlæser…</div>
+    </div>
+
+    <!-- Handlinger -->
+    <div class="bv-actions">
+      <button class="bv-btn primary" onclick="closeBadevandPanel(); switchTab('kort')">🗺 Vis på kort</button>
+
+    </div>
+
   </div>
 </div>
 </body>
