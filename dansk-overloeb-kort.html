@@ -271,43 +271,42 @@
   .bv-btn:hover { opacity: .85; }
 
  (erstatter #right-col controls) ──────────── */
-  /* Kortlagsvælger — flydende ikon, samme mønster som legenden */
+  /* Kortlagsvælger — identisk mønster med #legend */
   #layer-control {
     position: fixed;
-    top: 14px; right: 14px;
+    top: 14px;
+    right: 14px;
     z-index: 900;
-    font-size: .78rem;
   }
-
   #layer-toggle-btn {
-    display: flex;
-    width: 36px; height: 36px;
-    align-items: center; justify-content: center;
+    display: block;
+    width: 34px; height: 34px;
+    border-radius: 8px;
     background: var(--paper);
     border: 1px solid var(--line);
-    border-radius: 8px;
-    box-shadow: var(--shadow);
-    cursor: pointer;
     color: var(--accent);
-    font-size: 1.2rem;
+    font-size: 1.1rem;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+    line-height: 34px;
+    text-align: center;
+    padding: 0;
   }
-
   #layer-body {
     position: absolute;
-    top: 40px; right: 0;
+    top: 38px; right: 0;
+    min-width: 200px;
     background: var(--paper);
     border: 1px solid var(--line);
     border-radius: 10px;
     box-shadow: var(--shadow-lg);
+    padding: .5rem .6rem .7rem;
     display: flex;
     flex-direction: column;
-    gap: .25rem;
-    padding: .5rem .6rem .6rem;
-    min-width: 200px;
-    max-height: calc(100vh - 80px);
+    gap: .3rem;
+    max-height: calc(100vh - 70px);
     overflow-y: auto;
   }
-
   #layer-control.collapsed #layer-body { display: none; }
 
 
@@ -1912,7 +1911,7 @@ function renderMap() {
     });
 
     marker.bindPopup(buildPopup(pt, risk, foreRisk), { maxWidth: 280 });
-    marker.on('click', function(e) { if(e.originalEvent) e.originalEvent.stopPropagation(); closePointPanel(); closeBadevandPanel(); updatePanel(pt, risk, foreRisk); });
+    marker.on('click', function(e) { if(window._LC) return; window._LC=true; setTimeout(()=>delete window._LC,50); closePointPanel(); closeBadevandPanel(); updatePanel(pt, risk, foreRisk); });
     pointsLayer.addLayer(marker);
 
     // Forecast warning markers
@@ -2562,7 +2561,7 @@ async function loadVP3Layers() {
           const p = f.properties || {};
           const navn = p.pkt_navn || p.navn || p.id || 'Badevandslokalitet';
           l.bindTooltip(`<strong>🏖 ${escHtml(String(navn))}</strong><br><span style="font-size:.7rem;opacity:.7">Klik for detaljer</span>`, { sticky: true });
-          l.on('click', function(e) { if(e.originalEvent) e.originalEvent.stopPropagation(); closePointPanel(); showBadevandPanel(f); });
+          l.on('click', function(e) { if(window._LC) return; window._LC=true; setTimeout(()=>delete window._LC,50); closePointPanel(); showBadevandPanel(f); });
         }
       });
       if (showVP3Bade) vp3BadevandLayer.addTo(map);
@@ -3304,6 +3303,9 @@ async function showBadevandPanel(feature) {
   document.getElementById('bv-chart-wrap').innerHTML = '<div style="padding:.5rem 0;color:#5a6b78;font-size:.8rem">Indlæser vejrdata…</div>';
   document.getElementById('badevand-panel').classList.add('open');
   closePointPanel();
+  // Opdater hjerte-ikon baseret på fav-status
+  const _bvBtn = document.getElementById('bv-fav-btn');
+  if (_bvBtn) _bvBtn.textContent = '🤍'; // nulstil — badevand har ikke direkte id i favSet
   // Nulstil notifikationsknap for ny lokation
   const _nb = document.getElementById('bv-notify-btn');
   if (_nb) { _nb.disabled = false; _nb.textContent = '🔔 Modtag varsler'; }
@@ -3566,19 +3568,30 @@ async function loadVarselData() {
   // Filtrer til Hjem-lokation hvis sat (nærmeste 20 inden for 50 km)
   let filtered = alarms;
   let locationNote = '';
-  // Fallback: brug sessionStorage hvis GPS ikke er klar endnu
-  const _lat = hjemUserLat ?? parseFloat(sessionStorage.getItem('userLat') || '');
-  const _lng = hjemUserLng ?? parseFloat(sessionStorage.getItem('userLng') || '');
-  if (_lat && _lng && !isNaN(_lat) && !isNaN(_lng)) {
-    filtered = alarms
-      .map(pt => ({ ...pt, _distKm: hjemHaversine(_lat, _lng, pt.lat, pt.lng) }))
+  // Hent brugerposition — GPS eller sessionStorage
+  let _lat = hjemUserLat;
+  let _lng = hjemUserLng;
+  if (_lat === null || _lat === undefined) {
+    try { _lat = parseFloat(sessionStorage.getItem('userLat')); } catch(_) {}
+  }
+  if (_lng === null || _lng === undefined) {
+    try { _lng = parseFloat(sessionStorage.getItem('userLng')); } catch(_) {}
+  }
+  const hasLoc = typeof _lat === 'number' && typeof _lng === 'number' && !isNaN(_lat) && !isNaN(_lng);
+  if (hasLoc) {
+    const withDist = alarms
+      .filter(pt => pt.lat != null && pt.lng != null)
+      .map(pt => ({ ...pt, _distKm: hjemHaversine(_lat, _lng, Number(pt.lat), Number(pt.lng)) }));
+    filtered = withDist
       .filter(pt => pt._distKm <= 50)
       .sort((a, b) => (b.foreRisk||0) - (a.foreRisk||0))
       .slice(0, 20);
-    locationNote = `Viser varsler inden for 50 km af din placering`;
+    locationNote = filtered.length
+      ? `${filtered.length} varsel(er) inden for 50 km`
+      : `Ingen aktive varsler inden for 50 km`;
   } else {
     filtered = alarms.sort((a,b) => (b.foreRisk||0) - (a.foreRisk||0)).slice(0, 20);
-    locationNote = `Indstil din placering på Hjem-fanen for at se lokale varsler`;
+    locationNote = `📍 Klik "Min placering" på kortet for at se lokale varsler`;
   }
 
   alarmGrid.innerHTML = '';
@@ -3734,12 +3747,19 @@ registerSW().then(() => restorePushSubscription());
 </script>
 
 <div id="layer-control" class="collapsed">
-  <button id="layer-toggle-btn" onclick="toggleLayerControl()" title="Kortlag">&#9776;</button>
+  <button id="layer-toggle-btn" onclick="toggleLayerControl()" title="Kortlag">⊞</button>
   <div id="layer-body">
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem .2rem .6rem;border-bottom:1px solid #dde3e8;margin-bottom:.4rem">
-      <span style="font-family:var(--mono);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">Kortlag</span>
-      <button onclick="toggleLayerControl()" style="background:none;border:none;cursor:pointer;font-size:.9rem;color:#5a6b78;padding:.1rem .3rem;border-radius:4px" title="Luk">✕</button>
-    </div>
+    <button class="ctrl-btn active" id="btn-heat"    onclick="toggleHeat()">🌡 Bakterielt kort</button>
+    <button class="ctrl-btn"        id="btn-viral"   onclick="toggleViral()">🧬 Viralt kort</button>
+    <button class="ctrl-btn active" id="btn-pts"     onclick="togglePoints()">📍 Udløbspunkter</button>
+    <button class="ctrl-btn"        id="btn-fore"    onclick="toggleForecast()">⚡ 24h Varsling</button>
+    <button class="ctrl-btn active" id="btn-vp3kyst" onclick="toggleVP3Kyst()">🌊 Kystvande</button>
+    <button class="ctrl-btn active" id="btn-vp3bade" onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
+    <button class="ctrl-btn"        id="btn-vp3rbu"  onclick="toggleVP3Rbu()">🔴 RBU-punkter</button>
+    <button class="ctrl-btn"        onclick="locateUser()">📍 Min placering</button>
+    <button class="ctrl-btn"        onclick="refreshData()">↻ Opdater</button>
+  </div>
+</div>
     <button class="ctrl-btn active" id="btn-locate"   onclick="locateUser()">📍 Min placering</button>
     <button class="ctrl-btn active" id="btn-heat"     onclick="toggleHeat()">🌡 Bakterielt kort</button>
     <button class="ctrl-btn"        id="btn-viral"    onclick="toggleViral()">🧬 Viralt kort</button>
