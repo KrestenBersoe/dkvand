@@ -186,7 +186,7 @@ function computeMetrics(json) {
   const MS_HOUR = 3600 * 1000;
   const TAU    = 3.0;
   let antecedentMM = 0, todayMM = 0, forecastMM = 0, totalRain7d = 0;
-  const hourlyObs = [], hourlyFore = [];
+  const hourlyObs = [], hourlyFore = [], hourlyWeek = [];
   times.forEach((tStr, i) => {
     const mm  = Math.max(Number(values[i]) || 0, 0);
     const tMs = new Date(tStr).getTime();
@@ -196,12 +196,13 @@ function computeMetrics(json) {
     if (diffMs >= 0) {
       if (mm > 0) antecedentMM += mm * Math.exp(-ageDays / TAU);
       totalRain7d += mm;
+      hourlyWeek.push(mm);  // full 7-day history
       if (diffMs < 24 * MS_HOUR) { todayMM += mm; hourlyObs.push(mm); }
     } else {
       if (-diffMs <= 24 * MS_HOUR) { forecastMM += mm; hourlyFore.push(mm); }
     }
   });
-  return { antecedentMM, todayMM, forecastMM, totalRain7d, hourlyObs, hourlyFore };
+  return { antecedentMM, todayMM, forecastMM, totalRain7d, hourlyObs, hourlyFore, hourlyWeek };
 }
 
 // ── Proactive cache warming ──────────────────────────────────────────────────
@@ -320,7 +321,26 @@ app.get('/api/weather/all', (req, res) => {
   res.json(out);
 });
 
-// ── GET /api/weather/hourly?key= — hourly arrays for one cell on demand ──────
+// ── GET /api/weather/weekly?key= — 7-day hourly arrays for bathing water detail
+// Returns full past_days=7 hourly precipitation for one cell on demand.
+app.get('/api/weather/weekly', (req, res) => {
+  const key    = req.query.key;
+  const cached = key ? weatherCache.get(key) : null;
+  if (!cached || Date.now() - cached.ts >= WEATHER_TTL_MS) {
+    return res.status(404).json({ error: 'Cell not in cache' });
+  }
+  // Return extended hourly arrays (all 7 days, not just last 24h)
+  const d = cached.data;
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.json({
+    hourlyObs:   d.hourlyObs   || [],
+    hourlyFore:  d.hourlyFore  || [],
+    hourlyWeek:  d.hourlyWeek  || [],   // full 7-day obs array
+    todayMM:     d.todayMM,
+    forecastMM:  d.forecastMM,
+    totalRain7d: d.totalRain7d,
+  });
+});
 // Called when user clicks a point or opens a varsel card. Much cheaper than
 // bundling 48 floats × 2500 cells into the main /all response.
 app.get('/api/weather/hourly', (req, res) => {

@@ -1104,18 +1104,7 @@
     <!-- Right column: layer controls + location detail, single column no overlap -->
 <div id="right-col" onclick="if(window.innerWidth<=720 && event.target===this) toggleRightCol()">
 
-  <!-- Controls: layer selector -->
-  <div id="controls">
-    <button class="ctrl-btn active" id="btn-locate" onclick="locateUser()">📍 Min placering</button>
-    <button class="ctrl-btn active" id="btn-heat"  onclick="toggleHeat()">🌡 Bakterielt kort</button>
-    <button class="ctrl-btn"        id="btn-viral" onclick="toggleViral()">🧬 Viralt kort</button>
-    <button class="ctrl-btn active" id="btn-pts"   onclick="togglePoints()">📍 Udløbspunkter</button>
-    <button class="ctrl-btn"        id="btn-fore"  onclick="toggleForecast()">⚡ 24h Varsling</button>
-    <button class="ctrl-btn active" id="btn-vp3kyst" onclick="toggleVP3Kyst()">🌊 Kystvande (VP3)</button>
-    <button class="ctrl-btn active" id="btn-vp3bade" onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
-    <button class="ctrl-btn"        id="btn-vp3rbu"  onclick="toggleVP3Rbu()">🔴 RBU VP3-punkter</button>
-    <button class="ctrl-btn"        onclick="refreshData()">↻ Opdater</button>
-  </div>
+  <!-- Controls er flyttet til #layer-control (flydende lag-menu) -->
 
   <!-- Location detail panel -->
   <div id="panel">
@@ -1205,7 +1194,10 @@
 <div id="layer-control" class="collapsed">
   <button id="layer-toggle-btn" onclick="toggleLayerControl()" title="Kortlag">⊞</button>
   <div id="layer-body">
-    <div style="font-family:var(--mono);font-size:.6rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);padding:.2rem .4rem .5rem;cursor:pointer" onclick="toggleLayerControl()" title="Luk">Kortlag ✕</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem .2rem .6rem;border-bottom:1px solid #dde3e8;margin-bottom:.4rem">
+      <span style="font-family:var(--mono);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">Kortlag</span>
+      <button onclick="toggleLayerControl()" style="background:none;border:none;cursor:pointer;font-size:.9rem;color:#5a6b78;padding:.1rem .3rem;border-radius:4px" title="Luk">✕</button>
+    </div>
     <button class="ctrl-btn active" id="btn-locate"   onclick="locateUser()">📍 Min placering</button>
     <button class="ctrl-btn"        id="btn-badevand" onclick="showNearestBadevand()">🏖 Nærmeste badested</button>
     <button class="ctrl-btn active" id="btn-heat"     onclick="toggleHeat()">🌡 Bakterielt kort</button>
@@ -2227,7 +2219,6 @@ async function loadAll() {
     // Server warms ~220 cells every 3h via individual single-location calls.
     setLoader('Beregner nedbørsgitter…');
 
-    const GRID_DEG = 0.25;
     function cellKey(lat, lng) {
       const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
       const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
@@ -2245,7 +2236,7 @@ async function loadAll() {
       }
     });
 
-    setLoader(`Henter nedbør for ${gridCells.size} gitterceller…`);
+    setLoader(`Henter lokale vejrdata fra DMI (${gridCells.size} områder)…`);
 
     // Single bulk request to the server weather proxy.
     // Server holds a shared 6h cache → most cells are cache hits across all users.
@@ -2272,22 +2263,16 @@ async function loadAll() {
       console.warn('Weather /all fetch failed:', e.message);
     }
 
-    // Server stadig ved at varme op — genforsøg om 30s (max 5 gange)
+    // Delvis dækning — opdater i baggrunden uden at påvirke brugeren
     if (warmCoverage < 0.8) {
       const retries = (loadAll._retries = (loadAll._retries || 0) + 1);
-      if (retries <= 5) {
-        console.info(`Vejrcache ${(warmCoverage * 100).toFixed(0)}% varm — genforsøg ${retries}/5 om 30s`);
-        setTimeout(() => loadAll(), 30_000);
-      } else {
-        loadAll._retries = 0;
-      }
+      if (retries <= 5) setTimeout(() => loadAll(), 60_000);
+      else loadAll._retries = 0;
     } else {
       loadAll._retries = 0;
     }
 
     // Assign cell weather to every point
-    // null = no data (render grey); 0 = valid dry reading (render green/low)
-    // hourlyObs/hourlyFore are fetched on-demand via /api/weather/hourly
     overflowPoints.forEach(pt => {
       const key = cellKey(pt.lat, pt.lng);
       const w   = cellResults.get(key) || null;
@@ -2296,14 +2281,24 @@ async function loadAll() {
       pt.forecastMM  = w ? w.forecastMM   : null;
       pt.totalRain7d = w ? w.totalRain7d  : null;
       pt._weatherKey = `${gridCells.get(key)?.lat.toFixed(4)}:${gridCells.get(key)?.lng.toFixed(4)}`;
-      pt.hourlyObs   = [];   // populated on-demand when varsel card opens
+      pt.hourlyObs   = [];
       pt.hourlyFore  = [];
       pt.lastEventAge = w && w.antecedentMM > 5 ? Math.random() * 2 : null;
     });
 
+    const hasWeather = overflowPoints.some(p => p.precipMM !== null);
+
+    if (!hasWeather) {
+      // Ingen vejrdata endnu — bliv i loader og prøv igen
+      const retryIn = 15;
+      setLoader(`Henter lokale vejrdata fra DMI… (forsøger igen om ${retryIn}s)`);
+      setTimeout(() => loadAll(), retryIn * 1000);
+      return;  // forbliv i loader — kald ikke renderMap eller showLoader(false)
+    }
+
     renderMap();
-    showCacheStatus();   // append cache age to status bar
-    checkFavNotifications(overflowPoints);  // push notifications for high-risk favs
+    showCacheStatus();
+    checkFavNotifications(overflowPoints);
   } catch(err) {
     console.error('loadAll fejlede:', err);
     // Show the actual error message and the phase where it happened
@@ -3215,26 +3210,38 @@ let _currentBvFeature = null;
 function closeBadevandPanel() {
   document.getElementById('badevand-panel').classList.remove('open');
   _currentBvFeature = null;
+  history.pushState(null, '', window.location.pathname);
 }
 
 async function showBadevandPanel(feature) {
   _currentBvFeature = feature;
-  const p = feature.properties || {};
+  const p    = feature.properties || {};
   const navn = p.pkt_navn || p.navn || 'Badevandslokalitet';
   const latlng = feature.geometry?.coordinates
     ? { lat: feature.geometry.coordinates[1], lng: feature.geometry.coordinates[0] }
     : null;
 
+  // Opdater URL-hash så siden kan deles direkte
+  if (latlng) {
+    history.pushState(null, '', `#badevand=${latlng.lat.toFixed(4)}:${latlng.lng.toFixed(4)}`);
+  }
+
+  // Opdater sidetitel og undertitel
   document.getElementById('bv-title').textContent    = navn;
-  document.getElementById('bv-subtitle').textContent = p.komm_navn || '';
+  document.getElementById('bv-subtitle').textContent =
+    [p.komm_navn, p.ov_id].filter(Boolean).join(' · ');
   document.getElementById('bv-outlets').textContent  = 'Indlæser…';
-  document.getElementById('bv-chart-wrap').textContent = 'Indlæser vejrdata…';
+  document.getElementById('bv-chart-wrap').innerHTML = '<div style="padding:.5rem 0;color:#5a6b78;font-size:.8rem">Indlæser vejrdata…</div>';
   document.getElementById('badevand-panel').classList.add('open');
 
   // Nulstil risikobarer
   ['bv-bact-bar','bv-viral-bar','bv-total-bar'].forEach(id => {
     const el = document.getElementById(id);
-    el.style.width = '0'; el.style.background = '#ccc';
+    if (el) { el.style.width = '0'; el.style.background = '#ccc'; }
+  });
+  ['bv-bact-pct','bv-viral-pct','bv-total-pct'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '—';
   });
 
   if (!latlng) return;
@@ -3249,17 +3256,17 @@ async function showBadevandPanel(feature) {
     .slice(0, 10);
 
   // ── Risikoscores ──────────────────────────────────────────────────────────
-  const bactRisk  = Math.max(0, ...nearby.map(pt => pt.riskScore  || 0));
-  const viralRisk = Math.max(0, ...nearby.map(pt => pt.viralScore || 0));
+  const bactRisk  = nearby.length ? Math.max(...nearby.map(pt => pt.riskScore  || 0)) : 0;
+  const viralRisk = nearby.length ? Math.max(...nearby.map(pt => pt.viralScore || 0)) : 0;
   const totalRisk = Math.max(bactRisk, viralRisk);
 
   function setBar(barId, pctId, risk) {
     const pct = Math.round(risk * 100);
     const color = risk >= 0.6 ? '#c84b1f' : risk >= 0.2 ? '#d4a020' : '#2d7d4f';
-    document.getElementById(barId).style.width   = `${pct}%`;
-    document.getElementById(barId).style.background = color;
-    document.getElementById(pctId).textContent  = `${pct}%`;
-    document.getElementById(pctId).style.color  = color;
+    const barEl = document.getElementById(barId);
+    const pctEl = document.getElementById(pctId);
+    if (barEl) { barEl.style.width = `${pct}%`; barEl.style.background = color; }
+    if (pctEl) { pctEl.textContent = `${pct}%`; pctEl.style.color = color; }
   }
   setBar('bv-bact-bar',  'bv-bact-pct',  bactRisk);
   setBar('bv-viral-bar', 'bv-viral-pct', viralRisk);
@@ -3267,131 +3274,86 @@ async function showBadevandPanel(feature) {
 
   // ── Udløbsliste ───────────────────────────────────────────────────────────
   const outDiv = document.getElementById('bv-outlets');
-  if (nearby.length === 0) {
-    outDiv.innerHTML = '<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Ingen kendte udløb inden for 15 km</div>';
-  } else {
-    outDiv.innerHTML = nearby.map(pt => {
-      const risk = pt.riskScore || 0;
-      const color = risk >= 0.6 ? '#c84b1f' : risk >= 0.2 ? '#d4a020' : '#2d7d4f';
-      const riskPct = Math.round(risk * 100);
-      return `<div class="bv-outlet-row" onclick="closeBadevandPanel();map.setView([${pt.lat},${pt.lng}],14)">
-        <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></div>
-        <div style="flex:1;min-width:0">
-          <div class="bv-outlet-name">${escHtml(pt.name)}</div>
-          <div class="bv-outlet-sub">${escHtml(pt.municipality)} · ${pt._dist.toFixed(1)} km</div>
-        </div>
-        <span style="font-size:.78rem;font-weight:700;color:${color}">${riskPct}%</span>
-        <span style="opacity:.35">›</span>
-      </div>`;
-    }).join('');
+  if (outDiv) {
+    if (nearby.length === 0) {
+      outDiv.innerHTML = '<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Ingen kendte udløb inden for 15 km</div>';
+    } else {
+      outDiv.innerHTML = nearby.map(pt => {
+        const risk  = pt.riskScore || 0;
+        const color = risk >= 0.6 ? '#c84b1f' : risk >= 0.2 ? '#d4a020' : '#2d7d4f';
+        return `<div class="bv-outlet-row" onclick="closeBadevandPanel();map.setView([${pt.lat},${pt.lng}],14)">
+          <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></div>
+          <div style="flex:1;min-width:0">
+            <div class="bv-outlet-name">${escHtml(pt.name)}</div>
+            <div class="bv-outlet-sub">${escHtml(pt.municipality)} · ${pt._dist.toFixed(1)} km</div>
+          </div>
+          <span style="font-size:.78rem;font-weight:700;color:${color}">${Math.round(risk*100)}%</span>
+          <span style="opacity:.35">›</span>
+        </div>`;
+      }).join('');
+    }
   }
 
   // ── 7-dages nedbørsgraf ───────────────────────────────────────────────────
-  const cellKey = (lat, lng) => {
-    const G = 0.25;
-    const clat = Math.round((Math.floor(lat / G) * G + G / 2) * 10000) / 10000;
-    const clng = Math.round((Math.floor(lng / G) * G + G / 2) * 10000) / 10000;
-    return `${clat.toFixed(4)}:${clng.toFixed(4)}`;
-  };
-  const key = cellKey(latlng.lat, latlng.lng);
+  const G = 0.25;
+  const clat = Math.round((Math.floor(latlng.lat / G) * G + G / 2) * 10000) / 10000;
+  const clng = Math.round((Math.floor(latlng.lng / G) * G + G / 2) * 10000) / 10000;
+  const key  = `${clat.toFixed(4)}:${clng.toFixed(4)}`;
 
+  const chartWrap = document.getElementById('bv-chart-wrap');
   try {
     const resp = await fetch(`api/weather/weekly?key=${encodeURIComponent(key)}`);
     if (resp.ok) {
       const w = await resp.json();
-      document.getElementById('bv-chart-wrap').innerHTML =
-        buildWeeklyChart(w.hourlyWeek || [], w.hourlyFore || [], w.totalRain7d);
+      const week = w.hourlyWeek || [];
+      const fore = w.hourlyFore || [];
+      if (week.length > 0 || fore.length > 0) {
+        chartWrap.innerHTML = buildWeeklyChart(week, fore, w.totalRain7d);
+      } else {
+        // Fallback: brug hourlyObs (24h) hvis hourlyWeek er tom (ældre cache-post)
+        chartWrap.innerHTML = week.length === 0 && (w.hourlyObs||[]).length > 0
+          ? buildWeeklyChart(w.hourlyObs, fore, w.totalRain7d)
+          : '<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Vejrdata ikke tilgængeligt for dette område</div>';
+      }
     } else {
-      document.getElementById('bv-chart-wrap').textContent = 'Vejrdata ikke tilgængeligt';
+      chartWrap.innerHTML = '<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Vejrdata ikke tilgængeligt — prøv igen om lidt</div>';
     }
   } catch(e) {
-    document.getElementById('bv-chart-wrap').textContent = 'Fejl ved hentning af vejrdata';
+    chartWrap.innerHTML = '<div style="color:#c84b1f;font-size:.8rem;padding:.5rem 0">Fejl ved hentning af vejrdata</div>';
   }
 }
 
-// 7-dages + prognose SVG-graf
-function buildWeeklyChart(weekObs, fore, totalMM) {
-  const obs  = weekObs.slice(-168);   // maks 7 × 24 = 168 timer
-  const fore24 = (fore || []).slice(0, 24);
-  const all  = [...obs, ...fore24];
-  const maxMM = Math.max(...all, 0.5);
-  const W = 320, H = 56;
-  const total = Math.max(obs.length + fore24.length, 1);
-  const barW  = W / total;
-  const nowX  = (obs.length / total) * W;
+// ── URL-hash routing ──────────────────────────────────────────────────────────
+// Understøtter: #badevand=LAT:LNG
+// Eksempel: https://dkvand.fly.dev/#badevand=55.6250:9.3750
+function handleHash() {
+  const hash = window.location.hash;
+  if (!hash.startsWith('#badevand=')) return;
+  const [latStr, lngStr] = hash.replace('#badevand=', '').split(':');
+  const lat = parseFloat(latStr), lng = parseFloat(lngStr);
+  if (isNaN(lat) || isNaN(lng)) return;
 
-  // Dagsmærker (hver 24. time)
-  let dayLines = '', dayLabels = '';
-  const days = ['Man','Tir','Ons','Tor','Fre','Lør','Søn'];
-  for (let d = 1; d < 7; d++) {
-    const x = (d * 24 / total) * W;
-    dayLines  += `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${H}" stroke="rgba(26,39,51,.08)" stroke-width="1"/>`;
-    const idx  = Math.max(0, obs.length - (7 - d) * 24);
-    const date = new Date(Date.now() - (obs.length - d * 24) * 3600000);
-    dayLabels += `<text x="${x.toFixed(1)}" y="${H + 11}" text-anchor="middle" font-size="7.5" fill="#9aaab5">${days[date.getDay()]}</text>`;
-  }
-
-  let bars = '';
-  obs.forEach((mm, i) => {
-    const h = mm > 0 ? Math.max((mm / maxMM) * H, 2) : 0;
-    if (h === 0) return;
-    const x = i * barW;
-    const col = mm >= 5 ? '#2979a0' : 'rgba(90,120,140,0.55)';
-    bars += `<rect x="${x.toFixed(1)}" y="${(H-h).toFixed(1)}" width="${Math.max(barW-.5,.3).toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"/>`;
-  });
-  fore24.forEach((mm, i) => {
-    const h = mm > 0 ? Math.max((mm / maxMM) * H, 2) : 0;
-    if (h === 0) return;
-    const x = (obs.length + i) * barW;
-    const col = mm >= 5 ? '#c84b1f' : 'rgba(13,110,140,.7)';
-    bars += `<rect x="${x.toFixed(1)}" y="${(H-h).toFixed(1)}" width="${Math.max(barW-.5,.3).toFixed(1)}" height="${h.toFixed(1)}" fill="${col}"/>`;
-  });
-
-  const total7dStr = totalMM != null ? `${totalMM.toFixed(1)} mm / 7 dage` : '';
-  return `<svg viewBox="0 0 ${W} ${H+16}" width="100%" style="display:block;overflow:visible">
-    <rect width="${W}" height="${H}" fill="#f4f7f9" rx="3"/>
-    ${dayLines}
-    ${bars}
-    <line x1="${nowX.toFixed(1)}" y1="0" x2="${nowX.toFixed(1)}" y2="${H}" stroke="#1a6b8a" stroke-width="1.5" stroke-dasharray="3,2"/>
-    <text x="${nowX.toFixed(1)}" y="${H+11}" text-anchor="middle" font-size="7.5" fill="#1a6b8a" font-weight="bold">NU</text>
-    <text x="2" y="${H+11}" font-size="7.5" fill="#9aaab5">-7d</text>
-    <text x="${W-2}" y="${H+11}" text-anchor="end" font-size="7.5" fill="#1a6b8a">+24h</text>
-    ${dayLabels}
-    ${total7dStr ? `<text x="${W-2}" y="10" text-anchor="end" font-size="7.5" fill="#5a6b78">${total7dStr}</text>` : ''}
-  </svg>`;
+  // Vent til VP3 badevand-lag er klar, derefter find nærmeste og åbn
+  const tryOpen = () => {
+    if (!vp3BadevandLayer) { setTimeout(tryOpen, 500); return; }
+    let minDist = Infinity, nearest = null;
+    vp3BadevandLayer.eachLayer(layer => {
+      try {
+        const ll = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter();
+        const d  = hjemHaversine(lat, lng, ll.lat, ll.lng);
+        if (d < minDist) { minDist = d; nearest = layer.feature; }
+      } catch(e) {}
+    });
+    if (nearest) showBadevandPanel(nearest);
+  };
+  tryOpen();
 }
 
-// Favorit og notifikation (stub — kobles til eksisterende fav-system)
-let _bvFavActive = false;
-function toggleBadevandFav() {
-  _bvFavActive = !_bvFavActive;
-  document.getElementById('bv-fav-btn').textContent = _bvFavActive ? '❤ Fjern favorit' : '❤ Favorit';
-}
+window.addEventListener('popstate', () => {
+  if (!window.location.hash) closeBadevandPanel();
+  else handleHash();
+});
 
-function subscribeBadevandNotify() {
-  subscribeToPush();  // brug eksisterende push-subscribe
-}
-
-// Find nærmeste badevandslokalitet og åbn panelet
-function showNearestBadevand() {
-  if (hjemUserLat === null) {
-    alert('Aktivér lokalisering først (📍 Min placering)');
-    return;
-  }
-  if (!vp3BadevandLayer) {
-    alert('Badevandsdata ikke indlæst endnu — prøv igen om lidt');
-    return;
-  }
-  let minDist = Infinity, nearest = null;
-  vp3BadevandLayer.eachLayer(layer => {
-    let ll;
-    try { ll = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter(); } catch(e) { return; }
-    const d = hjemHaversine(hjemUserLat, hjemUserLng, ll.lat, ll.lng);
-    if (d < minDist) { minDist = d; nearest = layer.feature; }
-  });
-  if (nearest) showBadevandPanel(nearest);
-  else alert('Ingen badevandslokalitet fundet');
-}
 
 
 function buildVarselCard(pt, isFavCard) {
@@ -3683,8 +3645,10 @@ setInterval(loadAll, 30 * 60 * 1000);
 // BOOT
 loadAll();
 loadVP3Layers();
-// Sikrer korrekt kortstørrelse ved første render (tab var evt. skjult under initialisering)
+// Sikrer korrekt kortstørrelse ved første render
 setTimeout(() => map && map.invalidateSize(), 100);
+// Håndtér evt. deep-link URL (#badevand=...)
+setTimeout(handleHash, 1500);
 registerSW().then(() => restorePushSubscription());
 </script>
 </body>
