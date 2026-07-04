@@ -1863,15 +1863,14 @@ function renderMap() {
       const hasActiveRain = rainForecast > 5 || rainToday > 5;
       // Never warn if risk is null (no weather data for this grid cell)
       if (foreRisk === null || foreRisk === undefined) return;
-      if (hasActiveRain && foreRisk > .35) {
-        // Build a human-readable explanation for the warning card
+      // Gem som varsel hvis foreRisk > 0.55 — samme tærskel som ⚡ varselsringe på kortet
+      if (foreRisk !== null && foreRisk !== undefined && foreRisk > .55) {
         const warnReasons = [];
         if (rainForecast > 5)  warnReasons.push(`prognose ${rainForecast.toFixed(1)} mm/24h`);
         if (rainToday    > 5)  warnReasons.push(`observeret ${rainToday.toFixed(1)} mm/24h`);
         if (rain7d       > 10) warnReasons.push(`${rain7d.toFixed(1)} mm seneste 7 dage`);
-        const warnBasis = warnReasons.join(' · ');
+        const warnBasis = warnReasons.join(' · ') || 'forhøjet overløbsrisiko';
         const warnQuality = pt.quality === 0 ? 'reelle PULS-data'
-                          : pt.quality === 1 ? 'verificeret nul-overløb-punkt'
                           : pt.quality === 2 ? 'estimeret overløbsfrekvens'
                           : 'begrænset datagrundlag';
         warnPoints.push({ ...pt, foreRisk, warnBasis, warnQuality });
@@ -3653,19 +3652,6 @@ setTimeout(() => {
 }, 5000);
 registerSW().then(() => restorePushSubscription());
 </script>
-
-
-    <button class="ctrl-btn active" id="btn-locate"   onclick="locateUser()">📍 Min placering</button>
-    <button class="ctrl-btn active" id="btn-heat"     onclick="toggleHeat()">🌡 Bakterielt kort</button>
-    <button class="ctrl-btn"        id="btn-viral"    onclick="toggleViral()">🧬 Viralt kort</button>
-    <button class="ctrl-btn active" id="btn-pts"      onclick="togglePoints()">📍 Udløbspunkter</button>
-    <button class="ctrl-btn"        id="btn-fore"     onclick="toggleForecast()">⚡ 24h Varsling</button>
-    <button class="ctrl-btn active" id="btn-vp3kyst"  onclick="toggleVP3Kyst()">🌊 Kystvande (VP3)</button>
-    <button class="ctrl-btn active" id="btn-vp3bade"  onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
-    <button class="ctrl-btn"        id="btn-vp3rbu"   onclick="toggleVP3Rbu()">🔴 RBU VP3-punkter</button>
-    <button class="ctrl-btn"        onclick="refreshData()">↻ Opdater</button>
-  </div>
-</div>
 
 <!-- Flydende punktdetalje -->
 <div id="point-panel">
