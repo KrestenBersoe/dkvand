@@ -272,7 +272,7 @@
 
  (erstatter #right-col controls) ──────────── */
   #layer-control {
-    position: absolute;
+    position: fixed;
     top: 14px; right: 14px;
     z-index: 900;
     font-size: .78rem;
@@ -309,15 +309,6 @@
   #layer-control.collapsed #layer-body { display: none; }
 
 
-    width: 272px;
-    z-index: 900;
-    display: flex;
-    flex-direction: column;
-    gap: .5rem;
-    pointer-events: none;   /* pass-through except for children */
-  }
-
-  #right-col > * { pointer-events: all; }
 
   /* ── Side panel ──────────────────────────────────────────────────────────── */
   #panel {
@@ -1203,9 +1194,20 @@
   </div>
   <div id="bv-body">
 
-    <!-- Samlet risiko -->
+    <!-- Samlet risiko — fremhævet øverst -->
+    <div style="background:#fff;border-radius:10px;border:1px solid #dde3e8;padding:.8rem 1rem;text-align:center;margin-bottom:.2rem">
+      <div style="font-size:.62rem;text-transform:uppercase;letter-spacing:.1em;color:#1a6b8a;font-weight:700;margin-bottom:.4rem">Samlet forureningsrisiko</div>
+      <div id="bv-total-pct" style="font-size:2.2rem;font-weight:800;color:#1a2733;line-height:1">—</div>
+      <div style="margin:.5rem 0 .3rem">
+        <div style="background:#eef4f7;border-radius:6px;height:10px;overflow:hidden">
+          <div id="bv-total-bar" style="height:100%;border-radius:6px;width:0;background:#ccc;transition:width .5s ease"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bakterier + Virus -->
     <div class="bv-card" id="bv-risk-card">
-      <div class="bv-card-title">Forureningsrisiko</div>
+      <div class="bv-card-title">Opdelt risiko</div>
       <div class="bv-risk-row">
         <span class="bv-risk-label">🦠 Bakterier</span>
         <div class="bv-risk-bar-wrap"><div class="bv-risk-bar" id="bv-bact-bar"></div></div>
@@ -1215,11 +1217,6 @@
         <span class="bv-risk-label">🧬 Virus</span>
         <div class="bv-risk-bar-wrap"><div class="bv-risk-bar" id="bv-viral-bar"></div></div>
         <span class="bv-risk-pct" id="bv-viral-pct">—</span>
-      </div>
-      <div class="bv-risk-row">
-        <span class="bv-risk-label">⚠ Samlet</span>
-        <div class="bv-risk-bar-wrap"><div class="bv-risk-bar" id="bv-total-bar"></div></div>
-        <span class="bv-risk-pct" id="bv-total-pct">—</span>
       </div>
     </div>
 
@@ -3315,6 +3312,46 @@ async function fetchHourly(pt) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ── 7-dages + prognose SVG nedbørsgraf ────────────────────────────────────────
+function buildWeeklyChart(weekObs, fore, totalMM) {
+  const obs    = (weekObs || []).slice(-168);
+  const fore24 = (fore    || []).slice(0, 24);
+  const all    = [...obs, ...fore24];
+  const maxMM  = Math.max(...all, 0.5);
+  const W = 320, H = 52;
+  const total = Math.max(obs.length + fore24.length, 1);
+  const barW  = W / total;
+  const nowX  = (obs.length / total) * W;
+  const days  = ['Søn','Man','Tir','Ons','Tor','Fre','Lør'];
+  let dayLines = '', dayLabels = '';
+  for (let d = 1; d < 7; d++) {
+    const x    = (d * 24 / total) * W;
+    const date = new Date(Date.now() - (obs.length - d * 24) * 3600000);
+    dayLines  += `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${H}" stroke="rgba(26,39,51,.07)" stroke-width="1"/>`;
+    dayLabels += `<text x="${x.toFixed(1)}" y="${H+11}" text-anchor="middle" font-size="7.5" fill="#9aaab5">${days[date.getDay()]}</text>`;
+  }
+  let bars = '';
+  obs.forEach((mm, i) => {
+    if (mm <= 0) return;
+    const h = Math.max((mm / maxMM) * H, 2);
+    bars += `<rect x="${(i*barW).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${Math.max(barW-.5,.3).toFixed(1)}" height="${h.toFixed(1)}" fill="${mm>=5?'#2979a0':'rgba(90,120,140,.55)'}"/>`;
+  });
+  fore24.forEach((mm, i) => {
+    if (mm <= 0) return;
+    const h = Math.max((mm / maxMM) * H, 2);
+    bars += `<rect x="${((obs.length+i)*barW).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${Math.max(barW-.5,.3).toFixed(1)}" height="${h.toFixed(1)}" fill="${mm>=5?'#c84b1f':'rgba(13,110,140,.7)'}"/>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${H+14}" width="100%" style="display:block;overflow:visible">
+    <rect width="${W}" height="${H}" fill="#f4f7f9" rx="3"/>${dayLines}${bars}
+    <line x1="${nowX.toFixed(1)}" y1="0" x2="${nowX.toFixed(1)}" y2="${H}" stroke="#1a6b8a" stroke-width="1.5" stroke-dasharray="3,2"/>
+    <text x="2" y="${H+11}" font-size="7.5" fill="#9aaab5">-7 dage</text>
+    <text x="${nowX.toFixed(1)}" y="${H+11}" text-anchor="middle" font-size="7.5" fill="#1a6b8a" font-weight="bold">NU</text>
+    <text x="${W-2}" y="${H+11}" text-anchor="end" font-size="7.5" fill="#1a6b8a">+24h</text>
+    ${dayLabels}
+    ${totalMM!=null?`<text x="${W-2}" y="9" text-anchor="end" font-size="7" fill="#5a6b78">${totalMM.toFixed(1)} mm/7d</text>`:''}
+  </svg>`;
+}
+
 // BADEVANDSSIDE
 // ═══════════════════════════════════════════════════════════════════════════
 let _currentBvFeature = null;
@@ -3354,6 +3391,7 @@ async function showBadevandPanel(feature) {
   document.getElementById('bv-outlets').textContent  = 'Indlæser…';
   document.getElementById('bv-chart-wrap').innerHTML = '<div style="padding:.5rem 0;color:#5a6b78;font-size:.8rem">Indlæser vejrdata…</div>';
   document.getElementById('badevand-panel').classList.add('open');
+  closePointPanel(); // luk evt. åbent punktpanel
 
   // Nulstil risikobarer
   ['bv-bact-bar','bv-viral-bar','bv-total-bar'].forEach(id => {
