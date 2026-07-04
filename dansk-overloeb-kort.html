@@ -119,9 +119,40 @@
   #tab-kort { position: relative; overflow: hidden; }
 
   /* ── Right column: controls + detail panel, single non-overlapping column ── */
+  /* ── Flydende punktdetalje-overlay ──────────────────────────────────────── */
+  #point-panel {
+    position: fixed; bottom: 28px; left: 14px; z-index: 850;
+    background: #fff; color: #1a2733;
+    border: 1px solid #dde3e8; border-radius: 10px;
+    box-shadow: 0 4px 20px rgba(0,0,0,.18);
+    min-width: 280px; max-width: 340px; max-height: 65vh;
+    overflow-y: auto; display: none;
+  }
+  #point-panel.open { display: block; }
+  #point-panel-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .6rem .8rem .4rem; border-bottom: 1px solid #eef2f5;
+    font-size: .82rem; font-weight: 700; gap: .5rem;
+    position: sticky; top: 0; background: #fff; z-index: 1;
+  }
+  #point-panel-close {
+    background: none; border: none; cursor: pointer;
+    font-size: 1.1rem; color: #5a6b78; padding: .1rem .4rem;
+    border-radius: 4px; flex-shrink: 0; line-height: 1;
+  }
+  #point-panel-body { padding: .65rem .8rem .8rem; font-size: .78rem; }
+  #point-panel-body .label {
+    font-family: var(--mono); font-size: .62rem; text-transform: uppercase;
+    letter-spacing: .08em; color: #5a6b78; margin-top: .55rem; display: block;
+  }
+  #point-panel-body .value {
+    font-size: .85rem; font-weight: 600; color: #1a2733;
+    margin-top: .1rem; display: block;
+  }
+
   /* Kort-hint overlay — vises 5 sekunder ved første besøg */
   #map-hint {
-    position: absolute;
+    position: fixed;
     bottom: 80px; left: 50%; transform: translateX(-50%);
     z-index: 850;
     background: rgba(26,39,51,.85);
@@ -3391,25 +3422,25 @@ async function showBadevandPanel(feature) {
   const key  = `${clat.toFixed(4)}:${clng.toFixed(4)}`;
 
   const chartWrap = document.getElementById('bv-chart-wrap');
+  if (!chartWrap) return;
   try {
     const resp = await fetch(`api/weather/weekly?key=${encodeURIComponent(key)}`);
     if (resp.ok) {
-      const w = await resp.json();
-      const week = w.hourlyWeek || [];
+      const w    = await resp.json();
+      const week = (w.hourlyWeek && w.hourlyWeek.length > 0) ? w.hourlyWeek
+                 : (w.hourlyObs  && w.hourlyObs.length  > 0) ? w.hourlyObs
+                 : [];
       const fore = w.hourlyFore || [];
-      if (week.length > 0 || fore.length > 0) {
-        chartWrap.innerHTML = buildWeeklyChart(week, fore, w.totalRain7d);
-      } else {
-        // Fallback: brug hourlyObs (24h) hvis hourlyWeek er tom (ældre cache-post)
-        chartWrap.innerHTML = week.length === 0 && (w.hourlyObs||[]).length > 0
-          ? buildWeeklyChart(w.hourlyObs, fore, w.totalRain7d)
-          : '<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Vejrdata ikke tilgængeligt for dette område</div>';
-      }
+      chartWrap.innerHTML = (week.length > 0 || fore.length > 0)
+        ? buildWeeklyChart(week, fore, w.totalRain7d)
+        : '<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Ingen nedbørsdata tilgængeligt for dette område</div>';
     } else {
-      chartWrap.innerHTML = '<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Vejrdata ikke tilgængeligt — prøv igen om lidt</div>';
+      const txt = await resp.text().catch(() => resp.status);
+      chartWrap.innerHTML = `<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Vejrdata utilgængelig (${resp.status}): ${txt.slice(0,80)}</div>`;
     }
   } catch(e) {
-    chartWrap.innerHTML = '<div style="color:#c84b1f;font-size:.8rem;padding:.5rem 0">Fejl ved hentning af vejrdata</div>';
+    console.error('Badevand vejr fejl:', e);
+    chartWrap.innerHTML = `<div style="color:#c84b1f;font-size:.8rem;padding:.5rem 0">Fejl: ${e.message}</div>`;
   }
 }
 
