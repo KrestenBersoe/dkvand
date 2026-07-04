@@ -330,20 +330,33 @@ app.get('/api/weather/all', (req, res) => {
 });
 
 // ── GET /api/weather/weekly?key= — 7-day hourly arrays for bathing water detail
-// Returns full past_days=7 hourly precipitation for one cell on demand.
-app.get('/api/weather/weekly', (req, res) => {
+app.get('/api/weather/weekly', async (req, res) => {
   const key    = req.query.key;
-  const cached = key ? weatherCache.get(key) : null;
+  let   cached = key ? weatherCache.get(key) : null;
+
+  // Hvis ikke i cache — hent individuelt (sker ved cold start)
   if (!cached || Date.now() - cached.ts >= WEATHER_TTL_MS) {
-    return res.status(404).json({ error: 'Cell not in cache' });
+    if (!key) return res.status(400).json({ error: 'key required' });
+    const parts = key.split(':');
+    const lat = parseFloat(parts[0]), lng = parseFloat(parts[1]);
+    if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'invalid key' });
+    try {
+      apiCallCount++;
+      const raw  = await fetchOpenMeteo(lat, lng);
+      const data = computeMetrics(raw);
+      weatherCache.set(key, { ts: Date.now(), data });
+      cached = { data };
+    } catch(e) {
+      return res.status(502).json({ error: e.message });
+    }
   }
-  // Return extended hourly arrays (all 7 days, not just last 24h)
+
   const d = cached.data;
   res.set('Cache-Control', 'public, max-age=3600');
   res.json({
     hourlyObs:   d.hourlyObs   || [],
     hourlyFore:  d.hourlyFore  || [],
-    hourlyWeek:  d.hourlyWeek  || [],   // full 7-day obs array
+    hourlyWeek:  d.hourlyWeek  || [],
     todayMM:     d.todayMM,
     forecastMM:  d.forecastMM,
     totalRain7d: d.totalRain7d,

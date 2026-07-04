@@ -119,7 +119,21 @@
   #tab-kort { position: relative; overflow: hidden; }
 
   /* ── Right column: controls + detail panel, single non-overlapping column ── */
-  /* ── Badevandsside ─────────────────────────────────────────────────────────── */
+  /* Kort-hint overlay — vises 5 sekunder ved første besøg */
+  #map-hint {
+    position: absolute;
+    bottom: 80px; left: 50%; transform: translateX(-50%);
+    z-index: 850;
+    background: rgba(26,39,51,.85);
+    color: rgba(240,237,230,.95);
+    font-size: .78rem;
+    padding: .55rem 1.1rem;
+    border-radius: 20px;
+    pointer-events: none;
+    white-space: nowrap;
+    transition: opacity .5s;
+  }
+  #map-hint.fade { opacity: 0; }
   #badevand-panel {
     position: fixed;
     inset: 0;
@@ -231,41 +245,37 @@
     top: 14px; right: 14px;
     z-index: 900;
     font-size: .78rem;
-  }
-
-  #layer-toggle-btn {
-    width: 36px; height: 36px;
-    border-radius: 8px;
-    background: var(--paper);
-    border: 1px solid var(--line);
-    color: var(--accent);
-    font-size: 1.15rem;
-    cursor: pointer;
-    box-shadow: var(--shadow);
-    display: none;
-    align-items: center;
-    justify-content: center;
-  }
-
-  #layer-body {
     background: var(--paper);
     border: 1px solid var(--line);
     border-radius: 10px;
-    padding: .6rem;
     box-shadow: var(--shadow-lg);
+    overflow: hidden;
+  }
+
+  #layer-toggle-btn {
+    display: flex;
+    width: 36px; height: 36px;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--accent);
+    font-size: 1.1rem;
+    margin: 0;
+  }
+
+  #layer-body {
     display: flex;
     flex-direction: column;
     gap: .3rem;
-    min-width: 180px;
+    padding: .5rem .6rem .6rem;
+    min-width: 190px;
     max-height: calc(100vh - 120px);
     overflow-y: auto;
   }
 
-  #layer-control.collapsed #layer-toggle-btn { display: flex; }
-  #layer-control.collapsed #layer-body       { display: none; }
-
-  /* Fjern den gamle #right-col controls sektion */
-  #right-col #controls { display: none; }
+  #layer-control.collapsed #layer-body { display: none; }
 
 
     width: 272px;
@@ -1108,8 +1118,8 @@
 
   <!-- Location detail panel -->
   <div id="panel">
-    <div id="panel-header">Vælg et udløbspunkt</div>
-    <div id="panel-body">Klik på et punkt på kortet for at se risikoanalyse.</div>
+    <div id="panel-header" style="display:none"></div>
+    <div id="panel-body"></div>
   </div>
 
 </div>
@@ -1136,6 +1146,9 @@
 </div>
 
   </div><!-- /tab-kort -->
+
+<!-- 5-sekunders hint der forsvinder automatisk -->
+<div id="map-hint">📍 Klik på et udløbspunkt for at se risikoanalyse</div>
 
 <!-- Badevandsside — fuld-skærms overlay -->
 <div id="badevand-panel">
@@ -1192,14 +1205,13 @@
 
 <!-- Flydende lag-kontrol — top-højre collapsible som legenden -->
 <div id="layer-control" class="collapsed">
-  <button id="layer-toggle-btn" onclick="toggleLayerControl()" title="Kortlag">⊞</button>
+  <button id="layer-toggle-btn" onclick="toggleLayerControl()" title="Kortlag">&#9776;</button>
   <div id="layer-body">
     <div style="display:flex;align-items:center;justify-content:space-between;padding:.2rem .2rem .6rem;border-bottom:1px solid #dde3e8;margin-bottom:.4rem">
       <span style="font-family:var(--mono);font-size:.62rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent)">Kortlag</span>
       <button onclick="toggleLayerControl()" style="background:none;border:none;cursor:pointer;font-size:.9rem;color:#5a6b78;padding:.1rem .3rem;border-radius:4px" title="Luk">✕</button>
     </div>
     <button class="ctrl-btn active" id="btn-locate"   onclick="locateUser()">📍 Min placering</button>
-    <button class="ctrl-btn"        id="btn-badevand" onclick="showNearestBadevand()">🏖 Nærmeste badested</button>
     <button class="ctrl-btn active" id="btn-heat"     onclick="toggleHeat()">🌡 Bakterielt kort</button>
     <button class="ctrl-btn"        id="btn-viral"    onclick="toggleViral()">🧬 Viralt kort</button>
     <button class="ctrl-btn active" id="btn-pts"      onclick="togglePoints()">📍 Udløbspunkter</button>
@@ -3241,6 +3253,14 @@ function closeBadevandPanel() {
   history.pushState(null, '', window.location.pathname);
 }
 
+// Luk badevandspanel med ESC
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (document.getElementById('badevand-panel').classList.contains('open')) closeBadevandPanel();
+    else if (!document.getElementById('layer-control').classList.contains('collapsed')) toggleLayerControl();
+  }
+});
+
 async function showBadevandPanel(feature) {
   _currentBvFeature = feature;
   const p    = feature.properties || {};
@@ -3673,10 +3693,13 @@ setInterval(loadAll, 30 * 60 * 1000);
 // BOOT
 loadAll();
 loadVP3Layers();
-// Sikrer korrekt kortstørrelse ved første render
 setTimeout(() => map && map.invalidateSize(), 100);
-// Håndtér evt. deep-link URL (#badevand=...)
 setTimeout(handleHash, 1500);
+// Auto-dismiss kortforklaring efter 5 sekunder
+setTimeout(() => {
+  const h = document.getElementById('map-hint');
+  if (h) { h.classList.add('fade'); setTimeout(() => h?.remove(), 500); }
+}, 5000);
 registerSW().then(() => restorePushSubscription());
 </script>
 </body>
