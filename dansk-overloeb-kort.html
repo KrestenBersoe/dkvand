@@ -916,32 +916,8 @@
   #tab-hjem { position: relative; overflow: hidden; }
 
   /* Fuldskærms kort fylder hele panelet */
-  #hjem-map {
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-  }
 
   /* Status-chip i toppen oven på kortet */
-  #hjem-status-bar {
-    position: absolute;
-    top: .6rem; left: 50%; transform: translateX(-50%);
-    z-index: 10;
-    background: rgba(255,255,255,.92);
-    border: 1px solid var(--line);
-    border-radius: 20px;
-    padding: .35rem .85rem;
-    font-family: var(--mono);
-    font-size: .72rem;
-    color: var(--accent-dk);
-    display: flex;
-    align-items: center;
-    gap: .5rem;
-    box-shadow: var(--shadow);
-    backdrop-filter: blur(4px);
-    white-space: nowrap;
-    max-width: calc(100% - 2rem);
-  }
   #hjem-retry-btn {
     background: none;
     border: none;
@@ -952,65 +928,14 @@
   }
 
   /* GPS-afvist overlay centreret over kortet */
-  #hjem-no-gps {
-    position: absolute;
-    inset: 0;
-    z-index: 20;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: rgba(244,247,249,.88);
-    backdrop-filter: blur(6px);
-  }
 
-  .hjem-empty {
-    text-align: center;
-    padding: 2rem 1.5rem;
-    max-width: 320px;
-  }
   .hjem-empty .icon { font-size: 2.5rem; display: block; margin-bottom: .75rem; }
   .hjem-empty h3 { font-family: var(--mono); font-size: .95rem; color: var(--ink); margin-bottom: .5rem; }
   .hjem-empty p { font-size: .82rem; line-height: 1.6; color: var(--ink-soft); margin-bottom: .8rem; }
 
-  /* Bundpanel — swipe-op liste over nærmeste udløb */
-  #hjem-sheet {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    z-index: 10;
-    background: var(--paper);
-    border-radius: 16px 16px 0 0;
-    box-shadow: 0 -4px 20px rgba(26,39,51,.15);
-    max-height: 56px;            /* collapsed: shows only handle + header */
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-    transition: max-height .25s ease;
-  }
-  #hjem-sheet.expanded { max-height: 70vh; }
 
-  #hjem-sheet-handle {
-    width: 40px; height: 4px;
-    background: var(--line);
-    border-radius: 2px;
-    margin: .6rem auto .2rem;
-    cursor: pointer;
-    flex-shrink: 0;
-  }
 
-  #hjem-sheet-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: .3rem .9rem .5rem;
-    font-family: var(--mono);
-    font-size: .65rem;
-    font-weight: 600;
-    letter-spacing: .08em;
-    text-transform: uppercase;
-    color: var(--ink-soft);
-    flex-shrink: 0;
-    border-bottom: 1px solid var(--line-soft);
-  }
+
 
   #hjem-nearest-grid {
     overflow-y: auto;
@@ -1100,18 +1025,8 @@
     <!-- Warnings top-left (inside kort panel) -->
 
 
-    <!-- Right column: layer controls + location detail, single column no overlap -->
-<div id="right-col" style="display:none">
 
-  <!-- Controls er flyttet til #layer-control (flydende lag-menu) -->
 
-  <!-- Location detail panel -->
-  <div id="panel">
-    <div id="panel-header" style="display:none"></div>
-    <div id="panel-body"></div>
-  </div>
-
-</div>
 
 <!-- Legend bottom-left -->
 <div id="legend" class="collapsed">
@@ -1137,7 +1052,7 @@
 <div id="layer-control" class="collapsed">
   <button id="layer-toggle-btn" onclick="toggleLayerControl()" title="Kortlag">⊞</button>
   <div id="layer-body" onclick="toggleLayerControl()" style="cursor:pointer" title="Klik for at lukke">
-    <h4 style="font-family:var(--mono);font-size:.65rem;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:.55rem">Kortlag</h4>
+    <h4>Kortlag</h4>
     <button class="ctrl-btn active" id="btn-heat"    onclick="event.stopPropagation();toggleHeat()">🌡 Bakterielt kort</button>
     <button class="ctrl-btn"        id="btn-viral"   onclick="event.stopPropagation();toggleViral()">🧬 Viralt kort</button>
     <button class="ctrl-btn active" id="btn-pts"     onclick="event.stopPropagation();togglePoints()">📍 Udløbspunkter</button>
@@ -1920,7 +1835,6 @@ function renderMap() {
       dashArray:   risk !== null ? null : '3,3',
     });
 
-    marker.bindPopup(buildPopup(pt, risk, foreRisk), { maxWidth: 280 });
     marker.on('click', function(e) { if(window._LC) return; window._LC=true; setTimeout(()=>delete window._LC,50); closePointPanel(); closeBadevandPanel(); updatePanel(pt, risk, foreRisk); });
     pointsLayer.addLayer(marker);
 
@@ -1996,47 +1910,7 @@ function renderMap() {
   // Ingen auto-render af Hjem-panel — Hjem er erstattet af dette kort
 }
 
-function buildPopup(pt, risk, foreRisk) {
-  const rl  = riskLabel(risk);
-  const fr  = riskLabel(foreRisk);
-  const vrl = riskLabel(pt.viralScore || 0);
-  return `
-    <div class="popup-name" style="display:flex;justify-content:space-between;align-items:center">
-      <span>${escHtml(pt.name)}</span>
-      <span data-fav-id="${pt.id}" class="fav-btn" onclick="event.stopPropagation();toggleFav(${pt.id})"
-        title="Favorit">${isFav(pt.id)?'❤️':'🤍'}</span>
-    </div>
-    <div class="popup-row">
-      <span class="popup-key">Kommune</span>
-      <span>${escHtml(pt.municipality)}</span>
-    </div>
-    <div class="popup-row">
-      <span class="popup-key">Overløb/år</span>
-      <span>${pt.eventsPerYear.toFixed(0)}</span>
-    </div>
-    <div class="popup-row">
-      <span class="popup-key">Volumen/år</span>
-      <span>${formatL(pt.volumeM3Year)}/år</span>
-    </div>
-    <div class="popup-row">
-      <span class="popup-key">Nedbør 24h</span>
-      <span>${(pt.precipMM||0).toFixed(1)} mm</span>
-    </div>
-    <hr style="border-color:rgba(26,107,138,.2);margin:.4rem 0">
-    <div class="popup-row">
-      <span class="popup-key">Bakteriel risiko</span>
-      <span class="risk-chip ${rl.cls}">${rl.label} ${(risk*100).toFixed(0)}%</span>
-    </div>
-    <div class="popup-row">
-      <span class="popup-key">Viral risiko</span>
-      <span class="risk-chip ${vrl.cls}" style="border-color:#8b00ff">${vrl.label} ${((pt.viralScore||0)*100).toFixed(0)}%</span>
-    </div>
-    <div class="popup-row">
-      <span class="popup-key">24h prognose</span>
-      <span class="risk-chip ${fr.cls}">${fr.label} ${(foreRisk*100).toFixed(0)}%</span>
-    </div>
-  `;
-}
+
 
 
 function closePointPanel() {
@@ -3105,14 +2979,6 @@ function toggleLayerControl() {
   document.getElementById('layer-control').classList.toggle('collapsed');
 }
 
-// Luk lag-menu ved klik udenfor
-document.addEventListener('click', e => {
-  const lc = document.getElementById('layer-control');
-  if (lc && !lc.classList.contains('collapsed') && !lc.contains(e.target)) {
-    lc.classList.add('collapsed');
-  }
-});
-
 function toggleRightCol() {
   document.getElementById('right-col').classList.toggle('collapsed');
 }
@@ -3256,23 +3122,38 @@ function buildWeeklyChart(weekObs, fore, totalMM) {
 let _currentBvFeature = null;
 
 async function toggleBadevandFav() {
-  const btn  = document.getElementById('bv-fav-btn') || document.getElementById('bv-fav-btn2');
+  // Brug koordinater som unik nøgle for badevandslokalitet
   const p    = _currentBvFeature?.properties || {};
   const navn = p.pkt_navn || p.navn || 'Badevandslokalitet';
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Aktiverer…'; }
+  const geo  = _currentBvFeature?.geometry?.coordinates;
+  const favKey = geo ? `bv_${geo[1].toFixed(4)}_${geo[0].toFixed(4)}` : `bv_${navn}`;
+  
+  const btn  = document.getElementById('bv-fav-btn');
+  const isActive = btn && btn.textContent.includes('❤');
+  
+  if (isActive) {
+    // Afmeld
+    if (btn) { btn.textContent = '🤍'; }
+    showToast('💔 Fjernet fra favoritter');
+    return;
+  }
+  
+  // Tilmeld
+  if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
   try {
     await requestPushPermission();
+    if (btn) { btn.disabled = false; btn.textContent = '❤'; }
+    // Vis bekræftelse under hjertet
     document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
     const ok = document.createElement('div');
     ok.className = 'bv-notify-confirm';
-    ok.style.cssText = 'background:#edf7f0;border:1px solid #2d7d4f;border-radius:8px;padding:.65rem .9rem;font-size:.78rem;color:#1e5c39;margin-top:.6rem';
-    ok.innerHTML = `<strong>❤ ${escHtml(navn)}</strong><br>Gemt som favorit. Du modtager push-varsler ved høj overløbsrisiko.`;
+    ok.style.cssText = 'background:#edf7f0;border:1px solid #2d7d4f;border-radius:8px;padding:.6rem .9rem;font-size:.78rem;color:#1e5c39;margin-top:.6rem';
+    ok.innerHTML = `<strong>✅ ${escHtml(navn)}</strong><br>Du modtager varsler i denne browser.`;
     const body = document.getElementById('bv-body');
     if (body) body.insertBefore(ok, body.firstChild);
-    if (btn) { btn.textContent = '✅ Favorit + varsler aktiveret'; }
     showToast('❤️ ' + escHtml(navn) + ' — varsler aktiveret');
   } catch(e) {
-    if (btn) { btn.disabled = false; btn.textContent = '❤ Favorit + varsler'; }
+    if (btn) { btn.disabled = false; btn.textContent = '🤍'; }
     showToast('⚠️ Tillad notifikationer i browserindstillinger');
   }
 }
@@ -3314,8 +3195,10 @@ async function showBadevandPanel(feature) {
   document.getElementById('badevand-panel').classList.add('open');
   closePointPanel();
   // Opdater hjerte-ikon baseret på fav-status
+  // Nulstil hjerte og bekræftelse ved ny lokation
   const _bvBtn = document.getElementById('bv-fav-btn');
-  if (_bvBtn) _bvBtn.textContent = '🤍'; // nulstil — badevand har ikke direkte id i favSet
+  if (_bvBtn) { _bvBtn.textContent = '🤍'; _bvBtn.disabled = false; }
+  document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
   // Nulstil notifikationsknap for ny lokation
   const _nb = document.getElementById('bv-notify-btn');
   if (_nb) { _nb.disabled = false; _nb.textContent = '🔔 Modtag varsler'; }
@@ -3575,9 +3458,11 @@ async function loadVarselData() {
 
   // ── Brugerposition — direkte fra globale variable ─────────────────────
   // hjemUserLat/hjemUserLng sættes af locateUser() ved GPS-fix
-  const uLat = (typeof hjemUserLat === 'number') ? hjemUserLat : NaN;
-  const uLng = (typeof hjemUserLng === 'number') ? hjemUserLng : NaN;
-  const hasPos = !isNaN(uLat) && !isNaN(uLng);
+  // Brugerposition — GPS eller sessionStorage-fallback (fra tidligere session)
+  let uLat = (typeof hjemUserLat === 'number') ? hjemUserLat : parseFloat(sessionStorage.getItem('userLat') || '');
+  let uLng = (typeof hjemUserLng === 'number') ? hjemUserLng : parseFloat(sessionStorage.getItem('userLng') || '');
+  const hasPos = isFinite(uLat) && isFinite(uLng) && uLat !== 0 && uLng !== 0;
+  console.info('Varsler filter — hasPos:', hasPos, 'uLat:', uLat, 'uLng:', uLng, 'alarms:', alarms.length);
 
   // ── Filtrer og sortér ─────────────────────────────────────────────────
   let filtered, note;
