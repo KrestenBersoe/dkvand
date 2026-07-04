@@ -248,9 +248,11 @@ async function warmCache() {
   warmRunning = false;
 }
 
-// Warm on startup, then every 6h. ~165 PULS cells × 4/day = ~660 calls/day.
-setTimeout(warmCache, 2000);
-setInterval(warmCache, WEATHER_TTL_MS);  // WEATHER_TTL_MS = 6h
+// Opvarm ved opstart (2 forsøg: 2s og 10s) og derefter hvert 6. time.
+// To setTimeout-kald sikrer at opvarmning sker selvom det første fejler.
+setTimeout(() => warmCache().catch(e => console.warn('warmCache (2s):', e.message)), 2000);
+setTimeout(() => { if (weatherCache.size === 0) warmCache().catch(e => console.warn('warmCache (10s):', e.message)); }, 10000);
+setInterval(() => warmCache().catch(e => console.warn('warmCache (interval):', e.message)), WEATHER_TTL_MS);
 
 app.get('/api/weather', async (req, res) => {
   const lat = parseFloat(req.query.lat);
@@ -291,6 +293,12 @@ app.get('/api/weather', async (req, res) => {
 // Browser caches with max-age=3600 (matches server TTL).
 // ETag allows 304 Not Modified when data hasn't changed.
 app.get('/api/weather/all', (req, res) => {
+  // Start opvarmning straks hvis cachen er tom — robust mod manglende setTimeout
+  if (weatherCache.size === 0 && !warmRunning) {
+    console.log('Cache tom ved /api/weather/all — starter warmCache');
+    warmCache().catch(e => console.warn('warmCache fejl:', e.message));
+  }
+
   const out = {};
   let warm = 0, stale = 0;
 

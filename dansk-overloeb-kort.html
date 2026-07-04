@@ -2263,6 +2263,32 @@ async function loadAll() {
       console.warn('Weather /all fetch failed:', e.message);
     }
 
+    // ── Trin 2: POST /bulk med individuelle fetches hvis /all var tom ─────────
+    // Sker første gang server starter (warmCache ikke nået at køre endnu)
+    if (cellResults.size === 0) {
+      setLoader('Henter lokale vejrdata direkte fra DMI…');
+      try {
+        const res = await fetch('api/weather/bulk', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ cells: cellEntries.map(([, c]) => ({ lat: c.lat, lng: c.lng })) }),
+        });
+        if (res.ok) {
+          const warm   = parseInt(res.headers.get('X-Cache-Hits')   || '0');
+          const misses = parseInt(res.headers.get('X-Cache-Misses') || '0');
+          warmCoverage = warm / Math.max(warm + misses, 1);
+          const data = await res.json();
+          for (const [key] of cellEntries) {
+            const cell      = gridCells.get(key);
+            const serverKey = `${cell.lat.toFixed(4)}:${cell.lng.toFixed(4)}`;
+            if (data[serverKey]) cellResults.set(key, data[serverKey]);
+          }
+        }
+      } catch(e) {
+        console.warn('Weather /bulk fallback failed:', e.message);
+      }
+    }
+
     // Delvis dækning — opdater i baggrunden uden at påvirke brugeren
     if (warmCoverage < 0.8) {
       const retries = (loadAll._retries = (loadAll._retries || 0) + 1);
@@ -2288,13 +2314,14 @@ async function loadAll() {
 
     const hasWeather = overflowPoints.some(p => p.precipMM !== null);
 
-    if (!hasWeather) {
-      // Ingen vejrdata endnu — bliv i loader og prøv igen
-      const retryIn = 15;
-      setLoader(`Henter lokale vejrdata fra DMI… (forsøger igen om ${retryIn}s)`);
-      setTimeout(() => loadAll(), retryIn * 1000);
-      return;  // forbliv i loader — kald ikke renderMap eller showLoader(false)
+    if (!hasWeather && !loadAll._noWeatherShown) {
+      // Første gang uden vejrdata — vis midlertidig status og prøv igen
+      loadAll._noWeatherShown = true;
+      setLoader('Henter lokale vejrdata fra DMI… (ca. 15–30 sekunder)');
+      setTimeout(() => loadAll(), 8_000);
+      return;
     }
+    loadAll._noWeatherShown = false;
 
     renderMap();
     showCacheStatus();
