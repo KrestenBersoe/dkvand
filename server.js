@@ -702,7 +702,13 @@ async function fetchCMEMSCurrents() {
 loadPersistedCurrents();
 
 // Warm currents on startup and every 6h
-setTimeout(() => fetchCMEMSCurrents(), 5000);
+// Udsæt opvarmning til 30s efter opstart (var 5s) — giver Node-processen tid
+// til at stabilisere sig først, så en hukommelseskrævende CMEMS-hentning ikke
+// risikerer at vælte HELE appen i det mest sårbare tidsrum lige efter boot.
+// Fly.io reagerer på enhver OOM-hændelse ved at genstarte hele maskinen, så
+// selv om det kun er Python-processen der bruger meget hukommelse, går hele
+// appen ned med den, hvis det sker for tidligt i opstartsforløbet.
+setTimeout(() => fetchCMEMSCurrents(), 30000);
 setInterval(() => fetchCMEMSCurrents(), CURRENTS_TTL);
 
 // ── GET /api/currents — serve current vector grid ────────────────────────────
