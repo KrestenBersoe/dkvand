@@ -1611,16 +1611,25 @@ const map = L.map('map', {
 
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-// Light basemap — CARTO's gratis, nøglefri tile-CDN (samme OSM-data,
-// men beregnet til produktionsbrug). Skiftet fra rå tile.openstreetmap.org,
-// hvis Tile Usage Policy er blevet markant strammere (kræver nu Referer +
-// User-Agent-identifikation, og blokerer aggressivt ved "for mange kald" —
-// hvilket ramte os efter dagens intensive testing). OSM's egen dokumentation
-// fraråder eksplicit at bruge deres demo-tileserver til produktionsapps.
+// Light basemap — MapTiler (kræver gratis API-nøgle, sæt herunder).
+// Skiftet fra CARTO, hvis gratis rå tile-CDN nu OGSÅ er blevet indskrænket
+// (deres nyeste dokumentation nævner eksplicit at gratis brug kun gælder
+// "CARTO grantees" — kommerciel/produktionsbrug kræver Enterprise-licens).
+// Før det skiftede vi fra rå tile.openstreetmap.org af samme årsag (skærpet
+// Tile Usage Policy). Mønstret er klart: uautentificerede "gratis" tile-CDN'er
+// strammes ind uden varsel. En gratis API-nøgle er beskyttet af en reel
+// aftale/kvote i stedet, og er derfor markant mere stabil på sigt.
+//
+// OPSÆTNING (gøres kun én gang, på serveren — IKKE i denne fil):
+//   1. Opret gratis konto på https://www.maptiler.com/ (ingen kreditkort nødvendigt)
+//   2. Kopiér din API-nøgle fra kontrolpanelet
+//   3. Sæt den som Fly secret: fly secrets set MAPTILER_KEY=din-nøgle -a dkvand
+//   (server.js injicerer nøglen her ved serverering — se getHtmlWithKey())
+// Gratis niveau: 100.000 tile-visninger/måned — rigeligt til denne app.
+const MAPTILER_KEY = '__MAPTILER_KEY__';
 
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-  attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
-  subdomains: 'abcd',
+L.tileLayer(`https://api.maptiler.com/maps/basic-v2/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`, {
+  attribution: '© <a href="https://www.maptiler.com/copyright/">MapTiler</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
   maxZoom: 19
 }).addTo(map);
 
@@ -1638,9 +1647,8 @@ function initHjemMap() {
     zoom: 6,
     zoomControl: true,
   });
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-    attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
-    subdomains: 'abcd',
+  L.tileLayer(`https://api.maptiler.com/maps/basic-v2/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`, {
+    attribution: '© <a href="https://www.maptiler.com/copyright/">MapTiler</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
     maxZoom: 19
   }).addTo(hjemMap);
   hjemNearestLayer = L.layerGroup().addTo(hjemMap);

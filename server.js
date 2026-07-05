@@ -115,9 +115,26 @@ VP3_FILES.forEach(f => {
 // HTML: no-cache so the browser always revalidates with the server.
 // (Use a short max-age in production once stable; no-cache avoids stale-JS
 // confusion during active development.)
+//
+// MapTiler-nøglen injiceres her fra en Fly secret (MAPTILER_KEY) i stedet
+// for at ligge hardcoded i selve HTML-filen. Nøglen bliver stadig synlig i
+// browserens netværkstrafik og sidekilde — det er uundgåeligt, da kort-
+// tiles hentes direkte fra brugerens browser til MapTiler, ikke via denne
+// server — men denne tilgang holder den ude af selve kildekode-filerne, og
+// gør det muligt at rotere nøglen uden at redeploye HTML'en. Kombinér med
+// domænebegrænsning i MapTilers dashboard for reel beskyttelse mod misbrug.
+let _htmlCache = null;
+function getHtmlWithKey() {
+  if (_htmlCache) return _htmlCache;
+  const raw = fs.readFileSync(path.join(STATIC_DIR, 'dansk-overloeb-kort.html'), 'utf8');
+  const key = process.env.MAPTILER_KEY || '';
+  if (!key) console.warn('MAPTILER_KEY er ikke sat — kortet vil ikke kunne hente tiles. Kør: fly secrets set MAPTILER_KEY=din-nøgle');
+  _htmlCache = raw.replace(/__MAPTILER_KEY__/g, key);
+  return _htmlCache;
+}
 app.get(['/', '/dansk-overloeb-kort.html'], (req, res) => {
   res.set('Cache-Control', 'no-cache');
-  res.sendFile(path.join(STATIC_DIR, 'dansk-overloeb-kort.html'));
+  res.type('html').send(getHtmlWithKey());
 });
 
 // Service worker: never cache (must update immediately)
