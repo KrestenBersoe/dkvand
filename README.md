@@ -9,10 +9,28 @@ Miljøportalen og DMI's HARMONIE AROME 2 km nedbørsmodel via Open-Meteo.
 | Fil | Rolle |
 |-----|-------|
 | `server.js` | Node/Express-server: serverer appen + vejr-proxy med delt cache |
-| `package.json` | Afhængigheder (express) |
+| `fetch_currents.py` | Henter CMEMS-strømdata (uo/vo) via Copernicus Marine Toolbox, kaldes af `server.js` |
+| `requirements.txt` | Python-afhængigheder (`copernicusmarine`) |
+| `package.json` | Node-afhængigheder (express) |
 | `dansk-overloeb-kort.html` | Selve appen (kort, varsler, dokumentation) — ~85 KB |
 | `puls-data.json` | PULS-datasæt, 21.556 udløb — ~1 MB, cachet 1 år |
 | `overloeb-sw.js` | Service worker til push-notifikationer |
+
+## Strømdata (CMEMS)
+
+Badevands-risikoscoren justeres med en "opstrøms-vægt" baseret på den aktuelle
+strømretning i Østersøen/Kattegat, hentet fra CMEMS-datasættet
+`cmems_mod_bal_phy_cur_anfc_2.5km_PT1H-i`.
+
+Adgangen sker via den officielle **Copernicus Marine Toolbox**
+(`copernicusmarine`-pakken) i `fetch_currents.py`, som `server.js` kalder som
+en underproces og cacher i 6 timer. Tidligere blev CMEMS' OPeNDAP/THREDDS
+ASCII-output parset manuelt med regex direkte i Node — det er droppet til
+fordel for toolbox'en, som er langt mere robust overfor formatændringer.
+
+Kræver `CMEMS_USERNAME`/`CMEMS_PASSWORD` som miljøvariabler (Fly.io secrets).
+Uden dem falder `/api/currents` gracefully tilbage til `503` med
+`{"fallback": true}`, og appen fungerer stadig — bare uden strøm-justering.
 
 ## Kør lokalt
 

@@ -564,79 +564,55 @@ app.post('/api/push/send', async (req, res) => {
 // ── CMEMS Baltic Current Data ────────────────────────────────────────────────
 // Dataset: cmems_mod_bal_phy_cur_anfc_2.5km_PT1H-i
 // Variables: uo (eastward m/s), vo (northward m/s)
-// Auth: Basic Auth with CMEMS_USERNAME + CMEMS_PASSWORD (Fly.io secrets)
+// Auth: CMEMS_USERNAME + CMEMS_PASSWORD (Fly.io secrets)
 // Cache: 6 hours — currents change slowly relative to our use case
 //
-// Access strategy: OPeNDAP ASCII endpoint via THREDDS server.
-// Step 1: fetch .dds to discover dimension sizes and coordinate arrays
-// Step 2: fetch .ascii subset for uo + vo over Danish waters
+// Access strategy: delegeret til Python via den officielle Copernicus Marine
+// Toolbox (`copernicusmarine`-pakken, se fetch_currents.py). Den tidligere
+// version parsede OPeNDAP/THREDDS ASCII-output manuelt med regex, hvilket var
+// skrøbeligt overfor selv små formatændringer på THREDDS-serveren. Toolbox'en
+// håndterer autentificering, dataset-opslag og subsetting korrekt og er den
+// anbefalede adgangsvej til CMEMS-data.
 // Falls back to null gracefully — app works without currents data.
 
-const CMEMS_BASE    = 'https://nrt.cmems-du.eu/thredds/dodsC';
-const CMEMS_DATASET = 'cmems_mod_bal_phy_cur_anfc_2.5km_PT1H-i';
-const CURRENTS_TTL  = 6 * 3600 * 1000;
+const { execFile } = require('child_process');
+
+const CURRENTS_TTL   = 6 * 3600 * 1000;
+const PYTHON_SCRIPT  = path.join(__dirname, 'fetch_currents.py');
+const PYTHON_BIN     = process.env.PYTHON_BIN || 'python3';
+const PYTHON_TIMEOUT = 120 * 1000; // CMEMS-opslag kan tage tid
 
 let currentsCache = { ts: 0, grid: null, error: null };
 
-function cmemsFetch(url) {
+// Kør fetch_currents.py og parse JSON på stdout
+function runPythonFetch() {
   return new Promise((resolve, reject) => {
-    if (!process.env.CMEMS_USERNAME || !process.env.CMEMS_PASSWORD) {
-      return reject(new Error('CMEMS_USERNAME/PASSWORD not set'));
-    }
-    const auth = Buffer.from(
-      `${process.env.CMEMS_USERNAME}:${process.env.CMEMS_PASSWORD}`
-    ).toString('base64');
-
-    https.get(url, {
-      headers: { Authorization: `Basic ${auth}`, 'User-Agent': 'dkvand/1.0' }
-    }, res => {
-      if (res.statusCode === 401) { res.resume(); return reject(new Error('CMEMS auth failed')); }
-      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`CMEMS HTTP ${res.statusCode}`)); }
-      const chunks = [];
-      res.on('data', c => chunks.push(c));
-      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
-    }).on('error', reject);
+    execFile(
+      PYTHON_BIN,
+      [PYTHON_SCRIPT],
+      { timeout: PYTHON_TIMEOUT, maxBuffer: 32 * 1024 * 1024, env: process.env },
+      (err, stdout, stderr) => {
+        if (stderr && stderr.trim()) {
+          console.warn('fetch_currents.py stderr:', stderr.trim().slice(0, 500));
+        }
+        // Scriptet outputter altid gyldig JSON på stdout, også ved fejl
+        // ({"error": "..."}), så vi forsøger at parse uanset exit code.
+        let parsed;
+        try {
+          parsed = JSON.parse((stdout || '').trim());
+        } catch (parseErr) {
+          return reject(new Error(
+            err ? `python fejlede: ${err.message}` : `ugyldigt output: ${parseErr.message}`
+          ));
+        }
+        if (parsed.error) return reject(new Error(parsed.error));
+        resolve(parsed);
+      }
+    );
   });
 }
 
-// Parse OPeNDAP ASCII response into { lat, lng, uo, vo }[] array
-function parseOPeNDAPASCII(text, latArr, lonArr) {
-  const points = [];
-  // ASCII format: variable sections separated by blank lines
-  // Each section: name[idx1][idx2]...\nvalue, value, ...
-  const uoSection = text.match(/^uo\.(uo|data),?\n([\s\S]*?)(?=\nvo\.|$)/m);
-  const voSection = text.match(/^vo\.(vo|data),?\n([\s\S]*?)(?=\n[a-zA-Z]|$)/m);
-  if (!uoSection || !voSection) return null;
-
-  const parseGrid = (section) => {
-    const rows = [];
-    const lines = section[2].trim().split('\n');
-    for (const line of lines) {
-      const vals = line.trim().split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
-      if (vals.length) rows.push(...vals);
-    }
-    return rows;
-  };
-
-  const uoFlat = parseGrid(uoSection);
-  const voFlat = parseGrid(voSection);
-  if (!uoFlat.length || uoFlat.length !== voFlat.length) return null;
-
-  const nLon = lonArr.length;
-  for (let i = 0; i < latArr.length; i++) {
-    for (let j = 0; j < nLon; j++) {
-      const idx = i * nLon + j;
-      const uo  = uoFlat[idx];
-      const vo  = voFlat[idx];
-      if (isNaN(uo) || isNaN(vo)) continue;
-      if (Math.abs(uo) > 10 || Math.abs(vo) > 10) continue; // fill value sentinel
-      points.push({ lat: latArr[i], lng: lonArr[j], uo, vo });
-    }
-  }
-  return points;
-}
-
-// Build a fast lookup map: "lat4:lng4" → {uo, vo, speed, dir}
+// Build a fast lookup map: "lat2:lng2" → {uo, vo, speed, dir}
 function buildCurrentGrid(points) {
   const grid = new Map();
   for (const p of points) {
@@ -654,64 +630,15 @@ async function fetchCMEMSCurrents() {
   }
 
   try {
-    // Step 1: fetch DDS to discover dimension arrays
-    const ddsUrl = `${CMEMS_BASE}/${CMEMS_DATASET}.dds`;
-    const dds = await cmemsFetch(ddsUrl);
+    const result = await runPythonFetch();
+    if (!result.points || !result.points.length) throw new Error('Ingen strømpunkter modtaget');
 
-    // Extract dimension sizes from DDS
-    // Format: "Float32 uo[time = N][depth = D][lat = LAT][lon = LON];"
-    const latMatch = dds.match(/lat\s*=\s*(\d+)/);
-    const lonMatch = dds.match(/lon\s*=\s*(\d+)/);
-    if (!latMatch || !lonMatch) throw new Error('DDS parse failed');
-    const nLat = parseInt(latMatch[1]);
-    const nLon = parseInt(lonMatch[1]);
-
-    // Step 2: fetch coordinate arrays (lat, lon) to know exact values
-    const coordUrl = `${CMEMS_BASE}/${CMEMS_DATASET}.ascii?lat[0:1:${nLat-1}],lon[0:1:${nLon-1}]`;
-    const coordText = await cmemsFetch(coordUrl);
-
-    // Parse lat/lon arrays from ASCII
-    const latArr = coordText.match(/lat\.lat,?\n([\d\s.,\-]+)/)?.[1]
-      ?.trim().split(/[\s,]+/).map(Number).filter(v => !isNaN(v) && v >= 54 && v <= 58) || [];
-    const lonArr = coordText.match(/lon\.lon,?\n([\d\s.,\-]+)/)?.[1]
-      ?.trim().split(/[\s,]+/).map(Number).filter(v => !isNaN(v) && v >= 8 && v <= 15) || [];
-
-    if (!latArr.length || !lonArr.length) throw new Error('Coordinate parse failed');
-
-    // Find index ranges for Danish waters (54-58°N, 8-15°E)
-    const allLat = coordText.match(/lat\.lat,?\n([\d\s.,\-]+)/)?.[1]
-      ?.trim().split(/[\s,]+/).map(Number) || [];
-    const allLon = coordText.match(/lon\.lon,?\n([\d\s.,\-]+)/)?.[1]
-      ?.trim().split(/[\s,]+/).map(Number) || [];
-
-    const latStart = allLat.findIndex(v => v >= 54);
-    const latEnd   = allLat.findLastIndex(v => v <= 58);
-    const lonStart = allLon.findIndex(v => v >= 8);
-    const lonEnd   = allLon.findLastIndex(v => v <= 15);
-
-    if (latStart < 0 || lonStart < 0) throw new Error('No Danish waters in dataset');
-
-    // Step 3: fetch uo + vo for Danish waters, stride 2 (~5km)
-    const stride = 2;
-    const dataUrl = `${CMEMS_BASE}/${CMEMS_DATASET}.ascii?` +
-      `uo[0][0][${latStart}:${stride}:${latEnd}][${lonStart}:${stride}:${lonEnd}],` +
-      `vo[0][0][${latStart}:${stride}:${latEnd}][${lonStart}:${stride}:${lonEnd}]`;
-
-    const dataText = await cmemsFetch(dataUrl);
-
-    // Build lat/lon subarrays for these indices
-    const subLat = allLat.filter((v, i) => i >= latStart && i <= latEnd && (i - latStart) % stride === 0);
-    const subLon = allLon.filter((v, i) => i >= lonStart && i <= lonEnd && (i - lonStart) % stride === 0);
-
-    const points = parseOPeNDAPASCII(dataText, subLat, subLon);
-    if (!points || !points.length) throw new Error('No current data parsed');
-
-    const grid = buildCurrentGrid(points);
+    const grid = buildCurrentGrid(result.points);
     currentsCache = { ts: Date.now(), grid, error: null };
-    console.log(`CMEMS currents: ${points.length} points loaded`);
+    console.log(`CMEMS currents: ${result.points.length} punkter hentet via Python (${result.ts})`);
     return grid;
 
-  } catch(e) {
+  } catch (e) {
     console.warn('CMEMS currents fetch failed:', e.message);
     currentsCache = { ts: Date.now(), grid: null, error: e.message };
     return null;
