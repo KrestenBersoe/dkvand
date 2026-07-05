@@ -38,7 +38,7 @@ logging.basicConfig(
 # antal sekunder, fejler vi kontrolleret med en klar besked i stedet for at
 # hænge på ubestemt tid. Sat lavere end server.js' egen 120s execFile-timeout,
 # så VI når at levere en informativ fejl, før Node bare dræber processen.
-HARD_TIMEOUT_SECONDS = 90
+HARD_TIMEOUT_SECONDS = 150
 
 
 def _on_timeout(signum, frame):
@@ -91,8 +91,12 @@ DATASET_ID = "cmems_mod_bal_phy_anfc_PT1H-i"
 LAT_MIN, LAT_MAX = 54.0, 58.0
 LON_MIN, LON_MAX = 8.0, 15.0
 
-# Stride ~2 -> ca. 5 km opløsning, matcher tidligere implementering
-STRIDE = 2
+# Stride ~4 -> ca. 10 km opløsning. Sat op fra 2 (5 km), fordi selve
+# data-materialiseringen (.values) mod CMEMS' ARCO/zarr-backend viste sig at
+# være den langsomme del (>90s) — færre punkter betyder færre chunks at
+# hente over netværket. 10 km er stadig rigeligt fin opløsning til
+# opstrøms-vægtningen af badevandsrisiko.
+STRIDE = 4
 
 try:
     ds = copernicusmarine.open_dataset(

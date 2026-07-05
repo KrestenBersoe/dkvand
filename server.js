@@ -23,6 +23,7 @@ const express     = require('express');
 const compression = require('compression');
 const path        = require('path');
 const https       = require('https');
+const fs          = require('fs');
 const webpush     = require('web-push');
 
 // ── VAPID configuration ─────────────────────────────────────────────────────
@@ -577,12 +578,41 @@ app.post('/api/push/send', async (req, res) => {
 
 const { execFile } = require('child_process');
 
-const CURRENTS_TTL   = 6 * 3600 * 1000;
-const PYTHON_SCRIPT  = path.join(__dirname, 'fetch_currents.py');
-const PYTHON_BIN     = process.env.PYTHON_BIN || 'python3';
-const PYTHON_TIMEOUT = 120 * 1000; // CMEMS-opslag kan tage tid
+const CURRENTS_TTL       = 6 * 3600 * 1000;
+const PYTHON_SCRIPT      = path.join(__dirname, 'fetch_currents.py');
+const PYTHON_BIN         = process.env.PYTHON_BIN || 'python3';
+const PYTHON_TIMEOUT     = 180 * 1000; // CMEMS-opslag over Fly's netværk kan tage 100+ sek
+const CURRENTS_CACHE_FILE = path.join(__dirname, '.currents-cache.json');
 
-let currentsCache = { ts: 0, grid: null, error: null };
+let currentsCache          = { ts: 0, grid: null, error: null };
+let currentsRefreshInFlight = false;
+
+// ── Disk-persistens ───────────────────────────────────────────────────────
+// Fly.io autostopper maskinen ved inaktivitet og genstarter den ved næste
+// request. Uden persistens ville HVER genstart tvinge den første bruger til
+// at vente 100+ sekunder på et koldt CMEMS-opslag. Ved at gemme sidste
+// vellykkede resultat på disk (samme VM-filsystem, overlever autostop/start —
+// men ikke en fuld ny deploy) kan vi indlæse det øjeblikkeligt ved opstart
+// og opdatere i baggrunden i stedet.
+function loadPersistedCurrents() {
+  try {
+    const raw    = fs.readFileSync(CURRENTS_CACHE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.ts && Array.isArray(parsed.points) && parsed.points.length) {
+      currentsCache = { ts: parsed.ts, grid: buildCurrentGrid(parsed.points), error: null };
+      const ageMin = Math.round((Date.now() - parsed.ts) / 60000);
+      console.log(`CMEMS currents: indlæst ${parsed.points.length} punkter fra disk-cache (alder: ${ageMin} min)`);
+    }
+  } catch (e) {
+    // Helt normalt ved allerførste deploy — ingen disk-cache endnu
+  }
+}
+
+function persistCurrentsToDisk(points, ts) {
+  fs.writeFile(CURRENTS_CACHE_FILE, JSON.stringify({ ts, points }), (err) => {
+    if (err) console.warn('Kunne ikke skrive strøm-cache til disk:', err.message);
+  });
+}
 
 // Kør fetch_currents.py og parse JSON på stdout
 function runPythonFetch() {
@@ -624,26 +654,52 @@ function buildCurrentGrid(points) {
   return grid;
 }
 
-async function fetchCMEMSCurrents() {
-  if (currentsCache.grid && Date.now() - currentsCache.ts < CURRENTS_TTL) {
-    return currentsCache.grid;
-  }
-
+// Selve netværkskaldet — altid asynkront, opdaterer cache + disk ved succes,
+// beholder eksisterende (forældede) cache ved fejl i stedet for at nulstille.
+async function refreshCurrentsNow() {
   try {
     const result = await runPythonFetch();
     if (!result.points || !result.points.length) throw new Error('Ingen strømpunkter modtaget');
 
-    const grid = buildCurrentGrid(result.points);
-    currentsCache = { ts: Date.now(), grid, error: null };
+    const ts = Date.now();
+    currentsCache = { ts, grid: buildCurrentGrid(result.points), error: null };
+    persistCurrentsToDisk(result.points, ts);
     console.log(`CMEMS currents: ${result.points.length} punkter hentet via Python (${result.ts})`);
-    return grid;
-
   } catch (e) {
     console.warn('CMEMS currents fetch failed:', e.message);
-    currentsCache = { ts: Date.now(), grid: null, error: e.message };
-    return null;
+    if (currentsCache.grid) {
+      console.warn('Beholder forældet strøm-cache pga. fejlet opdatering');
+    } else {
+      currentsCache = { ts: Date.now(), grid: null, error: e.message };
+    }
   }
+  return currentsCache.grid;
 }
+
+function triggerBackgroundRefresh() {
+  if (currentsRefreshInFlight) return;
+  currentsRefreshInFlight = true;
+  refreshCurrentsNow().finally(() => { currentsRefreshInFlight = false; });
+}
+
+// Stale-while-revalidate: frisk cache → returnér med det samme.
+// Forældet men til stede (fx indlæst fra disk efter genstart) → returnér
+// med det samme OG trigger en baggrunds-opdatering, uden at blokere kalderen.
+// Ingen cache overhovedet (kun ved allerførste kolde deploy) → vent synkront.
+async function fetchCMEMSCurrents() {
+  const isFresh = currentsCache.grid && (Date.now() - currentsCache.ts < CURRENTS_TTL);
+  if (isFresh) return currentsCache.grid;
+
+  if (currentsCache.grid) {
+    triggerBackgroundRefresh();
+    return currentsCache.grid;
+  }
+
+  return refreshCurrentsNow();
+}
+
+// Indlæs evt. tidligere gemte strømdata synkront ved opstart, før noget andet
+loadPersistedCurrents();
 
 // Warm currents on startup and every 6h
 setTimeout(() => fetchCMEMSCurrents(), 5000);
@@ -660,8 +716,9 @@ app.get('/api/currents', async (req, res) => {
   }
   const out = {};
   for (const [key, val] of grid) out[key] = val;
+  const ageMinutes = Math.round((Date.now() - currentsCache.ts) / 60000);
   res.set('Cache-Control', 'public, max-age=21600');
-  res.json({ ts: currentsCache.ts, points: out });
+  res.json({ ts: currentsCache.ts, ageMinutes, stale: ageMinutes > 360, points: out });
 });
 
 // ── GET /api/debug additions ──────────────────────────────────────────────────
