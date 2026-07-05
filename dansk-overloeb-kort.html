@@ -309,19 +309,19 @@
     max-height: calc(100vh - 260px);
   }
 
-  #point-panel-body .label {
+  #panel-body .label {
     font-family: var(--mono);
     font-size: .65rem;
-    color: #5a6b78;
+    color: var(--ink-soft);
     text-transform: uppercase;
     letter-spacing: .06em;
     margin-top: .6rem;
   }
 
-  #point-panel-body .value {
+  #panel-body .value {
     font-size: .9rem;
     font-weight: 600;
-    color: #1a2733;
+    color: var(--ink);
   }
 
   .risk-chip {
@@ -374,14 +374,12 @@
   #legend.collapsed #legend-body   { display: none; }
 
 
-  /* ═══ #lag — kortlagsvælger, samme side og mønster som #legend ═══ */
-  /* Placeret ved siden af #legend (venstre) — ALDRIG i højre side hvor
-     Leaflets +/- zoomknapper sidder (position: 'bottomright'). */
+  /* ═══ #lag — kortlagsvælger, samme mønster som #legend ═══ */
   #lag {
-    position: absolute;
+    position: fixed;
     bottom: 30px;
-    left: 60px;
-    z-index: 900;
+    right: 14px;
+    z-index: 9000;
     font-size: .72rem;
   }
   #lag-btn {
@@ -853,8 +851,8 @@
       font-size: .88rem;          /* var fra .78rem */
       line-height: 1.65;
     }
-    #point-panel-body .label { font-size: .72rem; }   /* var fra .65rem */
-    #point-panel-body .value { font-size: 1rem; }
+    #panel-body .label { font-size: .72rem; }   /* var fra .65rem */
+    #panel-body .value { font-size: 1rem; }
 
     /* Popup-tekst */
     .leaflet-popup-content { font-size: .88rem; }
@@ -864,8 +862,6 @@
     /* Legende: altid collapsible på mobil */
     #legend { bottom: auto; top: 60px; left: 8px; font-size: .78rem; }
     #legend-body { max-width: calc(100vw - 32px); }
-    #lag { bottom: auto; top: 60px; left: 54px; font-size: .78rem; }
-    #lag-body { max-width: calc(100vw - 90px); }
 
     #warnings { display: none; }
     .leaflet-top.leaflet-left { top: 8px; }
@@ -1068,23 +1064,7 @@
   </div>
 </div>
 
-<!-- Kortlagsvælger — samme side som Signaturforklaring, aldrig over zoomknapperne (bottomright) -->
-<div id="lag" class="collapsed">
-  <button id="lag-btn" onclick="toggleLag()" title="Kortlag">⊞</button>
-  <div id="lag-body" onclick="toggleLag()" style="cursor:pointer" title="Klik for at lukke">
-    <h4>Kortlag</h4>
-    <button class="ctrl-btn active" id="btn-heat"    onclick="event.stopPropagation();toggleHeat()">🌡 Bakterielt kort</button>
-    <button class="ctrl-btn"        id="btn-viral"   onclick="event.stopPropagation();toggleViral()">🧬 Viralt kort</button>
-    <button class="ctrl-btn active" id="btn-pts"     onclick="event.stopPropagation();togglePoints()">📍 Udløbspunkter</button>
-    <button class="ctrl-btn"        id="btn-fore"    onclick="event.stopPropagation();toggleForecast()">⚡ 24h Varsling</button>
-    <button class="ctrl-btn active" id="btn-vp3kyst" onclick="event.stopPropagation();toggleVP3Kyst()">🌊 Kystvande</button>
-    <button class="ctrl-btn active" id="btn-vp3bade" onclick="event.stopPropagation();toggleVP3Bade()">🏖 Badevandsområder</button>
-    <button class="ctrl-btn"        id="btn-vp3rbu"  onclick="event.stopPropagation();toggleVP3Rbu()">🔴 RBU-punkter</button>
-    <hr style="border-color:rgba(26,107,138,.2);margin:.4rem 0">
-    <button class="ctrl-btn" onclick="event.stopPropagation();locateUser()">📍 Min placering</button>
-    <button class="ctrl-btn" onclick="event.stopPropagation();refreshData()">↻ Opdater</button>
-  </div>
-</div>
+
 
   </div><!-- /tab-kort -->
 
@@ -1949,11 +1929,8 @@ function updatePanel(pt, risk, foreRisk) {
     : pt.quality===2 ? '⚠️ Estimeret'
     : '❌ Utilstrækkelige data';
 
-  const displayName = pt.name && pt.name.trim()
-    ? pt.name
-    : (pt.waterArea ? `Udløb · ${pt.waterArea}` : `Udløb #${pt.id}`);
   document.getElementById('point-panel-title').innerHTML =
-    `${escHtml(displayName)} <span data-fav-id="${pt.id}" class="fav-btn"
+    `${escHtml(pt.name)} <span data-fav-id="${pt.id}" class="fav-btn"
       onclick="event.stopPropagation();toggleFav(${pt.id})" title="Favorit">${isFav(pt.id)?'❤️':'🤍'}</span>`;
   document.getElementById('point-panel').classList.add('open');
   document.getElementById('point-panel-body').innerHTML = `
@@ -2295,7 +2272,75 @@ function toggleVP3Rbu() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// VP3 RISIKOFARVE — kystvand-polygoner + badevandspunkter
+// STRØMDATA — CMEMS Baltic Current Model
+// uo = østgående strøm (m/s), vo = nordgående strøm (m/s)
+// Opdateres hvert 6. time fra server-cache
+// ═══════════════════════════════════════════════════════════════════════════
+let currentsGrid = null;   // Map: "lat2:lng2" → {uo, vo, speed, dir}
+let currentsTs   = 0;
+
+async function loadCurrents() {
+  try {
+    const res = await fetch('api/currents');
+    if (!res.ok) {
+      console.info('Strømdata ikke tilgængeligt:', res.status);
+      return;
+    }
+    const data = await res.json();
+    if (data.fallback) { console.info('Strømdata: fallback (CMEMS utilgængeligt)'); return; }
+    currentsGrid = new Map(Object.entries(data.points || {}));
+    currentsTs   = data.ts || Date.now();
+    console.info(`Strømdata: ${currentsGrid.size} punkter loaded`);
+  } catch(e) {
+    console.warn('loadCurrents fejl:', e.message);
+  }
+}
+
+// Find nærmeste strømpunkt til en koordinat (2° lookup-nøgle)
+function getCurrentAt(lat, lng) {
+  if (!currentsGrid || currentsGrid.size === 0) return null;
+  // Søg nærmeste punkt indenfor 1.5°
+  const roundedKey = `${(Math.round(lat * 2) / 2).toFixed(2)}:${(Math.round(lng * 2) / 2).toFixed(2)}`;
+  if (currentsGrid.has(roundedKey)) return currentsGrid.get(roundedKey);
+  // Fallback: linear search for nearest
+  let minDist = Infinity, nearest = null;
+  for (const [k, v] of currentsGrid) {
+    const [kLat, kLng] = k.split(':').map(Number);
+    const d = Math.hypot(kLat - lat, kLng - lng);
+    if (d < minDist) { minDist = d; nearest = v; }
+    if (minDist < 0.3) break;
+  }
+  return minDist < 1.5 ? nearest : null;
+}
+
+// Beregn "opstrøms-vægt" — hvor meget påvirker et udløb badevandslokationen
+// baseret på aktuel strømretning.
+// Returnerer 0.0–1.0:
+//   1.0 = strømmen løber direkte fra udløbet mod stranden
+//   0.5 = ingen strøminformation / svag strøm
+//   0.0 = strømmen løber fra stranden mod udløbet (fortynder væk)
+function upstreamWeight(outletLat, outletLng, beachLat, beachLng) {
+  const current = getCurrentAt((outletLat + beachLat) / 2, (outletLng + beachLng) / 2);
+  if (!current || current.speed < 0.05) return 0.5; // svag/ingen strøm
+
+  // Vektor fra udløb → strand (normaliseret)
+  const dlat = beachLat - outletLat;
+  const dlng = beachLng - outletLng;
+  const dist = Math.hypot(dlat, dlng);
+  if (dist === 0) return 1.0;
+  const nx = dlng / dist;  // østlig komponent af udløb→strand
+  const ny = dlat / dist;  // nordlig komponent af udløb→strand
+
+  // Prikprodukt med strømvektor (uo=øst, vo=nord)
+  const dot = (current.uo * nx + current.vo * ny) / current.speed;
+  // dot = +1: strøm går direkte mod strand → høj påvirkning
+  // dot = -1: strøm går direkte fra strand → lav påvirkning
+
+  // Map [-1, 1] → [0.15, 1.0] — selv modstrøms udløb har lidt påvirkning
+  return 0.15 + 0.85 * Math.max(0, (dot + 1) / 2);
+}
+
+
 //
 // Kystvand:   farves efter max-risiko fra PULS-udløb med matching waterArea
 // Badevand:   farves efter (1) nærmeste PULS-udløb inden for 15 km og
@@ -2396,11 +2441,14 @@ function colorBadevandByRisk() {
     catch(e) { return; }
 
     // (a) Direkte spatiel søgning: nærmeste PULS-udløb inden for 15 km
+    // Justér risiko med strøm-opstrøms-vægt (0.15–1.0)
     let pulsRisk = null;
     overflowPoints.forEach(pt => {
       if (pt.riskScore === null) return;
       if (Math.abs(pt.lat - ll.lat) > MAX_DEG || Math.abs(pt.lng - ll.lng) > MAX_DEG) return;
-      if (pulsRisk === null || pt.riskScore > pulsRisk) pulsRisk = pt.riskScore;
+      const w = upstreamWeight(pt.lat, pt.lng, ll.lat, ll.lng);
+      const adjustedRisk = pt.riskScore * w;
+      if (pulsRisk === null || adjustedRisk > pulsRisk) pulsRisk = adjustedRisk;
     });
 
     // (b) Fallback: nærmeste kystvand-polygon
@@ -2670,36 +2718,25 @@ let _favSet = new Set();
 
 function isFav(id) { return _favSet.has(String(id)); }
 
-// Generic persistence helpers — shared by outfall points (numeric id) and
-// badevand locations (string key "bv_<lat>_<lng>"), so both actually end up
-// in the SAME store and both show up under Varsler → Favoritter.
-async function setFavKey(key, meta) {
-  const db = await openFavDb();
-  await new Promise((res, rej) => {
-    const req = db.transaction(STORE_FAVS, 'readwrite').objectStore(STORE_FAVS).put(meta, key);
-    req.onsuccess = res; req.onerror = e => rej(e.target.error);
-  });
-  _favSet.add(key);
-}
-
-async function removeFavKey(key) {
-  const db = await openFavDb();
-  await new Promise((res, rej) => {
-    const req = db.transaction(STORE_FAVS, 'readwrite').objectStore(STORE_FAVS).delete(key);
-    req.onsuccess = res; req.onerror = e => rej(e.target.error);
-  });
-  _favSet.delete(key);
-}
-
 async function toggleFav(id) {
   const key = String(id);
+  const db  = await openFavDb();
   if (_favSet.has(key)) {
-    await removeFavKey(key);
+    _favSet.delete(key);
+    await new Promise((res,rej) => {
+      const req = db.transaction(STORE_FAVS,'readwrite').objectStore(STORE_FAVS).delete(key);
+      req.onsuccess = res; req.onerror = rej;
+    });
     showToast('💔 Fjernet fra favoritter');
     await syncPushSubscription();  // update server
   } else {
+    _favSet.add(key);
     const pt = overflowPoints.find(p => String(p.id) === key);
-    await setFavKey(key, { type: 'udloeb', name: pt?.name, municipality: pt?.municipality });
+    await new Promise((res,rej) => {
+      const req = db.transaction(STORE_FAVS,'readwrite').objectStore(STORE_FAVS)
+                    .put({ name: pt?.name, municipality: pt?.municipality }, key);
+      req.onsuccess = res; req.onerror = rej;
+    });
     showToast('❤️ Tilføjet til favoritter');
     await requestPushPermission();
     await syncPushSubscription();  // update server with new favourite
@@ -3186,32 +3223,21 @@ async function toggleBadevandFav() {
   const navn = p.pkt_navn || p.navn || 'Badevandslokalitet';
   const geo  = _currentBvFeature?.geometry?.coordinates;
   const favKey = geo ? `bv_${geo[1].toFixed(4)}_${geo[0].toFixed(4)}` : `bv_${navn}`;
-
-  const btn      = document.getElementById('bv-fav-btn');
-  const isActive = isFav(favKey);
-
+  
+  const btn  = document.getElementById('bv-fav-btn');
+  const isActive = btn && btn.textContent.includes('❤');
+  
   if (isActive) {
-    // Afmeld — fjern permanent fra favorit-store
-    try { await removeFavKey(favKey); } catch(e) {}
+    // Afmeld
     if (btn) { btn.textContent = '🤍'; }
-    document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
     showToast('💔 Fjernet fra favoritter');
-    await syncPushSubscription();
     return;
   }
-
-  // Tilmeld — gem permanent i favorit-store, så lokationen dukker op under
-  // Varsler → Favoritter og overlever en genindlæsning af siden.
+  
+  // Tilmeld
   if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
   try {
     await requestPushPermission();
-    await setFavKey(favKey, {
-      type: 'badevand',
-      name: navn,
-      municipality: p.komm_navn || p.komm || '',
-      lat: geo ? geo[1] : null,
-      lng: geo ? geo[0] : null
-    });
     if (btn) { btn.disabled = false; btn.textContent = '❤'; }
     // Vis bekræftelse under hjertet
     document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
@@ -3222,7 +3248,6 @@ async function toggleBadevandFav() {
     const body = document.getElementById('bv-body');
     if (body) body.insertBefore(ok, body.firstChild);
     showToast('❤️ ' + escHtml(navn) + ' — varsler aktiveret');
-    await syncPushSubscription();
   } catch(e) {
     if (btn) { btn.disabled = false; btn.textContent = '🤍'; }
     showToast('⚠️ Tillad notifikationer i browserindstillinger');
@@ -3265,22 +3290,15 @@ async function showBadevandPanel(feature) {
   document.getElementById('bv-chart-wrap').innerHTML = '<div style="padding:.5rem 0;color:#5a6b78;font-size:.8rem">Indlæser vejrdata…</div>';
   document.getElementById('badevand-panel').classList.add('open');
   closePointPanel();
-  // Opdater hjerte-ikon baseret på faktisk gemt fav-status for DENNE lokation
-  const _favKey = latlng ? `bv_${latlng.lat.toFixed(4)}_${latlng.lng.toFixed(4)}` : `bv_${navn}`;
+  // Opdater hjerte-ikon baseret på fav-status
+  // Nulstil hjerte og bekræftelse ved ny lokation
   const _bvBtn = document.getElementById('bv-fav-btn');
-  if (_bvBtn) { _bvBtn.textContent = isFav(_favKey) ? '❤' : '🤍'; _bvBtn.disabled = false; }
+  if (_bvBtn) { _bvBtn.textContent = '🤍'; _bvBtn.disabled = false; }
   document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
-  if (isFav(_favKey)) {
-    const ok = document.createElement('div');
-    ok.className = 'bv-notify-confirm';
-    ok.style.cssText = 'background:#edf7f0;border:1px solid #2d7d4f;border-radius:8px;padding:.6rem .9rem;font-size:.78rem;color:#1e5c39;margin-top:.6rem';
-    ok.innerHTML = `<strong>✅ ${escHtml(navn)}</strong><br>Du modtager varsler i denne browser.`;
-    const body = document.getElementById('bv-body');
-    if (body) body.insertBefore(ok, body.firstChild);
-  }
   // Nulstil notifikationsknap for ny lokation
   const _nb = document.getElementById('bv-notify-btn');
   if (_nb) { _nb.disabled = false; _nb.textContent = '🔔 Modtag varsler'; }
+  document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
 
   // Nulstil risikobarer
   ['bv-bact-bar','bv-viral-bar','bv-total-bar'].forEach(id => {
@@ -3483,8 +3501,13 @@ function goToPoint(id) {
 }
 
 async function removeVarselFav(id) {
+  if (!_favDb) return;
   try {
-    await removeFavKey(String(id));
+    await new Promise((res, rej) => {
+      const req = _favDb.transaction(STORE_FAVS, 'readwrite').objectStore(STORE_FAVS).delete(String(id));
+      req.onsuccess = res; req.onerror = rej;
+    });
+    _favSet.delete(String(id));
     refreshFavIcons();
     loadVarselData();
   } catch(e) {}
@@ -3606,20 +3629,14 @@ async function loadVarselData() {
 
   // ── Favoritter ──────────────────────────────────────────────────────────
   try {
-    const _fdb = await openFavDb();
-    const favKeys = await dbGetAllKeys(_fdb, STORE_FAVS);
+    const favKeys = await dbGetAllKeys(_favDb, STORE_FAVS);
     if (favCount) favCount.textContent = favKeys.length;
     favGrid.innerHTML = '';
     if (!favKeys.length) {
-      favGrid.innerHTML = '<div class="v-empty"><span class="icon">🤍</span>Ingen favoritter endnu — klik 🤍 på et udløbspunkt eller ❤ på en badevandslokalitet</div>';
+      favGrid.innerHTML = '<div class="v-empty"><span class="icon">🤍</span>Ingen favoritter endnu — klik 🤍 på et udløbspunkt</div>';
     } else {
       for (const key of favKeys) {
-        const rec = await dbGet_fav(key);
-        if (rec && rec.type === 'badevand') {
-          // Badevandslokalitet — separat kort, kan ikke bruge udløbs-kortet
-          favGrid.appendChild(buildBadevandFavCard(key, rec));
-          continue;
-        }
+        const rec  = await dbGet_fav(key);
         const live = (overflowPoints||[]).find(p => String(p.id) === String(key));
         const pt   = live
           ? { ...live, foreRisk: live.foreRisk || 0 }
@@ -3631,59 +3648,10 @@ async function loadVarselData() {
   } catch(e) { if (favGrid) favGrid.innerHTML = '<div class="v-empty">Fejl ved indlæsning af favoritter</div>'; }
 }
 
-// Favorit-kort for en badevandslokalitet (adskilt fra buildVarselCard, som
-// forventer et numerisk udløbspunkt-id og PULS-felter).
-function buildBadevandFavCard(key, rec) {
-  const div = document.createElement('div');
-  div.className = 'alarm-card';
-  const navn = escHtml(rec.name || 'Badevandslokalitet');
-  const komm = escHtml(rec.municipality || '');
-  div.innerHTML = `
-    <div class="card-top">
-      <div>
-        <div class="card-name">🏖 ${navn}</div>
-        <div class="card-sub">${komm}</div>
-      </div>
-      <span class="fav-btn" onclick="removeBadevandFav('${key}')" title="Fjern favorit">❤️</span>
-    </div>
-    <div class="card-actions" style="margin-top:.5rem">
-      <button class="ctrl-btn" style="font-size:.65rem" onclick="goToBadevand(${rec.lat},${rec.lng})">Vis badevand →</button>
-    </div>
-  `;
-  return div;
-}
-
-async function removeBadevandFav(key) {
-  try {
-    await removeFavKey(key);
-    loadVarselData();
-    showToast('💔 Fjernet fra favoritter');
-  } catch(e) {}
-}
-
-// Naviger til en badevandslokalitet ud fra gemte koordinater
-function goToBadevand(lat, lng) {
-  if (lat == null || lng == null) return;
-  switchTab('kort');
-  setTimeout(() => {
-    if (!vp3BadevandLayer) return;
-    let minDist = Infinity, nearest = null;
-    vp3BadevandLayer.eachLayer(layer => {
-      try {
-        const ll = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter();
-        const d  = hjemHaversine(lat, lng, ll.lat, ll.lng);
-        if (d < minDist) { minDist = d; nearest = layer.feature; }
-      } catch(e) {}
-    });
-    if (nearest) { map.setView([lat, lng], 14); showBadevandPanel(nearest); }
-  }, 60);
-}
-
 
 async function dbGet_fav(key) {
-  const db = await openFavDb();
   return new Promise((res, rej) => {
-    const req = db.transaction(STORE_FAVS, 'readonly').objectStore(STORE_FAVS).get(String(key));
+    const req = _favDb.transaction(STORE_FAVS, 'readonly').objectStore(STORE_FAVS).get(String(key));
     req.onsuccess = () => res(req.result ?? null);
     req.onerror   = e => rej(e.target.error);
   });
@@ -3746,6 +3714,7 @@ setInterval(loadAll, 30 * 60 * 1000);
 // BOOT
 loadAll();
 loadVP3Layers();
+loadCurrents();   // CMEMS strømdata — bruges til badevandsvurdering
 setTimeout(() => map && map.invalidateSize(), 100);
 setTimeout(handleHash, 1500);
 // Auto-dismiss kortforklaring efter 5 sekunder
@@ -3825,6 +3794,23 @@ registerSW().then(() => restorePushSubscription());
 
     </div>
 
+  </div>
+</div>
+
+<div id="lag" class="collapsed">
+  <button id="lag-btn" onclick="toggleLag()" title="Kortlag">⊞</button>
+  <div id="lag-body" onclick="toggleLag()" style="cursor:pointer" title="Klik for at lukke">
+    <h4>Kortlag</h4>
+    <button class="ctrl-btn active" id="btn-heat"    onclick="event.stopPropagation();toggleHeat()">🌡 Bakterielt kort</button>
+    <button class="ctrl-btn"        id="btn-viral"   onclick="event.stopPropagation();toggleViral()">🧬 Viralt kort</button>
+    <button class="ctrl-btn active" id="btn-pts"     onclick="event.stopPropagation();togglePoints()">📍 Udløbspunkter</button>
+    <button class="ctrl-btn"        id="btn-fore"    onclick="event.stopPropagation();toggleForecast()">⚡ 24h Varsling</button>
+    <button class="ctrl-btn active" id="btn-vp3kyst" onclick="event.stopPropagation();toggleVP3Kyst()">🌊 Kystvande</button>
+    <button class="ctrl-btn active" id="btn-vp3bade" onclick="event.stopPropagation();toggleVP3Bade()">🏖 Badevandsområder</button>
+    <button class="ctrl-btn"        id="btn-vp3rbu"  onclick="event.stopPropagation();toggleVP3Rbu()">🔴 RBU-punkter</button>
+    <hr style="border-color:rgba(26,107,138,.2);margin:.4rem 0">
+    <button class="ctrl-btn" onclick="event.stopPropagation();locateUser()">📍 Min placering</button>
+    <button class="ctrl-btn" onclick="event.stopPropagation();refreshData()">↻ Opdater</button>
   </div>
 </div>
 </body>

@@ -561,7 +561,184 @@ app.post('/api/push/send', async (req, res) => {
   res.json({ ok: true, subscribers: pushSubscriptions.size });
 });
 
-// ── GET /api/debug — cache diagnostics ───────────────────────────────────────
+// ── CMEMS Baltic Current Data ────────────────────────────────────────────────
+// Dataset: cmems_mod_bal_phy_cur_anfc_2.5km_PT1H-i
+// Variables: uo (eastward m/s), vo (northward m/s)
+// Auth: Basic Auth with CMEMS_USERNAME + CMEMS_PASSWORD (Fly.io secrets)
+// Cache: 6 hours — currents change slowly relative to our use case
+//
+// Access strategy: OPeNDAP ASCII endpoint via THREDDS server.
+// Step 1: fetch .dds to discover dimension sizes and coordinate arrays
+// Step 2: fetch .ascii subset for uo + vo over Danish waters
+// Falls back to null gracefully — app works without currents data.
+
+const CMEMS_BASE    = 'https://nrt.cmems-du.eu/thredds/dodsC';
+const CMEMS_DATASET = 'cmems_mod_bal_phy_cur_anfc_2.5km_PT1H-i';
+const CURRENTS_TTL  = 6 * 3600 * 1000;
+
+let currentsCache = { ts: 0, grid: null, error: null };
+
+function cmemsFetch(url) {
+  return new Promise((resolve, reject) => {
+    if (!process.env.CMEMS_USERNAME || !process.env.CMEMS_PASSWORD) {
+      return reject(new Error('CMEMS_USERNAME/PASSWORD not set'));
+    }
+    const auth = Buffer.from(
+      `${process.env.CMEMS_USERNAME}:${process.env.CMEMS_PASSWORD}`
+    ).toString('base64');
+
+    https.get(url, {
+      headers: { Authorization: `Basic ${auth}`, 'User-Agent': 'dkvand/1.0' }
+    }, res => {
+      if (res.statusCode === 401) { res.resume(); return reject(new Error('CMEMS auth failed')); }
+      if (res.statusCode !== 200) { res.resume(); return reject(new Error(`CMEMS HTTP ${res.statusCode}`)); }
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    }).on('error', reject);
+  });
+}
+
+// Parse OPeNDAP ASCII response into { lat, lng, uo, vo }[] array
+function parseOPeNDAPASCII(text, latArr, lonArr) {
+  const points = [];
+  // ASCII format: variable sections separated by blank lines
+  // Each section: name[idx1][idx2]...\nvalue, value, ...
+  const uoSection = text.match(/^uo\.(uo|data),?\n([\s\S]*?)(?=\nvo\.|$)/m);
+  const voSection = text.match(/^vo\.(vo|data),?\n([\s\S]*?)(?=\n[a-zA-Z]|$)/m);
+  if (!uoSection || !voSection) return null;
+
+  const parseGrid = (section) => {
+    const rows = [];
+    const lines = section[2].trim().split('\n');
+    for (const line of lines) {
+      const vals = line.trim().split(',').map(v => parseFloat(v.trim())).filter(v => !isNaN(v));
+      if (vals.length) rows.push(...vals);
+    }
+    return rows;
+  };
+
+  const uoFlat = parseGrid(uoSection);
+  const voFlat = parseGrid(voSection);
+  if (!uoFlat.length || uoFlat.length !== voFlat.length) return null;
+
+  const nLon = lonArr.length;
+  for (let i = 0; i < latArr.length; i++) {
+    for (let j = 0; j < nLon; j++) {
+      const idx = i * nLon + j;
+      const uo  = uoFlat[idx];
+      const vo  = voFlat[idx];
+      if (isNaN(uo) || isNaN(vo)) continue;
+      if (Math.abs(uo) > 10 || Math.abs(vo) > 10) continue; // fill value sentinel
+      points.push({ lat: latArr[i], lng: lonArr[j], uo, vo });
+    }
+  }
+  return points;
+}
+
+// Build a fast lookup map: "lat4:lng4" → {uo, vo, speed, dir}
+function buildCurrentGrid(points) {
+  const grid = new Map();
+  for (const p of points) {
+    const speed = Math.hypot(p.uo, p.vo);
+    const dir   = (Math.atan2(p.uo, p.vo) * 180 / Math.PI + 360) % 360; // 0=N,90=E
+    const key   = `${p.lat.toFixed(2)}:${p.lng.toFixed(2)}`;
+    grid.set(key, { uo: p.uo, vo: p.vo, speed, dir });
+  }
+  return grid;
+}
+
+async function fetchCMEMSCurrents() {
+  if (currentsCache.grid && Date.now() - currentsCache.ts < CURRENTS_TTL) {
+    return currentsCache.grid;
+  }
+
+  try {
+    // Step 1: fetch DDS to discover dimension arrays
+    const ddsUrl = `${CMEMS_BASE}/${CMEMS_DATASET}.dds`;
+    const dds = await cmemsFetch(ddsUrl);
+
+    // Extract dimension sizes from DDS
+    // Format: "Float32 uo[time = N][depth = D][lat = LAT][lon = LON];"
+    const latMatch = dds.match(/lat\s*=\s*(\d+)/);
+    const lonMatch = dds.match(/lon\s*=\s*(\d+)/);
+    if (!latMatch || !lonMatch) throw new Error('DDS parse failed');
+    const nLat = parseInt(latMatch[1]);
+    const nLon = parseInt(lonMatch[1]);
+
+    // Step 2: fetch coordinate arrays (lat, lon) to know exact values
+    const coordUrl = `${CMEMS_BASE}/${CMEMS_DATASET}.ascii?lat[0:1:${nLat-1}],lon[0:1:${nLon-1}]`;
+    const coordText = await cmemsFetch(coordUrl);
+
+    // Parse lat/lon arrays from ASCII
+    const latArr = coordText.match(/lat\.lat,?\n([\d\s.,\-]+)/)?.[1]
+      ?.trim().split(/[\s,]+/).map(Number).filter(v => !isNaN(v) && v >= 54 && v <= 58) || [];
+    const lonArr = coordText.match(/lon\.lon,?\n([\d\s.,\-]+)/)?.[1]
+      ?.trim().split(/[\s,]+/).map(Number).filter(v => !isNaN(v) && v >= 8 && v <= 15) || [];
+
+    if (!latArr.length || !lonArr.length) throw new Error('Coordinate parse failed');
+
+    // Find index ranges for Danish waters (54-58°N, 8-15°E)
+    const allLat = coordText.match(/lat\.lat,?\n([\d\s.,\-]+)/)?.[1]
+      ?.trim().split(/[\s,]+/).map(Number) || [];
+    const allLon = coordText.match(/lon\.lon,?\n([\d\s.,\-]+)/)?.[1]
+      ?.trim().split(/[\s,]+/).map(Number) || [];
+
+    const latStart = allLat.findIndex(v => v >= 54);
+    const latEnd   = allLat.findLastIndex(v => v <= 58);
+    const lonStart = allLon.findIndex(v => v >= 8);
+    const lonEnd   = allLon.findLastIndex(v => v <= 15);
+
+    if (latStart < 0 || lonStart < 0) throw new Error('No Danish waters in dataset');
+
+    // Step 3: fetch uo + vo for Danish waters, stride 2 (~5km)
+    const stride = 2;
+    const dataUrl = `${CMEMS_BASE}/${CMEMS_DATASET}.ascii?` +
+      `uo[0][0][${latStart}:${stride}:${latEnd}][${lonStart}:${stride}:${lonEnd}],` +
+      `vo[0][0][${latStart}:${stride}:${latEnd}][${lonStart}:${stride}:${lonEnd}]`;
+
+    const dataText = await cmemsFetch(dataUrl);
+
+    // Build lat/lon subarrays for these indices
+    const subLat = allLat.filter((v, i) => i >= latStart && i <= latEnd && (i - latStart) % stride === 0);
+    const subLon = allLon.filter((v, i) => i >= lonStart && i <= lonEnd && (i - lonStart) % stride === 0);
+
+    const points = parseOPeNDAPASCII(dataText, subLat, subLon);
+    if (!points || !points.length) throw new Error('No current data parsed');
+
+    const grid = buildCurrentGrid(points);
+    currentsCache = { ts: Date.now(), grid, error: null };
+    console.log(`CMEMS currents: ${points.length} points loaded`);
+    return grid;
+
+  } catch(e) {
+    console.warn('CMEMS currents fetch failed:', e.message);
+    currentsCache = { ts: Date.now(), grid: null, error: e.message };
+    return null;
+  }
+}
+
+// Warm currents on startup and every 6h
+setTimeout(() => fetchCMEMSCurrents(), 5000);
+setInterval(() => fetchCMEMSCurrents(), CURRENTS_TTL);
+
+// ── GET /api/currents — serve current vector grid ────────────────────────────
+app.get('/api/currents', async (req, res) => {
+  const grid = await fetchCMEMSCurrents();
+  if (!grid) {
+    return res.status(503).json({
+      error: currentsCache.error || 'No current data',
+      fallback: true
+    });
+  }
+  const out = {};
+  for (const [key, val] of grid) out[key] = val;
+  res.set('Cache-Control', 'public, max-age=21600');
+  res.json({ ts: currentsCache.ts, points: out });
+});
+
+// ── GET /api/debug additions ──────────────────────────────────────────────────
+
 app.get('/api/debug', (req, res) => {
   const all   = [...weatherCache.entries()];
   const now   = Date.now();
@@ -588,6 +765,12 @@ app.get('/api/debug', (req, res) => {
     buildGridSize:  buildDenmarkGrid().length,
     pulsGridSize:   (_pulsGrid || buildPulsGrid()).length,
     lastErrors:     fetchErrors,
+    currents: {
+      loaded:  !!currentsCache.grid,
+      points:  currentsCache.grid?.size ?? 0,
+      ageMin:  currentsCache.ts ? Math.round((now - currentsCache.ts) / 60000) : null,
+      error:   currentsCache.error ?? null,
+    },
     sample,
   });
 });
