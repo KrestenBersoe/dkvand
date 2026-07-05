@@ -615,12 +615,30 @@ function persistCurrentsToDisk(points, ts) {
 }
 
 // Kør fetch_currents.py og parse JSON på stdout
+//
+// To CPU-hensyn, vigtige på Fly's delte vCPU'er:
+// 1. `nice -n 19` sænker processens OS-skemalægningsprioritet til minimum,
+//    så den kun bruger CPU-tid Node ikke selv har brug for i øjeblikket —
+//    uden dette konkurrerer den tunge xarray/numpy-regning direkte med
+//    Node's event loop om processortid, og HELE appen (ikke kun strøm-
+//    endpointet) bliver mærkbart langsom, mens scriptet kører.
+// 2. *_NUM_THREADS=1 forhindrer numpy/BLAS i selv at sprede beregninger over
+//    flere tråde — på en maskine med få (delte) vCPU'er skaber det kun
+//    kontekst-skift-overhead i stedet for reel fremskyndelse.
+const PYTHON_ENV = {
+  ...process.env,
+  OMP_NUM_THREADS: '1',
+  OPENBLAS_NUM_THREADS: '1',
+  MKL_NUM_THREADS: '1',
+  NUMEXPR_NUM_THREADS: '1',
+};
+
 function runPythonFetch() {
   return new Promise((resolve, reject) => {
     execFile(
-      PYTHON_BIN,
-      [PYTHON_SCRIPT],
-      { timeout: PYTHON_TIMEOUT, maxBuffer: 32 * 1024 * 1024, env: process.env },
+      'nice',
+      ['-n', '19', PYTHON_BIN, PYTHON_SCRIPT],
+      { timeout: PYTHON_TIMEOUT, maxBuffer: 32 * 1024 * 1024, env: PYTHON_ENV },
       (err, stdout, stderr) => {
         if (stderr && stderr.trim()) {
           console.warn('fetch_currents.py stderr:', stderr.trim().slice(0, 500));
