@@ -1614,6 +1614,18 @@ const map = L.map('map', {
   preferCanvas: true,
 });
 
+// RETTET: udledningspunkternes klik holdt op med at virke, fordi VP3
+// kystvande-polygonerne (som dækker store kystnære områder) indlæses
+// ASYNKRONT efter punkterne, og landede derfor "oven på" dem i klik-
+// prioritet — selv med kun 7% fyldopacitet. Uden en eksplicit pane-
+// tildeling afhang rækkefølgen skrøbeligt af timing (hvilket lag der
+// tilfældigvis blev tilføjet sidst). Point-laget får derfor sit eget pane
+// med garanteret højere z-index end de øvrige overlay-lag, uanset
+// indlæsningsrækkefølge.
+map.createPane('pointsPane');
+map.getPane('pointsPane').style.zIndex = 620;   // overlayPane er 400, markerPane er 600
+
+
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
 // Light basemap — MapTiler (kræver gratis API-nøgle, sæt herunder).
@@ -1669,27 +1681,39 @@ function initHjemMap() {
 const pointsLayer    = L.layerGroup().addTo(map);
 const forecastLayer  = L.layerGroup();
 
-// Heatmap state — ref sættes første gang renderMap kører
-const heatLayer      = { ref: null, visible: true };
-const viralHeatLayer = { ref: null, visible: false };
+// Heatmap state — ref sættes ved første synlige visning (se nedenfor)
+const heatLayer      = { ref: null, visible: true,  pendingData: [] };
+const viralHeatLayer = { ref: null, visible: false, pendingData: [] };
 
 // Centraliseret heatmap-opdatering
+//
+// RETTET: L.heatLayer binder sin egen 'moveend'-håndtering internt til at
+// gentegne sit canvas — inkl. dyre getImageData/putImageData-kald. Da begge
+// varmekort tidligere blev tilknyttet kortet permanent (kun skjult via CSS),
+// blev BEGGE gentegnet ved HVER ENESTE pan/zoom, selvom det virale lag som
+// regel er usynligt (viralHeatLayer.visible = false som standard). Det gav
+// dobbelt gentegningsarbejde, halvdelen af tiden helt spildt.
+// Nu oprettes/tilknyttes et lag først, når det rent faktisk skal vises for
+// første gang — data gemmes i pendingData indtil da.
 function updateHeatmap(state, data) {
   if (!state.ref) {
-    // Første kald — opret og tilføj til kortet
-    const opts = state === heatLayer
-      ? { radius: 28, blur: 22, maxZoom: 12, max: 1,
-          gradient: { 0: '#2d7d4f', 0.3: '#d4a020', 0.6: '#c84b1f', 1.0: '#ff2200' } }
-      : { radius: 32, blur: 26, maxZoom: 12, max: 1,
-          gradient: { 0: '#1a1a4a', 0.25: '#4b0082', 0.55: '#8b00ff', 0.8: '#da00ff', 1.0: '#ff80ff' } };
-    state.ref = L.heatLayer([], opts).addTo(map);
+    state.pendingData = data;
+    if (!state.visible) return;   // opret ikke et usynligt lags canvas endnu
+    createHeatLayerRef(state);
   }
-  // Opdatér data
   state.ref.setLatLngs(state.visible && data.length > 0 ? data : []);
-  // Styr synlighed udelukkende via CSS
   if (state.ref._canvas) {
     state.ref._canvas.style.display = (state.visible && data.length > 0) ? '' : 'none';
   }
+}
+
+function createHeatLayerRef(state) {
+  const opts = state === heatLayer
+    ? { radius: 28, blur: 22, maxZoom: 12, max: 1,
+        gradient: { 0: '#2d7d4f', 0.3: '#d4a020', 0.6: '#c84b1f', 1.0: '#ff2200' } }
+    : { radius: 32, blur: 26, maxZoom: 12, max: 1,
+        gradient: { 0: '#1a1a4a', 0.25: '#4b0082', 0.55: '#8b00ff', 0.8: '#da00ff', 1.0: '#ff80ff' } };
+  state.ref = L.heatLayer([], opts).addTo(map);
 }
 
 // VP3 vandområde-lag
@@ -1996,6 +2020,7 @@ function renderMap() {
       weight:      risk !== null ? 1 : 1.5,
       fillOpacity: risk !== null ? 0.85 : 0.4,
       dashArray:   risk !== null ? null : '3,3',
+      pane:        'pointsPane',   // garanterer klik går til punktet, ikke bagvedliggende polygoner
     });
     // Navn synligt ved hover, ikke kun i detaljepanelet efter klik. pt.name
     // er altid udfyldt (fra PULS-udløbskoden hvis intet beskrivende navn
@@ -2092,6 +2117,52 @@ function renderMap() {
 
 function closePointPanel() {
   document.getElementById('point-panel').classList.remove('open');
+}
+
+// RBU-punkter (VP3 risikobetonede udledninger) manglede en klik-til-
+// detaljer-visning — kun en hover-tooltip. Genbruger samme #point-panel-
+// struktur som udledningspunkterne, men med RBU-specifikke felter (ingen
+// vejr-/risikoscore, da RBU-klassificeringen kommer direkte fra VP3, ikke
+// fra vores egen nedbørsmodel).
+function showRbuPanel(feature) {
+  const p = feature.properties || {};
+  const navn     = p.pkt_navn   || `RBU ${p.pkt_id || ''}`;
+  const kommune  = p.komm_navn  || '—';
+  const vandom   = p.vandomr_id || '—';
+  const tilstand = p.udl_va_sta || '?';
+  const iProgram = p.i_program === 'Ja' || p.i_program === true;
+  const coords   = feature.geometry?.coordinates;
+  const lat = coords ? coords[1] : null;
+  const lng = coords ? coords[0] : null;
+
+  document.getElementById('point-panel-title').innerHTML = `🔴 ${escHtml(String(navn))}`;
+  document.getElementById('point-panel').classList.add('open');
+  document.getElementById('point-panel-body').innerHTML = `
+    <div class="field">
+      <span class="chip" style="background:#fbe4e1;color:#8b1a1a;border:1px solid #e0a89f">VP3 RBU-punkt</span>
+    </div>
+    ${lat !== null ? `
+    <div class="field">
+      <span class="label">Lokation</span>
+      <a class="value" target="_blank" rel="noopener"
+         href="https://www.google.com/maps/search/?api=1&query=${lat},${lng}"
+         title="Åbn i Google Maps">📍 ${lat.toFixed(5)}, ${lng.toFixed(5)}</a>
+    </div>` : ''}
+    <div class="field">
+      <span class="label">Kommune</span><span class="value">${escHtml(kommune)}</span>
+    </div>
+    <div class="field">
+      <span class="label">Vandområde</span><span class="value">${escHtml(String(vandom))}</span>
+    </div>
+    <div class="field">
+      <span class="label">Tilstand</span><span class="value">${escHtml(String(tilstand))}</span>
+    </div>
+    ${iProgram ? `
+    <div class="field">
+      <span class="label">VP3 indsatsprogram</span>
+      <span class="value">⚠️ I indsatsprogram</span>
+    </div>` : ''}
+  `;
 }
 
 function updatePanel(pt, risk, foreRisk) {
@@ -3014,7 +3085,8 @@ async function loadVP3Layers() {
         },
         pointToLayer: (f, latlng) => L.circleMarker(latlng, {
           radius: 5, color: '#e6a817', weight: 1.5,
-          fillColor: '#f0c040', fillOpacity: 0.8
+          fillColor: '#f0c040', fillOpacity: 0.8,
+          pane: 'pointsPane',
         }),
         onEachFeature: (f, l) => {
           const p = f.properties || {};
@@ -3049,7 +3121,8 @@ async function loadVP3Layers() {
       vp3RbuLayer = L.geoJSON(data, {
         pointToLayer: (f, latlng) => L.circleMarker(latlng, {
           radius: 4, color: '#8b1a1a', weight: 1,
-          fillColor: '#c0392b', fillOpacity: 0.75
+          fillColor: '#c0392b', fillOpacity: 0.75,
+          pane: 'pointsPane',
         }),
         onEachFeature: (f, l) => {
           const p = f.properties || {};
@@ -3064,6 +3137,7 @@ async function loadVP3Layers() {
             `Tilstand: ${escHtml(String(tilstand))}${indsats}`,
             { sticky: true }
           );
+          l.on('click', function(e) { if(window._LC) return; window._LC=true; setTimeout(()=>delete window._LC,50); closeBadevandPanel(); showRbuPanel(f); });
         }
       });
       if (showVP3Rbu) vp3RbuLayer.addTo(map);
