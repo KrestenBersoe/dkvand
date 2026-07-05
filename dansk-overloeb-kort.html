@@ -488,22 +488,21 @@
     background: transparent !important;
     border: none !important;
   }
-  /* Flow-animation: pilens spids bevæger sig let frem og tilbage langs sin
-     egen retning, kombineret med en opacity-puls — giver indtryk af
-     strømmens bevægelse uden en fuld partikel-simulation.
-     animation-duration sættes pr. pil ud fra hastighed (se
-     buildCurrentsArrowLayer), så kraftigere strøm "flyder" synligt hurtigere. */
+  /* Flow-animation: ren opacity-puls (compositor-only — udløser ALDRIG
+     layout/paint-genberegning, i modsætning til transform på SVG-paths med
+     fill-box, som var den reelle årsag til at kortet blev tungt ved
+     zoom/pan). animation-duration/delay sættes pr. pil ud fra hastighed og
+     position (se buildCurrentsArrowLayer), så kraftigere strøm "flyder"
+     synligt hurtigere, og pilene ikke pulserer synkront. */
   @keyframes current-flow {
-    0%   { transform: translateY(3px);  opacity: .55; }
-    50%  { transform: translateY(-3px); opacity: 1;   }
-    100% { transform: translateY(3px);  opacity: .55; }
+    0%   { opacity: .35; }
+    50%  { opacity: 1;   }
+    100% { opacity: .35; }
   }
   .current-arrow-icon svg path {
     animation-name: current-flow;
     animation-timing-function: ease-in-out;
     animation-iteration-count: infinite;
-    transform-box: fill-box;
-    transform-origin: center;
   }
 
   #legend h4 {
@@ -2611,38 +2610,48 @@ function isInDanishWater(lat, lng) {
   return vp3KystvandeRaw.features.some(f => pointInGeometry(lat, lng, f.geometry));
 }
 
-// Bygger pil-laget ud fra det aktuelle currentsGrid. Kaldes kun når laget
-// slås til, eller når strømdata opdateres mens laget allerede er synligt —
-// ikke pr. frame, da strømdata kun skifter hver 6. time.
+// Bygger pil-laget, men KUN for punkter inden for det aktuelle synsfelt
+// (map.getBounds()) — ikke hele landet på én gang. RETTET: tidligere blev
+// ALLE punkter i currentsGrid tegnet og animeret samtidig (op til flere
+// hundrede), hvilket gjorde zoom/pan/resize markant tungere, fordi
+// transform-animationer på mange SVG-elementer tvinger gentagne layout-
+// genberegninger. Genopbygges på moveend/zoomend mens laget er aktivt, så
+// der aldrig er flere synlige pile end der reelt er plads til på skærmen.
 function buildCurrentsArrowLayer() {
   currentsArrowLayer.clearLayers();
-  if (!currentsGrid) return;
+  if (!currentsGrid || !showCurrents) return;
+
+  // Lidt margen uden for synsfeltet, så pile ikke popper ind/ud ved kanten
+  const bounds = map.getBounds().pad(0.15);
 
   for (const [key, c] of currentsGrid) {
     const [lat, lng] = key.split(':').map(Number);
     if (isNaN(lat) || isNaN(lng)) continue;
+    if (!bounds.contains([lat, lng])) continue;         // kun synsfeltet
     if (c.speed < 0.02) continue;              // for svag til at være visuelt meningsfuld
     if (!isInDanishWater(lat, lng)) continue;   // kun på vandet, ikke på land
 
     const clampedSpeed = Math.min(c.speed, 1);  // m/s, klippet ved 1.0 for farve/størrelse-skala
-    const sizePx  = 12 + clampedSpeed * 16;      // 12–28 px
-    const opacity = 0.5 + clampedSpeed * 0.45;
+    const sizePx  = 18 + clampedSpeed * 22;      // 18–40 px — større og mere tydelig end før
+    const opacity = 0.6 + clampedSpeed * 0.4;
     // Windy-inspireret farveskala: blå (svag) → grøn/gul → rød (kraftig)
     const hue   = 210 - clampedSpeed * 210;
     const color = `hsl(${hue}, 85%, 45%)`;
 
-    // Hurtigere strøm → hurtigere puls (0,8–2,2 sek). Faseforskudt pr. pil
-    // (baseret på position) så alle pile ikke pulserer synkront — det ville
-    // se robotagtigt og kunstigt ud i stedet for at ligne strømmende vand.
-    const duration = (2.2 - clampedSpeed * 1.4).toFixed(2);
+    // Billig animation: kun opacity (compositor-only, ingen layout/paint-
+    // genberegning) i stedet for transform på hvert enkelt SVG-path — det
+    // var den reelle årsag til den tunge kortoplevelse. Hurtigere strøm →
+    // hurtigere puls. Faseforskudt pr. pil, så det ligner strømmende vand
+    // frem for synkron blinken.
+    const duration = (1.8 - clampedSpeed * 1.1).toFixed(2);
     const delay    = ((Math.abs(lat * 37 + lng * 53) % 1) * parseFloat(duration)).toFixed(2);
 
     const icon = L.divIcon({
       className: 'current-arrow-icon',
       html: `<svg width="${sizePx}" height="${sizePx}" viewBox="0 0 24 24"
-              style="transform:rotate(${c.dir}deg);opacity:${opacity.toFixed(2)}">
-              <path d="M12 1.5 L18.5 15 L12 11 L5.5 15 Z" fill="${color}"
-                    style="animation-duration:${duration}s;animation-delay:${delay}s"/>
+              style="transform:rotate(${c.dir}deg)">
+              <path d="M12 1 L19.5 15.5 L12 11 L4.5 15.5 Z" fill="${color}"
+                    style="opacity:${opacity.toFixed(2)};animation-duration:${duration}s;animation-delay:${delay}s"/>
             </svg>`,
       iconSize:   [sizePx, sizePx],
       iconAnchor: [sizePx / 2, sizePx / 2],
@@ -2652,6 +2661,20 @@ function buildCurrentsArrowLayer() {
       .addTo(currentsArrowLayer);
   }
 }
+
+// Genopbyg pil-laget når kortet flyttes/zoomes, men kun mens laget rent
+// faktisk er synligt, og throttlet til næste animation-frame — undgår at
+// genopbygge flere gange under en enkelt kontinuerlig pan-bevægelse.
+let _currentsRebuildQueued = false;
+function scheduleCurrentsRebuild() {
+  if (!showCurrents || _currentsRebuildQueued) return;
+  _currentsRebuildQueued = true;
+  requestAnimationFrame(() => {
+    _currentsRebuildQueued = false;
+    buildCurrentsArrowLayer();
+  });
+}
+map.on('moveend zoomend', scheduleCurrentsRebuild);
 
 function toggleCurrents() {
   showCurrents = !showCurrents;
