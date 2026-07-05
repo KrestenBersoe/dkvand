@@ -1992,10 +1992,21 @@ function renderMap() {
       fillOpacity: risk !== null ? 0.85 : 0.4,
       dashArray:   risk !== null ? null : '3,3',
     });
-    // Navn synligt ved hover, ikke kun i detaljepanelet efter klik.
-    // pt.name er altid udfyldt (fra PULS-udløbskoden hvis intet beskrivende
-    // navn findes), så denne tooltip viser aldrig tomt.
-    marker.bindTooltip(escHtml(pt.name), { sticky: true, direction: 'top', offset: [0, -4] });
+    // Navn synligt ved hover, ikke kun i detaljepanelet efter klik. pt.name
+    // er altid udfyldt (fra PULS-udløbskoden hvis intet beskrivende navn
+    // findes), så tooltippen viser aldrig tomt.
+    // RETTET: bindTooltip() på alle 21.556 punkter direkte ved indlæsning
+    // gav en markant, målbar forsinkelse (dyr intern opsætning × 21.556).
+    // Bindingen udskydes derfor til første mouseover pr. punkt — spreder
+    // omkostningen ud over faktisk brug i stedet for at betale den samlet
+    // for hvert eneste punkt ved hver eneste sideindlæsning.
+    marker.on('mouseover', function() {
+      if (!this._nameTooltipBound) {
+        this._nameTooltipBound = true;
+        this.bindTooltip(escHtml(pt.name), { sticky: true, direction: 'top', offset: [0, -4] });
+        this.openTooltip();
+      }
+    });
 
     marker.on('click', function(e) { if(window._LC) return; window._LC=true; setTimeout(()=>delete window._LC,50); closePointPanel(); closeBadevandPanel(); updatePanel(pt, risk, foreRisk); });
     pointsLayer.addLayer(marker);
@@ -2513,7 +2524,7 @@ async function loadCurrents() {
   try {
     const cached = await dbGet(STORE_CURRENTS, CURRENTS_CACHE_KEY);
     if (cached && cached.points) {
-      currentsGrid = new Map(Object.entries(cached.points));
+      currentsGrid = new Map(Object.entries(cached.points)); clearCurrentAtCache();
       currentsTs   = cached.ts || 0;
       hadLocalCache = true;
       const ageMin = Math.round((Date.now() - currentsTs) / 60000);
@@ -2538,7 +2549,7 @@ async function loadCurrents() {
     }
     const data = await res.json();
     if (data.fallback) { console.info('Strømdata: fallback (CMEMS utilgængeligt)'); return; }
-    currentsGrid = new Map(Object.entries(data.points || {}));
+    currentsGrid = new Map(Object.entries(data.points || {})); clearCurrentAtCache();
     currentsTs   = data.ts || Date.now();
     console.info(`Strømdata: ${currentsGrid.size} punkter hentet fra server`);
     if (showCurrents) buildCurrentsArrowLayer();
@@ -2558,21 +2569,42 @@ async function loadCurrents() {
 }
 
 // Find nærmeste strømpunkt til en koordinat (2° lookup-nøgle)
+// RETTET: profilering viste denne funktion som en stor bidragyder til en
+// 50+ sekunders hovedtråd-blokering. Den afrundede nøgle her (0,5°-gitter)
+// matcher IKKE CMEMS' faktiske gitterkoordinater fra serveren, så
+// eksakt-match-opslaget nedenfor rammer stort set ALDRIG — hvert kald endte
+// derfor i den dyre lineære fallback-søgning. Tilføjet simpel cache pr.
+// afrundet koordinat (0,1°), da mange kald i praksis sker for meget tætte
+// koordinater (fx midtpunkter mellem nærliggende udløb og samme badevand).
+const _currentAtCache = new Map();
 function getCurrentAt(lat, lng) {
   if (!currentsGrid || currentsGrid.size === 0) return null;
+
+  const cacheKey = `${lat.toFixed(1)}:${lng.toFixed(1)}`;
+  if (_currentAtCache.has(cacheKey)) return _currentAtCache.get(cacheKey);
+
   // Søg nærmeste punkt indenfor 1.5°
   const roundedKey = `${(Math.round(lat * 2) / 2).toFixed(2)}:${(Math.round(lng * 2) / 2).toFixed(2)}`;
-  if (currentsGrid.has(roundedKey)) return currentsGrid.get(roundedKey);
-  // Fallback: linear search for nearest
-  let minDist = Infinity, nearest = null;
-  for (const [k, v] of currentsGrid) {
-    const [kLat, kLng] = k.split(':').map(Number);
-    const d = Math.hypot(kLat - lat, kLng - lng);
-    if (d < minDist) { minDist = d; nearest = v; }
-    if (minDist < 0.3) break;
+  let result;
+  if (currentsGrid.has(roundedKey)) {
+    result = currentsGrid.get(roundedKey);
+  } else {
+    // Fallback: linear search for nearest
+    let minDist = Infinity, nearest = null;
+    for (const [k, v] of currentsGrid) {
+      const [kLat, kLng] = k.split(':').map(Number);
+      const d = Math.hypot(kLat - lat, kLng - lng);
+      if (d < minDist) { minDist = d; nearest = v; }
+      if (minDist < 0.3) break;
+    }
+    result = minDist < 1.5 ? nearest : null;
   }
-  return minDist < 1.5 ? nearest : null;
+  _currentAtCache.set(cacheKey, result);
+  return result;
 }
+// Ryddes når strømdata opdateres (ellers ville cachen vise forældede
+// strømretninger efter en frisk hentning).
+function clearCurrentAtCache() { _currentAtCache.clear(); }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // STRØM-VISUALISERING (punkt 11) — retningspile a la Windy, kun på vandområder
@@ -2801,6 +2833,45 @@ function colorKystvandByRisk() {
   colorBadevandByRisk();
 }
 
+// RETTET: profilering viste denne funktion (via eachLayer) som hovedårsagen
+// til en 50+ sekunders hovedtråd-blokering. Det oprindelige kode gennemløb
+// ALLE 21.556 PULS-punkter for HVER af de ~1.039 badevandslokaliteter — op
+// til 22,4 millioner iterationer, plus dyre getCurrentAt-kald for hvert par
+// inden for rækkevidde. Et rumligt gitter-indeks (bygget én gang, genbrugt
+// på tværs af kald så længe overflowPoints ikke er skiftet) reducerer dette
+// til kun at tjekke punkter i og omkring badevandets egen gittercelle.
+let _pulsSpatialIndex    = null;
+let _pulsSpatialIndexRef = null;   // reference til overflowPoints-arrayet cachen blev bygget fra
+
+function buildPulsSpatialIndex(points, cellDeg) {
+  const index = new Map();
+  for (const pt of points) {
+    if (pt.riskScore === null) continue;
+    const cx  = Math.floor(pt.lat / cellDeg);
+    const cy  = Math.floor(pt.lng / cellDeg);
+    const key = `${cx}:${cy}`;
+    let bucket = index.get(key);
+    if (!bucket) { bucket = []; index.set(key, bucket); }
+    bucket.push(pt);
+  }
+  return index;
+}
+
+// Henter alle punkter i badevandets egen gittercelle + 8 naboceller —
+// dækker fuldt ud MAX_DEG-radius uden at skulle scanne hele datasættet.
+function getNearbyPulsPoints(index, cellDeg, lat, lng) {
+  const cx = Math.floor(lat / cellDeg);
+  const cy = Math.floor(lng / cellDeg);
+  const results = [];
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const bucket = index.get(`${cx + dx}:${cy + dy}`);
+      if (bucket) results.push(...bucket);
+    }
+  }
+  return results;
+}
+
 function colorBadevandByRisk() {
   if (!vp3BadevandLayer || !overflowPoints || overflowPoints.length === 0) return;
   if (!showVP3Bade) return;  // sæt ikke styles på slukket lag
@@ -2819,21 +2890,28 @@ function colorBadevandByRisk() {
   // Max ~15 km ≈ 0.135° i breddegrad — CSO-påvirkning rækker typisk 5–15 km
   const MAX_DEG = 0.135;
 
+  // Genbrug indekset på tværs af kald, så længe overflowPoints ikke er
+  // udskiftet (kun sket ved en frisk dataindlæsning, ikke ved hver farvning).
+  if (_pulsSpatialIndexRef !== overflowPoints) {
+    _pulsSpatialIndex    = buildPulsSpatialIndex(overflowPoints, MAX_DEG);
+    _pulsSpatialIndexRef = overflowPoints;
+  }
+
   vp3BadevandLayer.eachLayer(layer => {
     let ll;
     try { ll = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter(); }
     catch(e) { return; }
 
-    // (a) Direkte spatiel søgning: nærmeste PULS-udløb inden for 15 km
+    // (a) Rumligt indekseret søgning: nærmeste PULS-udløb inden for 15 km
     // Justér risiko med strøm-opstrøms-vægt (0.15–1.0)
     let pulsRisk = null;
-    overflowPoints.forEach(pt => {
-      if (pt.riskScore === null) return;
-      if (Math.abs(pt.lat - ll.lat) > MAX_DEG || Math.abs(pt.lng - ll.lng) > MAX_DEG) return;
+    const nearby = getNearbyPulsPoints(_pulsSpatialIndex, MAX_DEG, ll.lat, ll.lng);
+    for (const pt of nearby) {
+      if (Math.abs(pt.lat - ll.lat) > MAX_DEG || Math.abs(pt.lng - ll.lng) > MAX_DEG) continue;
       const w = upstreamWeight(pt.lat, pt.lng, ll.lat, ll.lng);
       const adjustedRisk = pt.riskScore * w;
       if (pulsRisk === null || adjustedRisk > pulsRisk) pulsRisk = adjustedRisk;
-    });
+    }
 
     // (b) Fallback: nærmeste kystvand-polygon
     let kystvandRisk = null;
