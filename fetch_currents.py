@@ -91,15 +91,31 @@ DATASET_ID = "cmems_mod_bal_phy_anfc_PT1H-i"
 LAT_MIN, LAT_MAX = 54.0, 58.0
 LON_MIN, LON_MAX = 8.0, 15.0
 
-# Stride ~4 -> ca. 10 km opløsning. Sat op fra 2 (5 km), fordi selve
-# data-materialiseringen (.values) mod CMEMS' ARCO/zarr-backend viste sig at
-# være den langsomme del (>90s) — færre punkter betyder færre chunks at
-# hente over netværket. 10 km er stadig rigeligt fin opløsning til
-# opstrøms-vægtningen af badevandsrisiko.
+# Stride ~4 -> ca. 10 km opløsning.
 STRIDE = 4
 
+# ── subset() i stedet for open_dataset() ─────────────────────────────────────
+# open_dataset() streamer datasættet lazy via xarray/dask/zarr, hvilket har en
+# betydelig hukommelses-overhead uafhængigt af hvor lille et udsnit man rent
+# faktisk beder om — det forårsagede gentagne OOM-kills i produktion, selv med
+# forøget RAM. subset() laver i stedet selve udsnits-arbejdet på Copernicus'
+# egne servere og sender kun en lille, allerede-afgrænset NetCDF-fil tilbage,
+# som vi læser med almindelig (ikke-lazy) xarray. Markant lettere for en
+# lille, veldefineret geografisk/tidsmæssig forespørgsel som denne.
+import tempfile
+import glob
+import datetime as _dt
+
+now = _dt.datetime.now(_dt.timezone.utc)
+# Analysis-forecast-datasæt har typisk data omkring "nu" — spænd et vindue
+# der med sikkerhed rammer mindst ét tidspunkt, uden at hente hele historikken.
+start_dt = now - _dt.timedelta(hours=12)
+end_dt   = now + _dt.timedelta(hours=6)
+
+tmp_dir = tempfile.mkdtemp(prefix="cmems_subset_")
+
 try:
-    ds = copernicusmarine.open_dataset(
+    response = copernicusmarine.subset(
         dataset_id=DATASET_ID,
         username=USERNAME,
         password=PASSWORD,
@@ -110,12 +126,31 @@ try:
         maximum_latitude=LAT_MAX,
         minimum_depth=0,
         maximum_depth=1,  # datasættets øverste niveau ligger på ~0.5 m, ikke 0 m
+        start_datetime=start_dt,
+        end_datetime=end_dt,
+        output_directory=tmp_dir,
+        output_filename="currents.nc",
+        file_format="netcdf",
+        disable_progress_bar=True,
+        overwrite=True,
     )
 except Exception as e:
-    fail(f"open_dataset failed: {describe_exception(e)}")
+    fail(f"subset failed: {describe_exception(e)}")
 
 try:
-    # Seneste tidspunkt i datasættet
+    import xarray as xr
+
+    nc_files = glob.glob(os.path.join(tmp_dir, "**", "*.nc"), recursive=True)
+    if not nc_files:
+        fail("subset gav ingen NetCDF-fil")
+
+    # Almindelig (ikke-lazy) indlæsning — filen er allerede lille (afgrænset
+    # server-side), så hele indholdet kan roligt loades direkte i hukommelsen.
+    # engine="h5netcdf" eksplicit, da netCDF4-pakken ikke er installeret, men
+    # h5netcdf følger med som copernicusmarine-afhængighed.
+    ds = xr.load_dataset(nc_files[0], engine="h5netcdf")
+
+    # Seneste tidspunkt i det hentede udsnit
     latest = ds.isel(time=-1) if "time" in ds.dims else ds
 
     # Overfladelag hvis der er en dybde-dimension
