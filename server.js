@@ -217,6 +217,25 @@ function fetchOpenMeteo(lat, lng) {
   });
 }
 
+// Transiente serverfejl (503/502/504) hos Open-Meteo er ofte kortvarige —
+// et par sekunders pause og ét gen-forsøg løser typisk problemet, i stedet
+// for at give hele cellen op med det samme. Ikke-transiente fejl (4xx,
+// netværksfejl) gives videre uden forsinkelse.
+function isTransientOpenMeteoError(err) {
+  return /Open-Meteo HTTP (502|503|504)/.test(err.message || '');
+}
+
+async function fetchOpenMeteoWithRetry(lat, lng, retries = 2) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchOpenMeteo(lat, lng);
+    } catch (e) {
+      if (attempt >= retries || !isTransientOpenMeteoError(e)) throw e;
+      await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+}
+
 // Compute derived precipitation metrics from raw Open-Meteo JSON.
 function computeMetrics(json) {
   const times  = json?.hourly?.time         || [];
@@ -268,7 +287,7 @@ function warmCache() {
         if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) { skipped++; continue; }
         try {
           apiCallCount++;
-          const raw  = await fetchOpenMeteo(cell.lat, cell.lng);
+          const raw  = await fetchOpenMeteoWithRetry(cell.lat, cell.lng);
           const data = computeMetrics(raw);
           weatherCache.set(key, { ts: Date.now(), data });
           fetched++;
@@ -320,7 +339,7 @@ app.get('/api/weather', async (req, res) => {
     apiCallCount++;
     const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
     const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
-    const raw  = await fetchOpenMeteo(clat, clng);
+    const raw  = await fetchOpenMeteoWithRetry(clat, clng);
     const data = computeMetrics(raw);
     weatherCache.set(key, { ts: Date.now(), data });
     res.set('Cache-Control', 'public, max-age=10800');
@@ -410,7 +429,7 @@ app.get('/api/weather/weekly', async (req, res) => {
     if (!cached || minDist > 0.5) {
       try {
         apiCallCount++;
-        const raw  = await fetchOpenMeteo(lat, lng);
+        const raw  = await fetchOpenMeteoWithRetry(lat, lng);
         const data = computeMetrics(raw);
         weatherCache.set(key, { ts: Date.now(), data });
         cached = { data };
@@ -488,7 +507,7 @@ app.post('/api/weather/bulk', async (req, res) => {
         const { lat, lng, key, cached } = cold[idx++];
         try {
           apiCallCount++;
-          const raw  = await fetchOpenMeteo(lat, lng);
+          const raw  = await fetchOpenMeteoWithRetry(lat, lng);
           const data = computeMetrics(raw);
           weatherCache.set(key, { ts: Date.now(), data });
           const { hourlyObs: _o, hourlyFore: _f, ...slim } = data;

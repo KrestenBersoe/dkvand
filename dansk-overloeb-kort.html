@@ -151,6 +151,48 @@
   }
   #point-panel-body { padding: .6rem .8rem .8rem; font-size: .78rem; color: #1a2733; }
 
+  /* RETTET (punkt 9): #point-panel-body havde INGEN egen .label/.value-styling
+     — den delte ved et uheld ingen CSS med #panel-body (forskellig ID), så
+     hvert felt blev vist som almindelig, ustylet tekst uden visuel adskillelse
+     mellem titel og indhold. Hvert felt er nu sin egen blok med tydelig
+     luft, en lille dæmpet label over en fremhævet værdi. */
+  #point-panel-body .field {
+    margin: 0 0 .7rem;
+    padding-bottom: .55rem;
+    border-bottom: 1px solid #f0f3f5;
+  }
+  #point-panel-body .field:last-child { border-bottom: none; margin-bottom: 0; }
+  #point-panel-body .label {
+    display: block;
+    font-family: var(--mono);
+    font-size: .62rem;
+    color: #8a97a3;
+    text-transform: uppercase;
+    letter-spacing: .07em;
+    margin-bottom: .2rem;
+  }
+  #point-panel-body .value {
+    display: block;
+    font-size: .88rem;
+    font-weight: 600;
+    color: #1a2733;
+    line-height: 1.4;
+  }
+  #point-panel-body hr {
+    border: none;
+    border-top: 1px solid #eef2f5;
+    margin: .3rem 0 .7rem;
+  }
+  #point-panel-location {
+    display: inline-flex;
+    align-items: center;
+    gap: .3rem;
+    color: #1a6b8a;
+    text-decoration: none;
+    font-weight: 600;
+  }
+  #point-panel-location:hover { text-decoration: underline; }
+
 
   /* Kort-hint overlay — vises 5 sekunder ved første besøg */
   #map-hint {
@@ -375,11 +417,16 @@
 
 
   /* ═══ #lag — kortlagsvælger, samme mønster som #legend ═══ */
+  /* RETTET: var position:fixed + z-index:9000, hvilket placerede den
+     relativt til hele browser-vinduet i stedet for kortet, og fik den til
+     at flyde uden for kortets grænser og ødelægge UI'et. Nu absolute,
+     samme mønster og z-index som #legend, og flyttet ind i #tab-kort i
+     selve HTML-strukturen (se nedenfor). */
   #lag {
-    position: fixed;
+    position: absolute;
     bottom: 30px;
     right: 14px;
-    z-index: 9000;
+    z-index: 900;
     font-size: .72rem;
   }
   #lag-btn {
@@ -414,6 +461,26 @@
   }
   #lag.collapsed #lag-btn  { display: block; }
   #lag.collapsed #lag-body { display: none; }
+
+  /* ═══ #locate — flydende "Min placering"-knap, samme mønster som legend/lag,
+     men uden collapse-tilstand — det er en handlingsknap, ikke et panel.
+     Placeret lige over lag-vælgeren i samme hjørne. ═══ */
+  #locate-btn {
+    position: absolute;
+    bottom: 74px;
+    right: 14px;
+    z-index: 900;
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    color: var(--accent);
+    font-size: .95rem;
+    cursor: pointer;
+    box-shadow: var(--shadow);
+  }
+  #locate-btn:hover { border-color: var(--accent); background: rgba(26,107,138,.15); }
+  #locate-btn:active { transform: scale(.94); }
 
   #legend h4 {
     font-family: var(--mono);
@@ -1064,7 +1131,23 @@
   </div>
 </div>
 
-
+<!-- Kortlag-vælger og lokations-knap bottom-right (inde i kort-panelet,
+     ligesom legend bottom-left) -->
+<div id="lag" class="collapsed">
+  <button id="lag-btn" onclick="toggleLag()" title="Kortlag">⊞</button>
+  <div id="lag-body" onclick="toggleLag()" style="cursor:pointer" title="Klik for at lukke">
+    <h4>Kortlag</h4>
+    <button class="ctrl-btn active" id="btn-heat"    onclick="event.stopPropagation();toggleHeat()">🌡 Bakterielt kort</button>
+    <button class="ctrl-btn"        id="btn-viral"   onclick="event.stopPropagation();toggleViral()">🧬 Viralt kort</button>
+    <button class="ctrl-btn active" id="btn-pts"     onclick="event.stopPropagation();togglePoints()">📍 Udløbspunkter</button>
+    <button class="ctrl-btn"        id="btn-fore"    onclick="event.stopPropagation();toggleForecast()">⚡ 24h Varsling</button>
+    <button class="ctrl-btn active" id="btn-vp3kyst" onclick="event.stopPropagation();toggleVP3Kyst()">🌊 Kystvande</button>
+    <button class="ctrl-btn active" id="btn-vp3bade" onclick="event.stopPropagation();toggleVP3Bade()">🏖 Badevandsområder</button>
+    <button class="ctrl-btn"        id="btn-vp3rbu"  onclick="event.stopPropagation();toggleVP3Rbu()">🔴 RBU-punkter</button>
+    <button class="ctrl-btn"        id="btn-currents" onclick="event.stopPropagation();toggleCurrents()">🌊 Strøm</button>
+  </div>
+</div>
+<button id="locate-btn" onclick="locateUser()" title="Min placering">📍</button>
 
   </div><!-- /tab-kort -->
 
@@ -1144,14 +1227,15 @@
           <tr><td><strong>PULS udledning</strong><br><span class="doc-mono">vRegnbetingedeUdloebUdledning</span></td><td>Årlig udledt volumen (m³) og antal overløbshændelser per udløb per år</td><td>Åbne data · årlig</td></tr>
           <tr><td><strong>Open-Meteo / DMI</strong><br><span class="doc-mono">HARMONIE AROME 2 km</span></td><td>Timevis nedbør: 7 dages historik + 48t prognose inkl. rådata per time</td><td>CC BY 4.0 · 4×/døgn</td></tr>
           <tr><td><strong>VP3 vandområdeplaner</strong><br><span class="doc-mono">vp3_2endelig2025 (WFS)</span></td><td>Kystvandområder, badevandslokaliteter og RBU-punkter fra vandområdeplanerne 2021–2027 efter genbesøget (dec. 2025)</td><td>Åbne data · ved planrevision</td></tr>
+          <tr><td><strong>CMEMS Østersø-model</strong><br><span class="doc-mono">cmems_mod_bal_phy_anfc_PT1H-i</span></td><td>Strømretning og -hastighed (uo/vo) for danske farvande, ~10 km opløsning, hentet via Copernicus Marine Toolbox</td><td>Copernicus-licens · time-vis</td></tr>
           <tr><td><strong>OpenStreetMap</strong></td><td>Baggrundskort</td><td>ODbL</td></tr>
         </table>
-        <p>De to PULS-datasæt samkøres på udløbets navn. Volumen angives i kubikmeter i kilden og omregnes til liter ved visning (1 m³ = 1.000 L). VP3-data hentes som GeoJSON via Miljøministeriets WFS-tjeneste og gemmes som statiske filer.</p>
+        <p>De to PULS-datasæt samkøres på udløbets navn. Volumen angives i kubikmeter i kilden og omregnes til liter ved visning (1 m³ = 1.000 L). VP3-data hentes som GeoJSON via Miljøministeriets WFS-tjeneste og gemmes som statiske filer. CMEMS-strømdata hentes server-side hver 6. time og cachés både på serveren og i browserens lokale lager.</p>
       </section>
 
       <section id="doc-kortlag" class="doc-section">
         <h2>Kortlag</h2>
-        <p>Kortet indeholder seks toggelbare lag under Danmark-fanen:</p>
+        <p>Kortet indeholder syv toggelbare lag under Danmark-fanen:</p>
         <table class="doc-table">
           <tr><th>Lag</th><th>Indhold</th><th>Farvelogik</th></tr>
           <tr><td>🌡 Bakterielt kort</td><td>Varmekort over alle 21.556 udløbspunkter</td><td>Grøn → amber → rød efter bakteriel risikoscore</td></tr>
@@ -1160,6 +1244,7 @@
           <tr><td>⚡ 24h Varsling</td><td>Ring-markører ved udløb med forhøjet prognoserisiko</td><td>Rød stiplet ring ved forecastrisiko > 55 % og aktiv nedbør > 5 mm</td></tr>
           <tr><td>🌊 Kystvande (VP3)</td><td>Polygoner for de 109 målsatte kystvandområder</td><td>Grøn/amber/rød udfyldning efter max-risiko fra PULS-udløb med matching vandområde</td></tr>
           <tr><td>🏖 Badevandsområder</td><td>EU badevandsovervågningsstationer fra VP3. Klik åbner badevandsside med 7-dages nedbørsgraf, risikooversigt og nærliggende udløb</td><td>Cirkelmarkør i grøn/amber/rød efter nærmeste PULS-udløbs risikoniveau inden for 15 km</td></tr>
+          <tr><td>🌊 Strøm</td><td>Retningspile for havstrøm, kun over vandområder (testet mod VP3 kystvand-polygoner)</td><td>Rotation = strømretning; farve/størrelse blå→gul→rød efter hastighed (0–1+ m/s)</td></tr>
         </table>
         <p>VP3-lagene indlæses fra statiske GeoJSON-filer ved opstart og farves når risikoberegningen er færdig. Alle lag håndhæves ved hvert vejrdatarefresh — slukket lag forbliver slukket selv ved automatisk opdatering.</p>
       </section>
@@ -1253,9 +1338,13 @@
 
       <section id="doc-badevand" class="doc-section">
         <h2>Badevandsvurdering</h2>
-        <p>Badevandslokaliteterne fra VP3 (EU's badevandsovervågning) kobles til risikomodellen via to trin:</p>
+        <p>Badevandslokaliteterne fra VP3 (EU's badevandsovervågning) kobles til risikomodellen via tre trin:</p>
         <p><strong>Trin 1 — Kystvand-polygoner:</strong> Hvert af de 109 målsatte kystvandområder fra Vandområdeplanerne 2021–2027 farves efter den højeste risikokarakter blandt PULS-udløb hvis <span class="doc-mono">waterArea</span>-felt matcher kystvandets <span class="doc-mono">ov_navn</span>. Match sker på eksakt og delvist tekstmatch.</p>
         <p><strong>Trin 2 — Badevandslokaliteter:</strong> Hvert badevandsovervågningspunkt farves efter den højeste risikokarakter fra PULS-udløb inden for 15 km — uafhængigt af tekstmatch. Denne spatielle søgning fanger lokale udløb der potentielt påvirker badevandet selv om vandområde-navnene ikke matcher direkte. Fallback: nærmeste kystvand-polygons risiko anvendes.</p>
+        <p><strong>Trin 3 — Strømjustering:</strong> Risikoen fra hvert nærliggende PULS-udløb (trin 2) justeres med en <em>opstrøms-vægt</em> baseret på den aktuelle strømretning og -hastighed mellem udløbet og badevandslokaliteten, hentet fra CMEMS' Østersø-model (dataset <span class="doc-mono">cmems_mod_bal_phy_anfc_PT1H-i</span>, opdateret hver time). Vægten beregnes som prikproduktet mellem strømvektoren (øst-/nordkomponent) og retningsvektoren fra udløb til badevand:</p>
+        <p class="doc-mono" style="font-size:.82rem">vægt = 0,15 + 0,85 × max(0, (cos θ + 1) / 2)</p>
+        <p>hvor θ er vinklen mellem strømretningen og udløb→badevand-retningen. En strøm der løber direkte fra udløbet mod badevandet giver vægt ≈ 1,0 (fuld risiko slår igennem); en strøm der løber væk fra badevandet (fortynder aktivt) giver vægt ≈ 0,15 (kraftigt reduceret, men aldrig nul — strømme skifter retning inden for timer). Uden strømdata, eller ved meget svag strøm (&lt;0,05 m/s), bruges en neutral vægt på 0,5. Den justerede risiko er <span class="doc-mono">pt.riskScore × vægt</span>, og den højeste værdi blandt alle nærliggende udløb bestemmer badevandslokalitetens endelige farve.</p>
+        <p><strong>Strøm-kortlaget:</strong> Under "Kortlag" kan strømretning og -hastighed vises direkte som pile på kortet — kun over vandområder (samme kystvand-polygoner som trin 1, testet med en ray-casting point-in-polygon-algoritme). Pilens retning viser strømretningen, størrelse og farve (blå→gul→rød) viser hastigheden. Dette er en statisk øjebliksvisning, ikke en animeret partikelstrøm som fx Windy — opdateres når strømdata forny hver 6. time.</p>
         <div class="doc-callout">Badevandsvurderingen er en modelbaseret indikator for CSO-risiko. Den afspejler ikke de officielle badevandsprofiler fra Miljøstyrelsen, som baseres på flerårige bakteriemålinger og lokale forureningskilder.</div>
       </section>
 
@@ -1268,6 +1357,8 @@
           <li>Tekstmatch mellem PULS <span class="doc-mono">waterArea</span> og VP3 <span class="doc-mono">ov_navn</span> dækker ikke alle kystvandområder — udløb til vandløb og søer kobles ikke til kystvand-polygoner.</li>
           <li>Modellen skelner ikke mellem salt-, brak- og ferskvand i patogenoverlevelse.</li>
           <li>Ingen tidevands- eller fortyndingsmodellering for fjorde og Vadehavet.</li>
+          <li>Strømdata (CMEMS) har ~10 km rumlig opløsning og opdateres hver time — lokale strømforhold i smalle sunde og havne kan afvige fra modellen.</li>
+          <li>Strøm-kortlaget viser et statisk øjebliksbillede ved seneste opdatering, ikke en løbende animeret prognose.</li>
         </ul>
       </section>
 
@@ -1313,11 +1404,13 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 const DB_NAME         = 'overloeb_cache';
-const DB_VERSION      = 1;
+const DB_VERSION      = 2;   // bumped: tilføjet STORE_CURRENTS
 const STORE_PULS      = 'puls_store';
 const STORE_WEATHER   = 'weather_store';
+const STORE_CURRENTS  = 'currents_store';
 const TTL_PULS_MS     =  14 * 24 * 3600 * 1000;  // 14 days
 const TTL_WEATHER_MS  =  6 *      3600 * 1000;   //  6 hours
+const TTL_CURRENTS_MS =  6 *      3600 * 1000;   //  6 hours — matcher server-cache TTL
 
 let _db = null;
 
@@ -1331,6 +1424,8 @@ function openDB() {
         db.createObjectStore(STORE_PULS);
       if (!db.objectStoreNames.contains(STORE_WEATHER))
         db.createObjectStore(STORE_WEATHER);
+      if (!db.objectStoreNames.contains(STORE_CURRENTS))
+        db.createObjectStore(STORE_CURRENTS);
     };
     req.onsuccess = e => { _db = e.target.result; resolve(_db); };
     req.onerror   = e => reject(e.target.error);
@@ -1561,6 +1656,16 @@ let vp3RbuLayer      = null;
 let showVP3Kyst      = true;
 let showVP3Bade      = true;
 let showVP3Rbu       = false;
+
+// Strøm-visualisering (punkt 11) — retningspile a la Windy, men statiske
+// (ikke animerede partikler) af hensyn til ydelse på et Leaflet-kort med
+// mange andre samtidige lag. Farve+størrelse kodér hastighed, rotation
+// kodér retning. Vises kun over vandområder (VP3 kystvande-polygoner) —
+// se pointInVP3Water() nedenfor, som bruger de rå GeoJSON-koordinater
+// direkte (ikke Leaflet-specifik) til en simpel ray-casting-test.
+const currentsArrowLayer = L.layerGroup();
+let showCurrents  = false;
+let vp3KystvandeRaw = null;   // rå GeoJSON — sat i loadVP3Layers()
 
 // ═══════════════════════════════════════════════════════════════════════════
 // GEOLOCATION — zoom to device position on load; fallback = DK overview
@@ -1834,6 +1939,10 @@ function renderMap() {
       fillOpacity: risk !== null ? 0.85 : 0.4,
       dashArray:   risk !== null ? null : '3,3',
     });
+    // Navn synligt ved hover, ikke kun i detaljepanelet efter klik.
+    // pt.name er altid udfyldt (fra PULS-udløbskoden hvis intet beskrivende
+    // navn findes), så denne tooltip viser aldrig tomt.
+    marker.bindTooltip(escHtml(pt.name), { sticky: true, direction: 'top', offset: [0, -4] });
 
     marker.on('click', function(e) { if(window._LC) return; window._LC=true; setTimeout(()=>delete window._LC,50); closePointPanel(); closeBadevandPanel(); updatePanel(pt, risk, foreRisk); });
     pointsLayer.addLayer(marker);
@@ -1934,35 +2043,60 @@ function updatePanel(pt, risk, foreRisk) {
       onclick="event.stopPropagation();toggleFav(${pt.id})" title="Favorit">${isFav(pt.id)?'❤️':'🤍'}</span>`;
   document.getElementById('point-panel').classList.add('open');
   document.getElementById('point-panel-body').innerHTML = `
-    <div style="margin:.3rem 0 .5rem">
+    <div class="field">
       ${risk !== null
         ? `<span class="chip ${rl.cls}">${rl.label} ${Math.round(risk*100)}%</span>`
         : '<span style="font-size:.78rem;color:#5a6b78">Ingen vejrdata</span>'
       }
     </div>
-    <div class="label">Kommune</div><div class="value">${escHtml(pt.municipality)}</div>
-    ${pt.waterArea ? `<div class="label">Recipient</div><div class="value">${escHtml(pt.waterArea)}</div>` : ''}
-    <div class="label">Datakvalitet</div><div class="value" style="font-size:.78rem">${qualLabel}</div>
-    <div class="label">Historik</div>
-    <div class="value">${pt.eventsPerYear != null ? pt.eventsPerYear.toFixed(0) : '—'} overløb/år · ${formatL(pt.volumeM3Year)}/år</div>
-    <div class="label">Gns. volumen pr. hændelse</div>
-    <div class="value">${formatL(pt.meanVolumePerEvent)}</div>
-    <div class="label">Nedbør 24h${decayNote}</div>
-    <div class="value">${(pt.todayMM||0).toFixed(1)} mm obs · ${(pt.forecastMM||0).toFixed(1)} mm prognose</div>
-    <div class="label">Total nedbør 7 dage</div>
-    <div class="value">${(pt.totalRain7d||0).toFixed(1)} mm</div>
-    <div class="label">Antecedent nedbør (τ=${tau.toFixed(1)} d)</div>
-    <div class="value">${(pt.precipMM||0).toFixed(1)} mm-ekv.</div>
-    <hr style="border-color:#eef2f5;margin:.5rem 0">
-    <div class="label">🦠 Bakteriel risiko</div>
-    <div class="value">${risk !== null
-      ? `<span class="chip ${rl.cls}">${rl.label} · ${Math.round(risk*100)}%</span>`
-      : '<span style="color:#5a6b78;font-size:.78rem">Ingen data</span>'
-    }</div>
-    <div class="label">🧬 Viral risiko (τ=${tauV.toFixed(1)} d)</div>
-    <div class="value"><span class="chip ${vrl.cls}">${vrl.label} · ${Math.round((pt.viralScore||0)*100)}%</span></div>
-    <div class="label">⚡ 24h varsling (bakteriel)</div>
-    <div class="value"><span class="chip ${fr.cls}">${fr.label} · ${Math.round(foreRisk*100)}%</span></div>`;
+    <div class="field">
+      <span class="label">Lokation</span>
+      <a class="value" id="point-panel-location" target="_blank" rel="noopener"
+         href="https://www.google.com/maps/search/?api=1&query=${pt.lat},${pt.lng}"
+         title="Åbn i Google Maps">📍 ${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}</a>
+    </div>
+    <div class="field">
+      <span class="label">Kommune</span><span class="value">${escHtml(pt.municipality)}</span>
+    </div>
+    ${pt.waterArea ? `<div class="field"><span class="label">Recipient</span><span class="value">${escHtml(pt.waterArea)}</span></div>` : ''}
+    <div class="field">
+      <span class="label">Datakvalitet</span><span class="value" style="font-size:.78rem">${qualLabel}</span>
+    </div>
+    <div class="field">
+      <span class="label">Historik</span>
+      <span class="value">${pt.eventsPerYear != null ? pt.eventsPerYear.toFixed(0) : '—'} overløb/år · ${formatL(pt.volumeM3Year)}/år</span>
+    </div>
+    <div class="field">
+      <span class="label">Gns. volumen pr. hændelse</span>
+      <span class="value">${formatL(pt.meanVolumePerEvent)}</span>
+    </div>
+    <div class="field">
+      <span class="label">Nedbør 24h${decayNote}</span>
+      <span class="value">${(pt.todayMM||0).toFixed(1)} mm obs · ${(pt.forecastMM||0).toFixed(1)} mm prognose</span>
+    </div>
+    <div class="field">
+      <span class="label">Total nedbør 7 dage</span>
+      <span class="value">${(pt.totalRain7d||0).toFixed(1)} mm</span>
+    </div>
+    <div class="field">
+      <span class="label">Antecedent nedbør (τ=${tau.toFixed(1)} d)</span>
+      <span class="value">${(pt.precipMM||0).toFixed(1)} mm-ekv.</span>
+    </div>
+    <div class="field">
+      <span class="label">🦠 Bakteriel risiko</span>
+      <span class="value">${risk !== null
+        ? `<span class="chip ${rl.cls}">${rl.label} · ${Math.round(risk*100)}%</span>`
+        : '<span style="color:#5a6b78;font-size:.78rem">Ingen data</span>'
+      }</span>
+    </div>
+    <div class="field">
+      <span class="label">🧬 Viral risiko (τ=${tauV.toFixed(1)} d)</span>
+      <span class="value"><span class="chip ${vrl.cls}">${vrl.label} · ${Math.round((pt.viralScore||0)*100)}%</span></span>
+    </div>
+    <div class="field">
+      <span class="label">⚡ 24h varsling (bakteriel)</span>
+      <span class="value"><span class="chip ${fr.cls}">${fr.label} · ${Math.round(foreRisk*100)}%</span></span>
+    </div>`;
 }
 
 async function saveWarnPoints(pts) {
@@ -2068,10 +2202,23 @@ async function loadAll() {
     let   warmCoverage = 0;
 
     // ── Trin 0: Tjek lokal IDB-cache (TTL 1 time) ────────────────────────────
+    // Memoized i _localWeatherCache for sessionens varighed — uden dette blev
+    // IndexedDB genlæst ved HVERT kald til loadAll(), inklusiv de automatiske
+    // gen-forsøg hvert 8. sekund når vejrdata mangler (se nedenfor). Intet
+    // skriver til denne cache før loadAll() lykkes helt, så et gen-forsøg
+    // inden for samme session kan aldrig se nyere data ved at læse igen —
+    // genbrug af det første resultat er derfor altid korrekt, ikke kun hurtigere.
     const W_CACHE_KEY = '__weather_v1__';
     const W_CACHE_TTL = 3600 * 1000;
+    if (typeof loadAll._localWeatherCache === 'undefined') {
+      try {
+        loadAll._localWeatherCache = await dbGet(STORE_WEATHER, W_CACHE_KEY);
+      } catch(_) {
+        loadAll._localWeatherCache = null;
+      }
+    }
     try {
-      const cached = await dbGet(STORE_WEATHER, W_CACHE_KEY);
+      const cached = loadAll._localWeatherCache;
       if (cached && (Date.now() - cached.ts) < W_CACHE_TTL && cached.cells) {
         for (const [key] of cellEntries) {
           const cell = gridCells.get(key);
@@ -2156,9 +2303,12 @@ async function loadAll() {
       try {
         const cellsObj = {};
         for (const [k, v] of cellResults) cellsObj[k] = v;
-        await dbPut(STORE_WEATHER, W_CACHE_KEY, { ts: Date.now(), cells: cellsObj });
+        const fresh = { ts: Date.now(), cells: cellsObj };
+        await dbPut(STORE_WEATHER, W_CACHE_KEY, fresh);
+        loadAll._localWeatherCache = fresh;  // hold hukommelses-kopien i sync
       } catch(_) {}
     }
+
 
     const hasWeather = overflowPoints.some(p => p.precipMM !== null);
 
@@ -2197,36 +2347,44 @@ let showForecast = false;
 
 function toggleHeat() {
   showHeat = !showHeat;
-  heatLayer.visible = showHeat;
   document.getElementById('btn-heat').classList.toggle('active', showHeat);
-  // CSS-only — heatmap-canvas forbliver i DOM, kun display skifter
-  if (heatLayer.ref?._canvas) {
-    heatLayer.ref._canvas.style.display = showHeat ? '' : 'none';
-  }
+  requestAnimationFrame(() => {
+    heatLayer.visible = showHeat;
+    // CSS-only — heatmap-canvas forbliver i DOM, kun display skifter
+    if (heatLayer.ref?._canvas) {
+      heatLayer.ref._canvas.style.display = showHeat ? '' : 'none';
+    }
+  });
 }
 
 function toggleViral() {
   showViral = !showViral;
-  viralHeatLayer.visible = showViral;
   document.getElementById('btn-viral').classList.toggle('active', showViral);
-  if (viralHeatLayer.ref?._canvas) {
-    viralHeatLayer.ref._canvas.style.display = showViral ? '' : 'none';
-  }
-  if (showViral) renderMap();
+  requestAnimationFrame(() => {
+    viralHeatLayer.visible = showViral;
+    if (viralHeatLayer.ref?._canvas) {
+      viralHeatLayer.ref._canvas.style.display = showViral ? '' : 'none';
+    }
+    if (showViral) renderMap();
+  });
 }
 
 function togglePoints() {
   showPoints = !showPoints;
   document.getElementById('btn-pts').classList.toggle('active', showPoints);
-  if (showPoints) map.addLayer(pointsLayer);
-  else map.removeLayer(pointsLayer);
+  requestAnimationFrame(() => {
+    if (showPoints) map.addLayer(pointsLayer);
+    else map.removeLayer(pointsLayer);
+  });
 }
 
 function toggleForecast() {
   showForecast = !showForecast;
   document.getElementById('btn-fore').classList.toggle('active', showForecast);
-  if (showForecast) map.addLayer(forecastLayer);
-  else map.removeLayer(forecastLayer);
+  requestAnimationFrame(() => {
+    if (showForecast) map.addLayer(forecastLayer);
+    else map.removeLayer(forecastLayer);
+  });
 }
 
 // VP3 toggle-hjælper — fjerner parent OG hvert enkelt child-lag
@@ -2250,25 +2408,37 @@ function addVP3Layer(layer) {
   if (!map.hasLayer(layer)) layer.addTo(map);
 }
 
+// VP3-lagene kan indeholde tusindvis af polygon-elementer. Uden
+// requestAnimationFrame ville addVP3Layer/removeVP3Layer's tunge,
+// synkrone DOM-arbejde blokere browserens repaint af selve knappens
+// active-klasse — knappen ville se ud til at reagere forsinket, selvom
+// classList.toggle() rent faktisk kørte først. Ved at udsætte lag-
+// opdateringen ét frame, når browseren at male knap-feedbacken først.
 function toggleVP3Kyst() {
   showVP3Kyst = !showVP3Kyst;
   document.getElementById('btn-vp3kyst').classList.toggle('active', showVP3Kyst);
-  if (showVP3Kyst) addVP3Layer(vp3KystvandLayer);
-  else             removeVP3Layer(vp3KystvandLayer);
+  requestAnimationFrame(() => {
+    if (showVP3Kyst) addVP3Layer(vp3KystvandLayer);
+    else             removeVP3Layer(vp3KystvandLayer);
+  });
 }
 
 function toggleVP3Bade() {
   showVP3Bade = !showVP3Bade;
   document.getElementById('btn-vp3bade').classList.toggle('active', showVP3Bade);
-  if (showVP3Bade) addVP3Layer(vp3BadevandLayer);
-  else             removeVP3Layer(vp3BadevandLayer);
+  requestAnimationFrame(() => {
+    if (showVP3Bade) addVP3Layer(vp3BadevandLayer);
+    else             removeVP3Layer(vp3BadevandLayer);
+  });
 }
 
 function toggleVP3Rbu() {
   showVP3Rbu = !showVP3Rbu;
   document.getElementById('btn-vp3rbu').classList.toggle('active', showVP3Rbu);
-  if (showVP3Rbu) addVP3Layer(vp3RbuLayer);
-  else            removeVP3Layer(vp3RbuLayer);
+  requestAnimationFrame(() => {
+    if (showVP3Rbu) addVP3Layer(vp3RbuLayer);
+    else            removeVP3Layer(vp3RbuLayer);
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2279,7 +2449,34 @@ function toggleVP3Rbu() {
 let currentsGrid = null;   // Map: "lat2:lng2" → {uo, vo, speed, dir}
 let currentsTs   = 0;
 
+const CURRENTS_CACHE_KEY = '__currents_v1__';
+
 async function loadCurrents() {
+  // ── Trin 0: vis lokal IDB-cache med det samme, hvis den findes ────────────
+  // Undgår at brugeren venter på et netværkskald ved hver eneste sidevisning.
+  // Selv en let forældet strømretning er langt bedre end ingen (0,5 er den
+  // neutrale opstrøms-vægt uden data).
+  let hadLocalCache = false;
+  try {
+    const cached = await dbGet(STORE_CURRENTS, CURRENTS_CACHE_KEY);
+    if (cached && cached.points) {
+      currentsGrid = new Map(Object.entries(cached.points));
+      currentsTs   = cached.ts || 0;
+      hadLocalCache = true;
+      const ageMin = Math.round((Date.now() - currentsTs) / 60000);
+      console.info(`Strømdata: ${currentsGrid.size} punkter fra lokal cache (${ageMin} min gammel)`);
+    }
+  } catch(_) {}
+
+  // Hvis den lokale cache stadig er frisk (< 6t), er der intet at hente —
+  // spar et unødvendigt netværkskald helt.
+  if (hadLocalCache && (Date.now() - currentsTs) < TTL_CURRENTS_MS) {
+    if (showCurrents) buildCurrentsArrowLayer();
+    return;
+  }
+
+  // ── Trin 1: hent frisk data fra serveren (i baggrunden hvis vi allerede
+  // viser noget fra lokal cache — brugeren venter ikke på dette) ────────────
   try {
     const res = await fetch('api/currents');
     if (!res.ok) {
@@ -2290,7 +2487,18 @@ async function loadCurrents() {
     if (data.fallback) { console.info('Strømdata: fallback (CMEMS utilgængeligt)'); return; }
     currentsGrid = new Map(Object.entries(data.points || {}));
     currentsTs   = data.ts || Date.now();
-    console.info(`Strømdata: ${currentsGrid.size} punkter loaded`);
+    console.info(`Strømdata: ${currentsGrid.size} punkter hentet fra server`);
+    if (showCurrents) buildCurrentsArrowLayer();
+
+    // Gem til lokal cache til næste sidevisning
+    try {
+      await dbPut(STORE_CURRENTS, CURRENTS_CACHE_KEY, {
+        ts: currentsTs,
+        points: Object.fromEntries(currentsGrid),
+      });
+    } catch(e) {
+      console.warn('Kunne ikke gemme strømdata lokalt:', e.message);
+    }
   } catch(e) {
     console.warn('loadCurrents fejl:', e.message);
   }
@@ -2311,6 +2519,98 @@ function getCurrentAt(lat, lng) {
     if (minDist < 0.3) break;
   }
   return minDist < 1.5 ? nearest : null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STRØM-VISUALISERING (punkt 11) — retningspile a la Windy, kun på vandområder
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Ray-casting point-in-polygon — arbejder direkte på rå GeoJSON-koordinater
+// (ikke Leaflet-specifikt), så det ikke afhænger af hvordan L.geoJSON internt
+// strukturerer sine lag. GeoJSON-koordinater er [lng, lat], modsat Leaflets
+// [lat, lng] — hold styr på rækkefølgen.
+function pointInRing(lat, lng, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1];
+    const xj = ring[j][0], yj = ring[j][1];
+    const intersect = ((yi > lat) !== (yj > lat)) &&
+      (lng < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+function pointInGeometry(lat, lng, geometry) {
+  if (!geometry) return false;
+  if (geometry.type === 'Polygon') {
+    const rings = geometry.coordinates;
+    if (!rings.length || !pointInRing(lat, lng, rings[0])) return false;
+    for (let k = 1; k < rings.length; k++) {
+      if (pointInRing(lat, lng, rings[k])) return false; // inde i et hul
+    }
+    return true;
+  }
+  if (geometry.type === 'MultiPolygon') {
+    return geometry.coordinates.some(poly =>
+      pointInGeometry(lat, lng, { type: 'Polygon', coordinates: poly }));
+  }
+  return false;
+}
+
+// Fallback til true hvis polygonerne ikke er indlæst endnu — bedre at vise
+// for meget end slet intet, mens VP3-laget stadig henter i baggrunden.
+function isInDanishWater(lat, lng) {
+  if (!vp3KystvandeRaw?.features) return true;
+  return vp3KystvandeRaw.features.some(f => pointInGeometry(lat, lng, f.geometry));
+}
+
+// Bygger pil-laget ud fra det aktuelle currentsGrid. Kaldes kun når laget
+// slås til, eller når strømdata opdateres mens laget allerede er synligt —
+// ikke pr. frame, da strømdata kun skifter hver 6. time.
+function buildCurrentsArrowLayer() {
+  currentsArrowLayer.clearLayers();
+  if (!currentsGrid) return;
+
+  for (const [key, c] of currentsGrid) {
+    const [lat, lng] = key.split(':').map(Number);
+    if (isNaN(lat) || isNaN(lng)) continue;
+    if (c.speed < 0.02) continue;              // for svag til at være visuelt meningsfuld
+    if (!isInDanishWater(lat, lng)) continue;   // kun på vandet, ikke på land
+
+    const clampedSpeed = Math.min(c.speed, 1);  // m/s, klippet ved 1.0 for farve/størrelse-skala
+    const sizePx  = 12 + clampedSpeed * 16;      // 12–28 px
+    const opacity = 0.5 + clampedSpeed * 0.45;
+    // Windy-inspireret farveskala: blå (svag) → grøn/gul → rød (kraftig)
+    const hue   = 210 - clampedSpeed * 210;
+    const color = `hsl(${hue}, 85%, 45%)`;
+
+    const icon = L.divIcon({
+      className: 'current-arrow-icon',
+      html: `<svg width="${sizePx}" height="${sizePx}" viewBox="0 0 24 24"
+              style="transform:rotate(${c.dir}deg);opacity:${opacity.toFixed(2)}">
+              <path d="M12 1.5 L18.5 15 L12 11 L5.5 15 Z" fill="${color}"/>
+            </svg>`,
+      iconSize:   [sizePx, sizePx],
+      iconAnchor: [sizePx / 2, sizePx / 2],
+    });
+
+    L.marker([lat, lng], { icon, interactive: false, keyboard: false })
+      .addTo(currentsArrowLayer);
+  }
+}
+
+function toggleCurrents() {
+  showCurrents = !showCurrents;
+  document.getElementById('btn-currents').classList.toggle('active', showCurrents);
+  requestAnimationFrame(() => {
+    if (showCurrents) {
+      buildCurrentsArrowLayer();
+      map.addLayer(currentsArrowLayer);
+    } else {
+      map.removeLayer(currentsArrowLayer);
+    }
+  });
 }
 
 // Beregn "opstrøms-vægt" — hvor meget påvirker et udløb badevandslokationen
@@ -2490,6 +2790,7 @@ async function loadVP3Layers() {
     const resp = await fetch('vp3_kystvande_simplified.geojson');
     if (resp.ok) {
       const data = await resp.json();
+      vp3KystvandeRaw = data;   // rå GeoJSON — bruges af strøm-laget til at maskere til vandområder
       vp3KystvandLayer = L.geoJSON(data, {
         style: {
           color: '#1a6faf', weight: 1.5,
@@ -2618,8 +2919,17 @@ async function clearCache() {
         const tx  = db.transaction(STORE_WEATHER, 'readwrite');
         const req = tx.objectStore(STORE_WEATHER).clear();
         req.onsuccess = res; req.onerror = rej;
+      }),
+      new Promise((res, rej) => {
+        const tx  = db.transaction(STORE_CURRENTS, 'readwrite');
+        const req = tx.objectStore(STORE_CURRENTS).clear();
+        req.onsuccess = res; req.onerror = rej;
       })
     ]);
+    // Nulstil sessionens hukommelses-cacher, ellers viser statuslinjen
+    // forældet info efter en bevidst rydning.
+    loadAll._localWeatherCache = undefined;
+    showCacheStatus._pulsRec   = undefined;
     document.getElementById('status-text').textContent = 'Cache ryddet — genindlæser…';
     setTimeout(loadAll, 400);
   } catch(e) {
@@ -2629,7 +2939,14 @@ async function clearCache() {
 
 async function showCacheStatus() {
   try {
-    const pulsRec    = await dbGet(STORE_PULS, PULS_CACHE_KEY);
+    // Memoized for sessionens varighed — samme begrundelse som vejr-cachen
+    // ovenfor: loadAll() (og dermed showCacheStatus()) kan køre flere gange
+    // pr. session ved gen-forsøg, men PULS-cachens tidsstempel ændrer sig
+    // ikke undervejs, så et gentaget IndexedDB-opslag er ren spildt tid.
+    if (typeof showCacheStatus._pulsRec === 'undefined') {
+      showCacheStatus._pulsRec = await dbGet(STORE_PULS, PULS_CACHE_KEY);
+    }
+    const pulsRec    = showCacheStatus._pulsRec;
     const pulsAge    = pulsRec ? Math.round((Date.now() - pulsRec.ts) / 3600000) : null;
     const statusEl   = document.getElementById('status-text');
     const cacheInfo  = pulsAge !== null
@@ -3543,7 +3860,7 @@ async function loadVarselData() {
     if (rec && rec.data && Array.isArray(rec.data) && rec.data.length > 0) {
       ageMin = Math.round((Date.now() - rec.ts) / 60000);
       if (Date.now() - rec.ts > 2 * 3600 * 1000) {
-        alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">🕐</span>Varsler forældede — gå til Kortet og tryk ↻ Opdater</div>';
+        alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">🕐</span>Varsler forældede — genindlæs siden for at opdatere</div>';
         if (alarmCount) alarmCount.textContent = '0';
         updateVarslerBadge(0);
         return;
@@ -3797,21 +4114,5 @@ registerSW().then(() => restorePushSubscription());
   </div>
 </div>
 
-<div id="lag" class="collapsed">
-  <button id="lag-btn" onclick="toggleLag()" title="Kortlag">⊞</button>
-  <div id="lag-body" onclick="toggleLag()" style="cursor:pointer" title="Klik for at lukke">
-    <h4>Kortlag</h4>
-    <button class="ctrl-btn active" id="btn-heat"    onclick="event.stopPropagation();toggleHeat()">🌡 Bakterielt kort</button>
-    <button class="ctrl-btn"        id="btn-viral"   onclick="event.stopPropagation();toggleViral()">🧬 Viralt kort</button>
-    <button class="ctrl-btn active" id="btn-pts"     onclick="event.stopPropagation();togglePoints()">📍 Udløbspunkter</button>
-    <button class="ctrl-btn"        id="btn-fore"    onclick="event.stopPropagation();toggleForecast()">⚡ 24h Varsling</button>
-    <button class="ctrl-btn active" id="btn-vp3kyst" onclick="event.stopPropagation();toggleVP3Kyst()">🌊 Kystvande</button>
-    <button class="ctrl-btn active" id="btn-vp3bade" onclick="event.stopPropagation();toggleVP3Bade()">🏖 Badevandsområder</button>
-    <button class="ctrl-btn"        id="btn-vp3rbu"  onclick="event.stopPropagation();toggleVP3Rbu()">🔴 RBU-punkter</button>
-    <hr style="border-color:rgba(26,107,138,.2);margin:.4rem 0">
-    <button class="ctrl-btn" onclick="event.stopPropagation();locateUser()">📍 Min placering</button>
-    <button class="ctrl-btn" onclick="event.stopPropagation();refreshData()">↻ Opdater</button>
-  </div>
-</div>
 </body>
 </html>
