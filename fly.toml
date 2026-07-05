@@ -1,4 +1,4 @@
-# fly.toml app configuration file generated for dkvand on 2026-07-05T12:49:34Z
+# fly.toml app configuration file generated for dkvand on 2026-07-05T13:36:44Z
 #
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
@@ -26,9 +26,9 @@ primary_region = 'arn'
   cpus = 1
 
 [[vm]]
-  memory = '768mb'
+  memory = '2gb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 768
+  memory_mb = 2048
   processes = ['app']
   size = 'shared-cpu-1x'
