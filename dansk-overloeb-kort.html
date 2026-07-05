@@ -417,15 +417,14 @@
 
 
   /* ═══ #lag — kortlagsvælger, samme mønster som #legend ═══ */
-  /* RETTET: var position:fixed + z-index:9000, hvilket placerede den
-     relativt til hele browser-vinduet i stedet for kortet, og fik den til
-     at flyde uden for kortets grænser og ødelægge UI'et. Nu absolute,
-     samme mønster og z-index som #legend, og flyttet ind i #tab-kort i
-     selve HTML-strukturen (se nedenfor). */
+  /* RETTET: lå tidligere bottom-right, som er nøjagtig samme hjørne som
+     Leaflets zoomkontrol (L.control.zoom({position:'bottomright'})) — de
+     kolliderede visuelt. Flyttet til bottom-left og stablet sammen med
+     #legend, som brugeren bad om ("samlet sammen med Risikoniveau-ikonet"). */
   #lag {
     position: absolute;
-    bottom: 30px;
-    right: 14px;
+    bottom: 74px;
+    left: 14px;
     z-index: 900;
     font-size: .72rem;
   }
@@ -462,13 +461,12 @@
   #lag.collapsed #lag-btn  { display: block; }
   #lag.collapsed #lag-body { display: none; }
 
-  /* ═══ #locate — flydende "Min placering"-knap, samme mønster som legend/lag,
-     men uden collapse-tilstand — det er en handlingsknap, ikke et panel.
-     Placeret lige over lag-vælgeren i samme hjørne. ═══ */
+  /* ═══ #locate — flydende "Min placering"-knap, gruppperet med legend/lag
+     i samme hjørne (bund-venstre), stablet øverst i klyngen. ═══ */
   #locate-btn {
     position: absolute;
-    bottom: 74px;
-    right: 14px;
+    bottom: 118px;
+    left: 14px;
     z-index: 900;
     width: 32px; height: 32px;
     border-radius: 50%;
@@ -1651,6 +1649,21 @@ function updateHeatmap(state, data) {
 
 // VP3 vandområde-lag
 let vp3KystvandLayer = null;
+
+// Centraliseret navne-opslag for badevandslokaliteter. VP3-datakilden har
+// historisk brugt flere forskellige feltnavne for det samme (afhængig af
+// hvilken WFS-eksport der er brugt) — denne liste er bevidst bred, så et
+// ukendt feltnavn i kilden ikke stille falder tilbage til generisk tekst.
+// Bruges konsekvent alle steder badevands-navnet vises (kort-tooltip,
+// detaljevisningens titel), så de aldrig kan komme ud af sync med hinanden.
+function getBadevandNavn(p) {
+  p = p || {};
+  return p.pkt_navn || p.navn || p.NAVN || p.Navn || p.name
+    || p.lokalitetsnavn || p.stationsnavn || p.badevandsnavn
+    || p.ov_navn || p.ov_id || p.id
+    || 'Badevandslokalitet';
+}
+
 let vp3BadevandLayer = null;
 let vp3RbuLayer      = null;
 let showVP3Kyst      = true;
@@ -2774,7 +2787,7 @@ function colorBadevandByRisk() {
     });
 
     const p = layer.feature?.properties || {};
-    const navn = p.pkt_navn || p.navn || 'Badevandslokalitet';
+    const navn = getBadevandNavn(p);
     layer.bindTooltip(
       `<strong>🏖 ${escHtml(String(navn))}</strong><br>` +
       `${riskTooltipText(risk)}<br>` +
@@ -2838,7 +2851,7 @@ async function loadVP3Layers() {
         }),
         onEachFeature: (f, l) => {
           const p = f.properties || {};
-          const navn = p.pkt_navn || p.navn || p.id || 'Badevandslokalitet';
+          const navn = getBadevandNavn(p);
           l.bindTooltip(`<strong>🏖 ${escHtml(String(navn))}</strong><br><span style="font-size:.7rem;opacity:.7">Klik for detaljer</span>`, { sticky: true });
           l.on('click', function(e) { if(window._LC) return; window._LC=true; setTimeout(()=>delete window._LC,50); closePointPanel(); showBadevandPanel(f); });
         }
@@ -3537,7 +3550,7 @@ let _currentBvFeature = null;
 async function toggleBadevandFav() {
   // Brug koordinater som unik nøgle for badevandslokalitet
   const p    = _currentBvFeature?.properties || {};
-  const navn = p.pkt_navn || p.navn || 'Badevandslokalitet';
+  const navn = getBadevandNavn(p);
   const geo  = _currentBvFeature?.geometry?.coordinates;
   const favKey = geo ? `bv_${geo[1].toFixed(4)}_${geo[0].toFixed(4)}` : `bv_${navn}`;
   
@@ -3589,7 +3602,7 @@ document.addEventListener('keydown', e => {
 async function showBadevandPanel(feature) {
   _currentBvFeature = feature;
   const p    = feature.properties || {};
-  const navn = p.pkt_navn || p.navn || 'Badevandslokalitet';
+  const navn = getBadevandNavn(p);
   const latlng = feature.geometry?.coordinates
     ? { lat: feature.geometry.coordinates[1], lng: feature.geometry.coordinates[0] }
     : null;
