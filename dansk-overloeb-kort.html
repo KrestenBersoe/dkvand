@@ -144,7 +144,7 @@
     position: sticky; top: 0;
     background: #fff;
   }
-  #point-panel-title { font-size: .85rem; font-weight: 700; flex: 1; }
+  #point-panel-title { font-size: 1.05rem; font-weight: 800; flex: 1; }
   #point-panel-close {
     background: none; border: none; cursor: pointer;
     font-size: 1.1rem; color: #5a6b78; padding: 0 .3rem;
@@ -173,8 +173,8 @@
   }
   #point-panel-body .value {
     display: block;
-    font-size: .88rem;
-    font-weight: 600;
+    font-size: .86rem;
+    font-weight: 400;
     color: #1a2733;
     line-height: 1.4;
   }
@@ -240,7 +240,7 @@
     border-radius: 6px;
   }
   #bv-back-btn:hover { background: #eef4f7; }
-  #bv-title { font-size: .95rem; font-weight: 700; flex: 1; }
+  #bv-title { font-size: 1.05rem; font-weight: 800; flex: 1; }
   #bv-subtitle { font-size: .72rem; color: #5a6b78; }
 
   #bv-body {
@@ -479,6 +479,32 @@
   }
   #locate-btn:hover { border-color: var(--accent); background: rgba(26,107,138,.15); }
   #locate-btn:active { transform: scale(.94); }
+
+  /* ═══ Strømpile (punkt 11 + opfølgning) ═══ */
+  /* RETTET: Leaflet sætter automatisk hvid baggrund + kant på divIcon via
+     .leaflet-div-icon — det skjulte reelt vores pile bag en hvid boks.
+     !important nødvendigt for at overtrumfe Leaflets egen indbyggede regel. */
+  .current-arrow-icon {
+    background: transparent !important;
+    border: none !important;
+  }
+  /* Flow-animation: pilens spids bevæger sig let frem og tilbage langs sin
+     egen retning, kombineret med en opacity-puls — giver indtryk af
+     strømmens bevægelse uden en fuld partikel-simulation.
+     animation-duration sættes pr. pil ud fra hastighed (se
+     buildCurrentsArrowLayer), så kraftigere strøm "flyder" synligt hurtigere. */
+  @keyframes current-flow {
+    0%   { transform: translateY(3px);  opacity: .55; }
+    50%  { transform: translateY(-3px); opacity: 1;   }
+    100% { transform: translateY(3px);  opacity: .55; }
+  }
+  .current-arrow-icon svg path {
+    animation-name: current-flow;
+    animation-timing-function: ease-in-out;
+    animation-iteration-count: infinite;
+    transform-box: fill-box;
+    transform-origin: center;
+  }
 
   #legend h4 {
     font-family: var(--mono);
@@ -1586,10 +1612,16 @@ const map = L.map('map', {
 
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-// Light basemap — standard OSM tiles, no filter
+// Light basemap — CARTO's gratis, nøglefri tile-CDN (samme OSM-data,
+// men beregnet til produktionsbrug). Skiftet fra rå tile.openstreetmap.org,
+// hvis Tile Usage Policy er blevet markant strammere (kræver nu Referer +
+// User-Agent-identifikation, og blokerer aggressivt ved "for mange kald" —
+// hvilket ramte os efter dagens intensive testing). OSM's egen dokumentation
+// fraråder eksplicit at bruge deres demo-tileserver til produktionsapps.
 
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+  subdomains: 'abcd',
   maxZoom: 19
 }).addTo(map);
 
@@ -1607,8 +1639,9 @@ function initHjemMap() {
     zoom: 6,
     zoomControl: true,
   });
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a> contributors © <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: 'abcd',
     maxZoom: 19
   }).addTo(hjemMap);
   hjemNearestLayer = L.layerGroup().addTo(hjemMap);
@@ -1650,17 +1683,17 @@ function updateHeatmap(state, data) {
 // VP3 vandområde-lag
 let vp3KystvandLayer = null;
 
-// Centraliseret navne-opslag for badevandslokaliteter. VP3-datakilden har
-// historisk brugt flere forskellige feltnavne for det samme (afhængig af
-// hvilken WFS-eksport der er brugt) — denne liste er bevidst bred, så et
-// ukendt feltnavn i kilden ikke stille falder tilbage til generisk tekst.
-// Bruges konsekvent alle steder badevands-navnet vises (kort-tooltip,
-// detaljevisningens titel), så de aldrig kan komme ud af sync med hinanden.
+// Centraliseret navne-opslag for badevandslokaliteter. Det faktiske feltnavn
+// i VP3-kilden er "nametext" (bekræftet direkte fra vp3_badevand.geojson) —
+// et navn ingen tidligere fallback-gæt dækkede. "bathingwat" er EU's
+// officielle badevands-ID (fx "DKBW1009") og bruges som sekundær reserve.
+// De øvrige varianter bevares som yderligere sikkerhedsnet mod fremtidige
+// dataændringer fra kilden.
 function getBadevandNavn(p) {
   p = p || {};
-  return p.pkt_navn || p.navn || p.NAVN || p.Navn || p.name
+  return p.nametext || p.pkt_navn || p.navn || p.NAVN || p.Navn || p.name
     || p.lokalitetsnavn || p.stationsnavn || p.badevandsnavn
-    || p.ov_navn || p.ov_id || p.id
+    || p.ov_navn || p.bathingwat || p.ov_id || p.id
     || 'Badevandslokalitet';
 }
 
@@ -2598,11 +2631,18 @@ function buildCurrentsArrowLayer() {
     const hue   = 210 - clampedSpeed * 210;
     const color = `hsl(${hue}, 85%, 45%)`;
 
+    // Hurtigere strøm → hurtigere puls (0,8–2,2 sek). Faseforskudt pr. pil
+    // (baseret på position) så alle pile ikke pulserer synkront — det ville
+    // se robotagtigt og kunstigt ud i stedet for at ligne strømmende vand.
+    const duration = (2.2 - clampedSpeed * 1.4).toFixed(2);
+    const delay    = ((Math.abs(lat * 37 + lng * 53) % 1) * parseFloat(duration)).toFixed(2);
+
     const icon = L.divIcon({
       className: 'current-arrow-icon',
       html: `<svg width="${sizePx}" height="${sizePx}" viewBox="0 0 24 24"
               style="transform:rotate(${c.dir}deg);opacity:${opacity.toFixed(2)}">
-              <path d="M12 1.5 L18.5 15 L12 11 L5.5 15 Z" fill="${color}"/>
+              <path d="M12 1.5 L18.5 15 L12 11 L5.5 15 Z" fill="${color}"
+                    style="animation-duration:${duration}s;animation-delay:${delay}s"/>
             </svg>`,
       iconSize:   [sizePx, sizePx],
       iconAnchor: [sizePx / 2, sizePx / 2],
