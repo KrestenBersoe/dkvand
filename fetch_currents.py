@@ -56,7 +56,11 @@ print(
     file=sys.stderr,
 )
 
-DATASET_ID = "cmems_mod_bal_phy_cur_anfc_2.5km_PT1H-i"
+DATASET_ID = "cmems_mod_bal_phy_anfc_PT1H-i"
+# Tidligere ID "cmems_mod_bal_phy_cur_anfc_2.5km_PT1H-i" findes ikke længere —
+# CMEMS har konsolideret Østersø-produktet BALTICSEA_ANALYSISFORECAST_PHY_003_006
+# til ét samlet, multi-variabel datasæt med flere dybdeniveauer i stedet for
+# separate per-variabel datasæt. uo/vo er nu del af dette datasæt.
 
 # Dansk farvand (samme bbox som tidligere JS-implementering)
 LAT_MIN, LAT_MAX = 54.0, 58.0
@@ -75,6 +79,8 @@ try:
         maximum_longitude=LON_MAX,
         minimum_latitude=LAT_MIN,
         maximum_latitude=LAT_MAX,
+        minimum_depth=0,
+        maximum_depth=0,
     )
 except Exception as e:
     fail(f"open_dataset failed: {describe_exception(e)}")
