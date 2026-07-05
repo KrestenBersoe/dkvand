@@ -105,7 +105,7 @@ try:
         minimum_latitude=LAT_MIN,
         maximum_latitude=LAT_MAX,
         minimum_depth=0,
-        maximum_depth=0,
+        maximum_depth=1,  # datasættets øverste niveau ligger på ~0.5 m, ikke 0 m
     )
 except Exception as e:
     fail(f"open_dataset failed: {describe_exception(e)}")
