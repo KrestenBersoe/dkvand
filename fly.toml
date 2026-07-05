@@ -13,13 +13,13 @@ primary_region = 'arn'
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
-  # Sat tilbage til 0 (skaler-til-nul, billigst) — nu hvor strøm-cachen
-  # ligger på en persistent Volume i stedet for containerens flygtige
-  # rodfilsystem, overlever den et fuldt autostop/genstart-cyklus, så vi
-  # ikke længere behøver holde en maskine kørende konstant for at undgå
-  # kolde CMEMS-opslag. Sæt til 1 igen hvis I hellere vil undgå enhver
-  # kold-start-ventetid (også for vejrdata) på bekostning af løbende drift.
-  min_machines_running = 0
+  # Sat til 1 (var 0): selvom volumen løser selve cache-persistens-problemet,
+  # tilføjer volume-montering ved opstart (filsystem-tjek + mount) nok ekstra
+  # tid til at Fly's proxy nogle gange giver op efter ~8,5 sek, før appen når
+  # at blive klar — det viste sig som en "hængende" forbindelse for brugeren
+  # ved kolde opstarter. Med min_machines_running=1 sker en kold opstart
+  # aldrig for en rigtig bruger, kun ved deploy.
+  min_machines_running = 1
 
 [[mounts]]
   # Persistent lagring til .currents-cache.json — overlever autostop/start,

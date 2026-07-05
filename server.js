@@ -648,6 +648,7 @@ const CURRENTS_CACHE_FILE = path.join(DATA_DIR, 'currents-cache.json');
 
 let currentsCache          = { ts: 0, grid: null, error: null };
 let currentsRefreshInFlight = false;
+let currentsRefreshPromise  = null;
 
 // ── Disk-persistens ───────────────────────────────────────────────────────
 // Fly.io autostopper maskinen ved inaktivitet og genstarter den ved næste
@@ -756,10 +757,18 @@ async function refreshCurrentsNow() {
   return currentsCache.grid;
 }
 
+function startCurrentsRefresh() {
+  currentsRefreshInFlight = true;
+  currentsRefreshPromise = refreshCurrentsNow().finally(() => {
+    currentsRefreshInFlight = false;
+    currentsRefreshPromise = null;
+  });
+  return currentsRefreshPromise;
+}
+
 function triggerBackgroundRefresh() {
   if (currentsRefreshInFlight) return;
-  currentsRefreshInFlight = true;
-  refreshCurrentsNow().finally(() => { currentsRefreshInFlight = false; });
+  startCurrentsRefresh();
 }
 
 // Stale-while-revalidate: frisk cache → returnér med det samme.
@@ -775,7 +784,13 @@ async function fetchCMEMSCurrents() {
     return currentsCache.grid;
   }
 
-  return refreshCurrentsNow();
+  // Ingen cache overhovedet — flere samtidige kald (fx det planlagte
+  // opvarmningskald og en rigtig brugerforespørgsel, der rammer inden for
+  // samme sekund ved kold opstart) skal dele ÉN igangværende hentning i
+  // stedet for hver at starte deres egen Python-proces. Genbruger samme
+  // in-flight-lås som triggerBackgroundRefresh().
+  if (currentsRefreshInFlight) return currentsRefreshPromise;
+  return startCurrentsRefresh();
 }
 
 // Indlæs evt. tidligere gemte strømdata synkront ved opstart, før noget andet
