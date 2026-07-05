@@ -1,3 +1,8 @@
+# fly.toml app configuration file generated for dkvand on 2026-07-05T12:49:34Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
 app = 'dkvand'
 primary_region = 'arn'
 
@@ -11,7 +16,7 @@ primary_region = 'arn'
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = "stop"
+  auto_stop_machines = true
   auto_start_machines = true
   min_machines_running = 0
 
@@ -19,3 +24,11 @@ primary_region = 'arn'
   memory = '256mb'
   cpu_kind = 'shared'
   cpus = 1
+
+[[vm]]
+  memory = '768mb'
+  cpu_kind = 'shared'
+  cpus = 1
+  memory_mb = 768
+  processes = ['app']
+  size = 'shared-cpu-1x'
