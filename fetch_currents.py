@@ -104,6 +104,7 @@ STRIDE = 4
 # lille, veldefineret geografisk/tidsmæssig forespørgsel som denne.
 import tempfile
 import glob
+import shutil
 import datetime as _dt
 
 now = _dt.datetime.now(_dt.timezone.utc)
@@ -115,86 +116,96 @@ end_dt   = now + _dt.timedelta(hours=6)
 tmp_dir = tempfile.mkdtemp(prefix="cmems_subset_")
 
 try:
-    response = copernicusmarine.subset(
-        dataset_id=DATASET_ID,
-        username=USERNAME,
-        password=PASSWORD,
-        variables=["uo", "vo"],
-        minimum_longitude=LON_MIN,
-        maximum_longitude=LON_MAX,
-        minimum_latitude=LAT_MIN,
-        maximum_latitude=LAT_MAX,
-        minimum_depth=0,
-        maximum_depth=1,  # datasættets øverste niveau ligger på ~0.5 m, ikke 0 m
-        start_datetime=start_dt,
-        end_datetime=end_dt,
-        output_directory=tmp_dir,
-        output_filename="currents.nc",
-        file_format="netcdf",
-        disable_progress_bar=True,
-        overwrite=True,
-    )
-except Exception as e:
-    fail(f"subset failed: {describe_exception(e)}")
+    try:
+        response = copernicusmarine.subset(
+            dataset_id=DATASET_ID,
+            username=USERNAME,
+            password=PASSWORD,
+            variables=["uo", "vo"],
+            minimum_longitude=LON_MIN,
+            maximum_longitude=LON_MAX,
+            minimum_latitude=LAT_MIN,
+            maximum_latitude=LAT_MAX,
+            minimum_depth=0,
+            maximum_depth=1,  # datasættets øverste niveau ligger på ~0.5 m, ikke 0 m
+            start_datetime=start_dt,
+            end_datetime=end_dt,
+            output_directory=tmp_dir,
+            output_filename="currents.nc",
+            file_format="netcdf",
+            disable_progress_bar=True,
+            overwrite=True,
+        )
+    except Exception as e:
+        fail(f"subset failed: {describe_exception(e)}")
 
-try:
-    import xarray as xr
+    try:
+        import xarray as xr
 
-    nc_files = glob.glob(os.path.join(tmp_dir, "**", "*.nc"), recursive=True)
-    if not nc_files:
-        fail("subset gav ingen NetCDF-fil")
+        nc_files = glob.glob(os.path.join(tmp_dir, "**", "*.nc"), recursive=True)
+        if not nc_files:
+            fail("subset gav ingen NetCDF-fil")
 
-    # Almindelig (ikke-lazy) indlæsning — filen er allerede lille (afgrænset
-    # server-side), så hele indholdet kan roligt loades direkte i hukommelsen.
-    # engine="h5netcdf" eksplicit, da netCDF4-pakken ikke er installeret, men
-    # h5netcdf følger med som copernicusmarine-afhængighed.
-    ds = xr.load_dataset(nc_files[0], engine="h5netcdf")
+        # Almindelig (ikke-lazy) indlæsning — filen er allerede lille (afgrænset
+        # server-side), så hele indholdet kan roligt loades direkte i hukommelsen.
+        # engine="h5netcdf" eksplicit, da netCDF4-pakken ikke er installeret, men
+        # h5netcdf følger med som copernicusmarine-afhængighed.
+        ds = xr.load_dataset(nc_files[0], engine="h5netcdf")
 
-    # Seneste tidspunkt i det hentede udsnit
-    latest = ds.isel(time=-1) if "time" in ds.dims else ds
+        # Seneste tidspunkt i det hentede udsnit
+        latest = ds.isel(time=-1) if "time" in ds.dims else ds
 
-    # Overfladelag hvis der er en dybde-dimension
-    if "depth" in latest.dims:
-        latest = latest.isel(depth=0)
-    elif "elevation" in latest.dims:
-        latest = latest.isel(elevation=0)
+        # Overfladelag hvis der er en dybde-dimension
+        if "depth" in latest.dims:
+            latest = latest.isel(depth=0)
+        elif "elevation" in latest.dims:
+            latest = latest.isel(elevation=0)
 
-    lat_name = "latitude" if "latitude" in latest.coords else "lat"
-    lon_name = "longitude" if "longitude" in latest.coords else "lon"
+        lat_name = "latitude" if "latitude" in latest.coords else "lat"
+        lon_name = "longitude" if "longitude" in latest.coords else "lon"
 
-    latest = latest.isel({
-        lat_name: slice(0, None, STRIDE),
-        lon_name: slice(0, None, STRIDE),
-    })
+        latest = latest.isel({
+            lat_name: slice(0, None, STRIDE),
+            lon_name: slice(0, None, STRIDE),
+        })
 
-    lats = latest[lat_name].values
-    lons = latest[lon_name].values
-    uo_vals = latest["uo"].values
-    vo_vals = latest["vo"].values
+        lats = latest[lat_name].values
+        lons = latest[lon_name].values
+        uo_vals = latest["uo"].values
+        vo_vals = latest["vo"].values
 
-    points = []
-    for i, lat in enumerate(lats):
-        for j, lon in enumerate(lons):
-            u = float(uo_vals[i, j])
-            v = float(vo_vals[i, j])
-            if math.isnan(u) or math.isnan(v):
-                continue
-            if abs(u) > 10 or abs(v) > 10:  # fill-value sentinel
-                continue
-            points.append({
-                "lat": round(float(lat), 4),
-                "lng": round(float(lon), 4),
-                "uo": round(u, 4),
-                "vo": round(v, 4),
-            })
+        points = []
+        for i, lat in enumerate(lats):
+            for j, lon in enumerate(lons):
+                u = float(uo_vals[i, j])
+                v = float(vo_vals[i, j])
+                if math.isnan(u) or math.isnan(v):
+                    continue
+                if abs(u) > 10 or abs(v) > 10:  # fill-value sentinel
+                    continue
+                points.append({
+                    "lat": round(float(lat), 4),
+                    "lng": round(float(lon), 4),
+                    "uo": round(u, 4),
+                    "vo": round(v, 4),
+                })
 
-    if not points:
-        fail("no current points extracted from dataset")
+        if not points:
+            fail("no current points extracted from dataset")
 
-    print(json.dumps({
-        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "points": points,
-    }))
+        print(json.dumps({
+            "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "points": points,
+        }))
 
-except Exception as e:
-    fail(f"data extraction failed: {describe_exception(e)}")
+    except Exception as e:
+        fail(f"data extraction failed: {describe_exception(e)}")
+
+finally:
+    # KRITISK: uden denne oprydning efterlader hvert kald en ny NetCDF-fil i
+    # /tmp. Ved gentagne baggrunds-opdateringer (hver 6. time, samt hver
+    # autostop/genstart-cyklus) fylder det langsomt containerens disk op,
+    # hvilket i sidste ende kan gøre HELE appen utilgængelig — ikke kun
+    # strøm-endpointet. shutil.rmtree fejler aldrig processen selvom
+    # oprydningen af en eller anden grund ikke lykkes (ignore_errors=True).
+    shutil.rmtree(tmp_dir, ignore_errors=True)
