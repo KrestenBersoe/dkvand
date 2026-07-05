@@ -26,6 +26,14 @@ const https       = require('https');
 const fs          = require('fs');
 const webpush     = require('web-push');
 
+// ── Persistent Volume-mount, hvis tilgængelig ────────────────────────────────
+// Se fly.toml [[mounts]]. Containerens rodfilsystem (__dirname) nulstilles
+// ved hvert fuldt Fly-autostop, så alt der skal overleve en rigtig genstart
+// (strøm-cache, push-subscriptions) skal ligge her i stedet. Falder tilbage
+// til __dirname hvis /data ikke findes (lokal udvikling, eller før volumen
+// er oprettet), så koden virker uændret begge steder.
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+
 // ── VAPID configuration ─────────────────────────────────────────────────────
 // Set these as environment variables on Fly.io:
 //   fly secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=...
@@ -41,9 +49,39 @@ if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
   console.warn('VAPID keys not set — push notifications disabled. Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY.');
 }
 
-// In-memory subscription store — persists for server lifetime.
-// For multi-instance or persistent storage, replace with a database.
+// ── Push-subscriptions: in-memory + persisteret til Volume ──────────────────
+// Var tidligere rent in-memory og forsvandt derfor ved ethvert fuldt
+// Fly-autostop eller deploy — brugere der havde tilmeldt sig varsler holdt
+// stille og roligt op med at modtage dem uden selv at vide det. Persisteres
+// nu til samme Volume som strøm-cachen.
 const pushSubscriptions = new Map();  // key: endpoint URL → subscription object
+const PUSH_SUBS_FILE = path.join(DATA_DIR, 'push-subscriptions.json');
+
+function loadPersistedPushSubscriptions() {
+  try {
+    const raw    = fs.readFileSync(PUSH_SUBS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        if (entry?.subscription?.endpoint) {
+          pushSubscriptions.set(entry.subscription.endpoint, entry);
+        }
+      }
+      console.log(`Push-subscriptions: indlæst ${pushSubscriptions.size} fra disk`);
+    }
+  } catch (e) {
+    // Helt normalt ved allerførste deploy, eller hvis volumen er tom
+  }
+}
+
+function persistPushSubscriptions() {
+  const arr = [...pushSubscriptions.values()];
+  fs.writeFile(PUSH_SUBS_FILE, JSON.stringify(arr), (err) => {
+    if (err) console.warn('Kunne ikke gemme push-subscriptions til disk:', err.message);
+  });
+}
+
+loadPersistedPushSubscriptions();
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -208,45 +246,51 @@ function computeMetrics(json) {
 
 // ── Proactive cache warming ──────────────────────────────────────────────────
 // Individual single-location calls, CONCURRENCY=30. ~220 cells → ~10s warmup.
-let warmRunning = false;
-async function warmCache() {
-  if (warmRunning) return;
-  warmRunning = true;
-  const cells = buildPulsGrid();
-  const CONC  = 10;    // 10 parallelle kald — undgår burst rate-limit hos Open-Meteo
-  let idx = 0, fetched = 0, skipped = 0, failed = 0;
-  const t0 = Date.now();
+let warmRunning       = false;
+let currentWarmPromise = null;
 
-  async function worker(workerIdx) {
-    // Stagger worker start times med 200ms — fordeler burst-toppen
-    await new Promise(r => setTimeout(r, workerIdx * 200));
-    while (idx < cells.length) {
-      const cell = cells[idx++];
-      const key  = gridKey(cell.lat, cell.lng);
-      const cached = weatherCache.get(key);
-      if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) { skipped++; continue; }
-      try {
-        apiCallCount++;
-        const raw  = await fetchOpenMeteo(cell.lat, cell.lng);
-        const data = computeMetrics(raw);
-        weatherCache.set(key, { ts: Date.now(), data });
-        fetched++;
-      } catch(e) {
-        failed++;
-        const errMsg = e.message;
-        console.warn('warmCache cell failed:', key, errMsg);
-        fetchErrors.push({ ts: new Date().toISOString(), key, error: errMsg });
-        if (fetchErrors.length > 10) fetchErrors.shift();
-        // Vent 2s ved 429 inden næste forsøg i denne worker
-        if (errMsg.includes('429')) await new Promise(r => setTimeout(r, 2000));
+function warmCache() {
+  if (warmRunning) return currentWarmPromise;
+  warmRunning = true;
+  currentWarmPromise = (async () => {
+    const cells = buildPulsGrid();
+    const CONC  = 10;    // 10 parallelle kald — undgår burst rate-limit hos Open-Meteo
+    let idx = 0, fetched = 0, skipped = 0, failed = 0;
+    const t0 = Date.now();
+
+    async function worker(workerIdx) {
+      // Stagger worker start times med 200ms — fordeler burst-toppen
+      await new Promise(r => setTimeout(r, workerIdx * 200));
+      while (idx < cells.length) {
+        const cell = cells[idx++];
+        const key  = gridKey(cell.lat, cell.lng);
+        const cached = weatherCache.get(key);
+        if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) { skipped++; continue; }
+        try {
+          apiCallCount++;
+          const raw  = await fetchOpenMeteo(cell.lat, cell.lng);
+          const data = computeMetrics(raw);
+          weatherCache.set(key, { ts: Date.now(), data });
+          fetched++;
+        } catch(e) {
+          failed++;
+          const errMsg = e.message;
+          console.warn('warmCache cell failed:', key, errMsg);
+          fetchErrors.push({ ts: new Date().toISOString(), key, error: errMsg });
+          if (fetchErrors.length > 10) fetchErrors.shift();
+          // Vent 2s ved 429 inden næste forsøg i denne worker
+          if (errMsg.includes('429')) await new Promise(r => setTimeout(r, 2000));
+        }
       }
     }
-  }
 
-  await Promise.all(Array.from({ length: Math.min(CONC, cells.length) }, (_, i) => worker(i)));
-  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s — cache: ${weatherCache.size} cells`);
-  warmRunning = false;
+    await Promise.all(Array.from({ length: Math.min(CONC, cells.length) }, (_, i) => worker(i)));
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s — cache: ${weatherCache.size} cells`);
+    warmRunning = false;
+    currentWarmPromise = null;
+  })();
+  return currentWarmPromise;
 }
 
 // Opvarm ved opstart (2 forsøg: 2s og 10s) og derefter hvert 6. time.
@@ -293,11 +337,21 @@ app.get('/api/weather', async (req, res) => {
 // totalRain7d}, ... } — hourly arrays are excluded to keep payload small.
 // Browser caches with max-age=3600 (matches server TTL).
 // ETag allows 304 Not Modified when data hasn't changed.
-app.get('/api/weather/all', (req, res) => {
-  // Start opvarmning straks hvis cachen er tom — robust mod manglende setTimeout
-  if (weatherCache.size === 0 && !warmRunning) {
-    console.log('Cache tom ved /api/weather/all — starter warmCache');
-    warmCache().catch(e => console.warn('warmCache fejl:', e.message));
+app.get('/api/weather/all', async (req, res) => {
+  // Hvis cachen er tom (typisk lige efter en genstart), er serverens egen
+  // warmCache() markant hurtigere end klientens fallback-metode (170 celler
+  // på ~2 sek ved 10 samtidige kald, mod klientens egen 1-2 minutter ved kun
+  // 4 samtidige kald). Vent derfor kort på den, i stedet for straks at sende
+  // en tom cache og tvinge klienten ud i den langsomme vej.
+  // Kappet ved 15 sek som sikkerhedsnet, hvis Open-Meteo selv skulle være
+  // usædvanligt langsom — så falder vi tilbage til at svare med hvad end vi
+  // har, fremfor at lade klienten vente i det uendelige.
+  if (weatherCache.size === 0) {
+    console.log('Cache tom ved /api/weather/all — venter kort på warmCache');
+    await Promise.race([
+      warmCache().catch(e => console.warn('warmCache fejl:', e.message)),
+      new Promise(resolve => setTimeout(resolve, 15000)),
+    ]);
   }
 
   const out = {};
@@ -488,6 +542,7 @@ app.post('/api/push/subscribe', (req, res) => {
     favourites: favourites || [],
     ts: Date.now(),
   });
+  persistPushSubscriptions();
   console.info('Push subscription saved, total:', pushSubscriptions.size);
   res.json({ ok: true });
 });
@@ -498,6 +553,7 @@ app.post('/api/push/update-favourites', (req, res) => {
   const entry = pushSubscriptions.get(endpoint);
   if (!entry) return res.status(404).json({ error: 'Subscription not found' });
   entry.favourites = favourites || [];
+  persistPushSubscriptions();
   res.json({ ok: true });
 });
 
@@ -505,6 +561,7 @@ app.post('/api/push/update-favourites', (req, res) => {
 app.post('/api/push/unsubscribe', (req, res) => {
   const { endpoint } = req.body || {};
   pushSubscriptions.delete(endpoint);
+  persistPushSubscriptions();
   res.json({ ok: true });
 });
 
@@ -515,7 +572,7 @@ async function sendPushNotifications(warnPoints) {
   if (!VAPID_PUBLIC_KEY || pushSubscriptions.size === 0) return;
 
   const warnMap = new Map(warnPoints.map(p => [String(p.id), p]));
-  let sent = 0, failed = 0;
+  let sent = 0, failed = 0, expiredRemoved = false;
 
   for (const [endpoint, entry] of pushSubscriptions) {
     const { subscription, favourites } = entry;
@@ -543,10 +600,13 @@ async function sendPushNotifications(warnPoints) {
       if (e.statusCode === 410 || e.statusCode === 404) {
         // Subscription expired — remove it
         pushSubscriptions.delete(endpoint);
+        expiredRemoved = true;
       }
       failed++;
     }
   }
+
+  if (expiredRemoved) persistPushSubscriptions();
 
   if (sent + failed > 0) {
     console.info(`Push sent: ${sent}, failed/expired: ${failed}`);
@@ -582,7 +642,9 @@ const CURRENTS_TTL       = 6 * 3600 * 1000;
 const PYTHON_SCRIPT      = path.join(__dirname, 'fetch_currents.py');
 const PYTHON_BIN         = process.env.PYTHON_BIN || 'python3';
 const PYTHON_TIMEOUT     = 180 * 1000; // CMEMS-opslag over Fly's netværk kan tage 100+ sek
-const CURRENTS_CACHE_FILE = path.join(__dirname, '.currents-cache.json');
+// DATA_DIR (Volume-mount) er defineret øverst i filen — genbruges her til
+// samme strøm-cache-fil.
+const CURRENTS_CACHE_FILE = path.join(DATA_DIR, 'currents-cache.json');
 
 let currentsCache          = { ts: 0, grid: null, error: null };
 let currentsRefreshInFlight = false;

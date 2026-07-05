@@ -1,8 +1,3 @@
-# fly.toml app configuration file generated for dkvand on 2026-07-05T13:36:44Z
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
 app = 'dkvand'
 primary_region = 'arn'
 
@@ -16,19 +11,28 @@ primary_region = 'arn'
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = "stop"
   auto_start_machines = true
+  # Sat tilbage til 0 (skaler-til-nul, billigst) — nu hvor strøm-cachen
+  # ligger på en persistent Volume i stedet for containerens flygtige
+  # rodfilsystem, overlever den et fuldt autostop/genstart-cyklus, så vi
+  # ikke længere behøver holde en maskine kørende konstant for at undgå
+  # kolde CMEMS-opslag. Sæt til 1 igen hvis I hellere vil undgå enhver
+  # kold-start-ventetid (også for vejrdata) på bekostning af løbende drift.
   min_machines_running = 0
 
-[[vm]]
-  memory = '256mb'
-  cpu_kind = 'shared'
-  cpus = 1
+[[mounts]]
+  # Persistent lagring til .currents-cache.json — overlever autostop/start,
+  # i modsætning til containerens rodfilsystem. Oprettes med:
+  #   fly volumes create currents_cache --region arn --size 1
+  source      = "currents_cache"
+  destination = "/data"
 
 [[vm]]
-  memory = '2gb'
+  # Opdateret fra 256mb (var årsag til gentagne OOM-kills) til 2048mb,
+  # matcher den værdi der reelt er sat via Fly-dashboardet. Denne fil
+  # overskriver dashboard-indstillinger ved næste `fly deploy` hvis den
+  # ikke holdes i sync — derfor rettet her også, ikke kun i UI'en.
+  memory = '2048mb'
   cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 2048
-  processes = ['app']
-  size = 'shared-cpu-1x'
