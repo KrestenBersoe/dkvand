@@ -22,6 +22,14 @@ import os
 import json
 import datetime
 import math
+import tempfile
+
+# Toolbox'en cacher login-resultater lokalt (via cachier). Hvis en tidligere
+# fejlbehæftet kørsel i samme container blev cachet, kan det maskere at
+# credentials faktisk er blevet rettet. Hver kørsel får derfor sin egen
+# friske, tomme cache-mappe — lidt ekstra netværk pr. kald, men vi cacher
+# allerede resultatet 6 timer i server.js, så det er uden betydning.
+os.environ["COPERNICUSMARINE_CACHE_DIRECTORY"] = tempfile.mkdtemp(prefix="cmarine_cache_")
 
 
 def fail(msg):
@@ -41,10 +49,20 @@ try:
 except ImportError as e:
     fail(f"copernicusmarine package not installed: {e}")
 
-USERNAME = os.environ.get("CMEMS_USERNAME")
-PASSWORD = os.environ.get("CMEMS_PASSWORD")
+USERNAME = (os.environ.get("CMEMS_USERNAME") or "").strip()
+PASSWORD = (os.environ.get("CMEMS_PASSWORD") or "").strip()
 if not USERNAME or not PASSWORD:
     fail("CMEMS_USERNAME/CMEMS_PASSWORD not set")
+
+# Sikker diagnostik til stderr (ikke stdout — det skal forblive ren JSON).
+# Afslører aldrig selve værdierne, kun længde + første/sidste tegn, så man
+# kan opdage usynlige mellemrum/linjeskift eller forkert kopierede secrets
+# uden at lække credentials i logs.
+print(
+    f"[debug] username: len={len(USERNAME)} starts={USERNAME[:2]!r} ends={USERNAME[-2:]!r} | "
+    f"password: len={len(PASSWORD)} starts={PASSWORD[:1]!r} ends={PASSWORD[-1:]!r}",
+    file=sys.stderr,
+)
 
 DATASET_ID = "cmems_mod_bal_phy_cur_anfc_2.5km_PT1H-i"
 
