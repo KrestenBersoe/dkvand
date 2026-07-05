@@ -1606,7 +1606,12 @@ const VIRAL_AMPLITUDE = 0.75;
 const map = L.map('map', {
   center: [56.0, 10.5],
   zoom: 7,
-  zoomControl: false
+  zoomControl: false,
+  // Canvas i stedet for standard SVG-rendering: med 21.556 punktmarkører er
+  // SVG markant tungere ved zoom/pan, fordi hvert punkt er sit eget DOM-
+  // element, der skal genpositioneres individuelt. Canvas tegner alle
+  // punkter samlet på ét lærred — langt billigere ved denne skala.
+  preferCanvas: true,
 });
 
 L.control.zoom({ position: 'bottomright' }).addTo(map);
@@ -2643,11 +2648,24 @@ function pointInGeometry(lat, lng, geometry) {
   return false;
 }
 
-// Fallback til true hvis polygonerne ikke er indlæst endnu — bedre at vise
-// for meget end slet intet, mens VP3-laget stadig henter i baggrunden.
+// Cache af vand/land-klassificering pr. koordinat — klassificeringen ændrer
+// sig aldrig for et givent punkt, så uden denne cache blev den dyre point-
+// in-polygon-test genkørt for de samme punkter ved HVER pan/zoom (laget
+// genopbygges jo på moveend/zoomend). Ryddes ikke — currentsGrid-punkternes
+// koordinater er stabile på tværs af databaseopdateringer.
+const _waterClassCache = new Map();
 function isInDanishWater(lat, lng) {
+  // Cach kun rigtige beregninger — hvis VP3-polygonerne ikke er klar endnu,
+  // er "true" kun et midlertidigt fallback-gæt, og skal IKKE fastfryses i
+  // cachen (ellers ville tidlige opslag aldrig blive korrigeret, selv efter
+  // de rigtige polygondata er indlæst).
   if (!vp3KystvandeRaw?.features) return true;
-  return vp3KystvandeRaw.features.some(f => pointInGeometry(lat, lng, f.geometry));
+
+  const key = `${lat}:${lng}`;
+  if (_waterClassCache.has(key)) return _waterClassCache.get(key);
+  const result = vp3KystvandeRaw.features.some(f => pointInGeometry(lat, lng, f.geometry));
+  _waterClassCache.set(key, result);
+  return result;
 }
 
 // Bygger pil-laget, men KUN for punkter inden for det aktuelle synsfelt
