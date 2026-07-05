@@ -22,6 +22,31 @@ import os
 import json
 import datetime
 import math
+import logging
+import signal
+
+# Gør toolbox'ens interne fremdrifts-logging synlig i `fly logs` (stderr),
+# så vi kan se PRÆCIS hvor et langsomt kald bruger tid — fx catalog-opslag
+# vs. selve data-downloadet — i stedet for at gætte ud fra et hængende kald.
+logging.basicConfig(
+    level=logging.INFO,
+    format="[copernicusmarine] %(message)s",
+    stream=sys.stderr,
+)
+
+# Hård intern timeout: hvis hele scriptet ikke er færdigt inden for dette
+# antal sekunder, fejler vi kontrolleret med en klar besked i stedet for at
+# hænge på ubestemt tid. Sat lavere end server.js' egen 120s execFile-timeout,
+# så VI når at levere en informativ fejl, før Node bare dræber processen.
+HARD_TIMEOUT_SECONDS = 90
+
+
+def _on_timeout(signum, frame):
+    raise TimeoutError(f"script overskred {HARD_TIMEOUT_SECONDS}s intern timeout")
+
+
+signal.signal(signal.SIGALRM, _on_timeout)
+signal.alarm(HARD_TIMEOUT_SECONDS)
 
 
 def fail(msg):
