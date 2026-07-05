@@ -22,14 +22,6 @@ import os
 import json
 import datetime
 import math
-import tempfile
-
-# Toolbox'en cacher login-resultater lokalt (via cachier). Hvis en tidligere
-# fejlbehæftet kørsel i samme container blev cachet, kan det maskere at
-# credentials faktisk er blevet rettet. Hver kørsel får derfor sin egen
-# friske, tomme cache-mappe — lidt ekstra netværk pr. kald, men vi cacher
-# allerede resultatet 6 timer i server.js, så det er uden betydning.
-os.environ["COPERNICUSMARINE_CACHE_DIRECTORY"] = tempfile.mkdtemp(prefix="cmarine_cache_")
 
 
 def fail(msg):
