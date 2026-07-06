@@ -2590,6 +2590,12 @@ async function loadAll() {
       pt.todayMM     = w ? w.todayMM      : null;
       pt.forecastMM  = w ? w.forecastMM   : null;
       pt.totalRain7d = w ? w.totalRain7d  : null;
+      // RETTET: feltet blev tilføjet på serveren og læst her i klienten
+      // (getWaterTemp/computeAlgaeRisk), men blev ALDRIG rent faktisk
+      // kopieret over på punkt-objektet — det var derfor algeScore var 0
+      // for samtlige 21.556 punkter, uafhængigt af om CMEMS-temperatur
+      // virkede eller ej.
+      pt.recentAirTempAvg = w ? w.recentAirTempAvg : null;
       pt._weatherKey = `${gridCells.get(key)?.lat.toFixed(4)}:${gridCells.get(key)?.lng.toFixed(4)}`;
       pt.hourlyObs   = [];
       pt.hourlyFore  = [];
@@ -4017,6 +4023,104 @@ function buildWeeklyChart(weekObs, fore, totalMM) {
 // ═══════════════════════════════════════════════════════════════════════════
 let _currentBvFeature = null;
 
+// ═══════════════════════════════════════════════════════════════════════════
+// QR-SKILT — printklar A4-side med QR-kode til den AKTUELT åbne
+// badevandslokation. Genereres først når knappen klikkes (ikke forudberegnet
+// for alle lokationer) — én QR-kode pr. klik, aldrig gemt/cachet.
+// ═══════════════════════════════════════════════════════════════════════════
+function generateQrSign() {
+  if (!_currentBvFeature) { showToast('⚠️ Ingen lokation valgt'); return; }
+  const p      = _currentBvFeature.properties || {};
+  const navn   = getBadevandNavn(p);
+  const coords = _currentBvFeature.geometry?.coordinates;
+  if (!coords) { showToast('⚠️ Lokation mangler koordinater'); return; }
+
+  const lat = coords[1], lng = coords[0];
+  const url = `${location.origin}${location.pathname}#badevand=${lat.toFixed(4)}:${lng.toFixed(4)}`;
+  // Gratis, nøglefri QR-genereringstjeneste — genererer billedet on-demand
+  // pr. klik, ingen lokal QR-bibliotek-afhængighed nødvendig.
+  const qrImgUrl = `https://api.qrserver.com/v1/create-qr-code/?size=480x480&margin=8&data=${encodeURIComponent(url)}`;
+
+  const win = window.open('', '_blank');
+  if (!win) { showToast('⚠️ Pop-up blokeret — tillad pop-ups for dette site og prøv igen'); return; }
+
+  win.document.write(`<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<title>QR-skilt — ${escHtml(navn)}</title>
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    color: #1a2733;
+  }
+  .sign {
+    width: 210mm; height: 297mm;
+    padding: 22mm 18mm;
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center;
+  }
+  .brand {
+    font-family: 'JetBrains Mono', 'Courier New', monospace;
+    font-size: 11pt; letter-spacing: .08em; text-transform: uppercase;
+    color: #1a6b8a; font-weight: 700; margin-bottom: 14mm;
+  }
+  h1 {
+    font-size: 44pt; font-weight: 800; margin: 0 0 6mm;
+    color: #10222c; line-height: 1.05;
+  }
+  .location-name {
+    font-size: 20pt; font-weight: 600; color: #1a6b8a; margin: 0 0 14mm;
+  }
+  .body-text {
+    font-size: 16pt; line-height: 1.5; color: #3a4a55;
+    max-width: 140mm; margin: 0 0 16mm;
+  }
+  .qr-wrap {
+    background: #fff; border: 2px solid #dde3e8; border-radius: 6mm;
+    padding: 10mm; margin-bottom: 10mm;
+  }
+  .qr-wrap img { display: block; width: 90mm; height: 90mm; }
+  .url-fallback {
+    font-family: 'JetBrains Mono', monospace; font-size: 10pt;
+    color: #5a6b78; word-break: break-all; max-width: 140mm;
+  }
+  .footer {
+    margin-top: auto; font-size: 9pt; color: #9aaab5;
+    border-top: 1px solid #eef2f5; padding-top: 6mm; width: 100%;
+  }
+  .print-controls {
+    text-align: center; padding: 6mm; background: #f4f7f9;
+  }
+  @media print {
+    .print-controls { display: none; }
+    .sign { padding: 22mm 18mm; }
+  }
+</style>
+</head>
+<body>
+  <div class="print-controls">
+    <button onclick="window.print()" style="font-size:14px;padding:.6rem 1.2rem;cursor:pointer;background:#1a6b8a;color:#fff;border:none;border-radius:6px">🖨️ Udskriv skilt</button>
+  </div>
+  <div class="sign">
+    <div class="brand">🐬 Overløbsrisiko · Danmarks vandmiljø</div>
+    <h1>Dit Badevand</h1>
+    <div class="location-name">${escHtml(navn)}</div>
+    <div class="body-text">Check risikoen for bakterier, virus og alger inden du hopper i</div>
+    <div class="qr-wrap">
+      <img src="${qrImgUrl}" alt="QR-kode til ${escHtml(navn)}" />
+    </div>
+    <div class="url-fallback">${escHtml(url)}</div>
+    <div class="footer">Data fra Miljøportalen, Miljøstyrelsen og DMI/Open-Meteo — kun vejledende, ikke en officiel badevandsprofil</div>
+  </div>
+</body>
+</html>`);
+  win.document.close();
+}
+
 async function toggleBadevandFav() {
   // Brug koordinater som unik nøgle for badevandslokalitet
   const p    = _currentBvFeature?.properties || {};
@@ -4867,7 +4971,7 @@ registerSW().then(() => restorePushSubscription());
     <!-- Handlinger -->
     <div class="bv-actions">
       <button class="bv-btn primary" onclick="closeBadevandPanel(); switchTab('kort')">🗺 Vis på kort</button>
-
+      <button class="bv-btn" onclick="generateQrSign()">📄 QR-skilt</button>
     </div>
 
   </div>
