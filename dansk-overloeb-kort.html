@@ -3760,6 +3760,14 @@ function toggleLegend() {
   document.getElementById('legend').classList.toggle('collapsed');
 }
 
+// Luk risikoniveau-forklaringen hvis man klikker uden for den, mens den er
+// åben — samme adfærd som kortlagsvælgeren.
+document.addEventListener('click', function(e) {
+  const legend = document.getElementById('legend');
+  if (!legend || legend.classList.contains('collapsed')) return;
+  if (!legend.contains(e.target)) legend.classList.add('collapsed');
+});
+
 function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -4133,10 +4141,15 @@ async function showUdlobPanel(pt) {
   ud_setBar('ud-total-bar', 'ud-total-pct', totalRisk);
 
   const noteEl = document.getElementById('ud-total-note');
-  noteEl.textContent = isPuls ? ''
-    : pt._estimated
-      ? `Estimeret ud fra nærmeste PULS-udløb (${pt._estimatedDist.toFixed(1)} km væk) — RBU-punkter har ingen egen nedbørsmodel`
-      : 'Intet nærliggende PULS-udløb fundet til at estimere overløbsrisiko';
+  if (isPuls) {
+    noteEl.textContent = '';
+  } else if (pt.riskScore === null || pt.riskScore === undefined) {
+    noteEl.textContent = 'Intet nærliggende PULS-udløb fundet til at estimere overløbsrisiko';
+  } else if (pt._estimated) {
+    noteEl.textContent = `Estimeret ud fra nærmeste PULS-udløb (${pt._estimatedDist.toFixed(1)} km væk) — dette RBU-punkt har ingen selvstændig nedbørsmodel`;
+  } else {
+    noteEl.textContent = `Dette RBU-punkt er samme fysiske udløb som et registreret PULS-udløb — data er ikke et estimat`;
+  }
 
   // ── Stamdata ───────────────────────────────────────────────────────────────
   const infoBody = document.getElementById('ud-info-body');
@@ -4154,12 +4167,21 @@ async function showUdlobPanel(pt) {
       <div class="field"><span class="label">Historik</span><span class="value">${pt.eventsPerYear != null ? pt.eventsPerYear.toFixed(0) : '—'} overløb/år · ${formatL(pt.volumeM3Year)}/år</span></div>
       <div class="field"><span class="label">Gns. volumen pr. hændelse</span><span class="value">${formatL(pt.meanVolumePerEvent)}</span></div>`;
   } else {
+    const hasRealData = pt.eventsPerYear !== undefined;
+    const qualLabel = pt.quality===0 ? '✅ Reelle data'
+      : pt.quality===1 ? '✅ Verificeret nul'
+      : pt.quality===2 ? '⚠️ Estimeret'
+      : '❌ Utilstrækkelige data';
     infoBody.innerHTML = `
       <div class="field"><span class="label">Lokation</span>${mapsLink}</div>
       <div class="field"><span class="label">Kommune</span><span class="value">${escHtml(pt.municipality)}</span></div>
-      <div class="field"><span class="label">Vandområde</span><span class="value">${escHtml(String(pt.waterArea || '—'))}</span></div>
-      <div class="field"><span class="label">Tilstand</span><span class="value">${escHtml(String(pt.rbuTilstand || '?'))}</span></div>
-      ${pt.rbuIndsats ? `<div class="field"><span class="label">VP3 indsatsprogram</span><span class="value">⚠️ I indsatsprogram</span></div>` : ''}`;
+      <div class="field"><span class="label">Vandområde / Recipient</span><span class="value">${escHtml(String(pt.waterArea || '—'))}</span></div>
+      <div class="field"><span class="label">Tilstand (VP3)</span><span class="value">${escHtml(String(pt.rbuTilstand || '?'))}</span></div>
+      ${pt.rbuIndsats ? `<div class="field"><span class="label">VP3 indsatsprogram</span><span class="value">⚠️ I indsatsprogram</span></div>` : ''}
+      ${hasRealData ? `
+      <div class="field"><span class="label">Datakvalitet (PULS)</span><span class="value" style="font-size:.78rem">${qualLabel}</span></div>
+      <div class="field"><span class="label">Historik</span><span class="value">${pt.eventsPerYear.toFixed(0)} overløb/år · ${formatL(pt.volumeM3Year)}/år</span></div>
+      <div class="field"><span class="label">Gns. volumen pr. hændelse</span><span class="value">${formatL(pt.meanVolumePerEvent)}</span></div>` : ''}`;
   }
 
   // ── 7-dages nedbørsgraf ─────────────────────────────────────────────────────
@@ -4255,18 +4277,38 @@ function openRbuUdlobPanel(feature) {
   const lng = coords ? coords[0] : null;
   if (lat === null) return;
 
+  // RETTET: RBU-punkter (risikobetonede udledninger) er i mange tilfælde
+  // de SAMME fysiske udløb som allerede findes i PULS — VP3 sætter blot en
+  // klassificering på et kendt udløb, i stedet for at være et helt separat
+  // punkt uden egen model. Den gamle logik sorterede fejlagtigt efter
+  // HØJESTE risikoscore inden for 15 km, hvilket kunne vælge et helt andet,
+  // fjernere udløb frem for RBU-punktets egen tvilling lige ved siden af.
+  //
+  // Ny logik: tjek FØRST for et eksakt/næsten-eksakt match (< 50 m) — hvis
+  // fundet, er det med stor sandsynlighed samme fysiske udløb, og dets
+  // rigtige PULS-data bruges direkte (ikke som "estimat"). Kun hvis intet
+  // sådant match findes, falder vi tilbage til nærmeste udløb inden for
+  // 15 km som et tydeligt markeret estimat.
   let riskScore = null, foreRisk = null, estimated = false, estimatedDist = null;
+  let matchedPt = null;
   if (_pulsSpatialIndex && overflowPoints && overflowPoints.length) {
     const MAX_DEG = 0.135;
-    const nearest = getNearbyPulsPoints(_pulsSpatialIndex, MAX_DEG, lat, lng)
+    const candidates = getNearbyPulsPoints(_pulsSpatialIndex, MAX_DEG, lat, lng)
       .map(p2 => ({ ...p2, _dist: hjemHaversine(lat, lng, p2.lat, p2.lng) }))
-      .filter(p2 => p2._dist <= 15)
-      .sort((a, b) => (b.riskScore || 0) - (a.riskScore || 0))[0];
-    if (nearest) {
-      riskScore = nearest.riskScore;
-      foreRisk  = computeForecastRisk(nearest);
-      estimated = true;
-      estimatedDist = nearest._dist;
+      .filter(p2 => p2._dist <= 15);
+
+    const exact = candidates.filter(p2 => p2._dist < 0.05).sort((a, b) => a._dist - b._dist)[0];
+    if (exact) {
+      matchedPt = exact;
+      estimated = false;   // samme fysiske udløb — ikke et gæt
+    } else {
+      matchedPt = candidates.sort((a, b) => a._dist - b._dist)[0];  // nærmeste, ikke højeste risiko
+      estimated = !!matchedPt;
+    }
+    if (matchedPt) {
+      riskScore     = matchedPt.riskScore;
+      foreRisk      = computeForecastRisk(matchedPt);
+      estimatedDist = matchedPt._dist;
     }
   }
 
@@ -4276,8 +4318,15 @@ function openRbuUdlobPanel(feature) {
 
   showUdlobPanel({
     type: 'rbu', name: navn, lat, lng, municipality: kommune,
-    waterArea: vandom, rbuTilstand: tilstand, rbuIndsats: iProgram,
+    waterArea: (matchedPt && !estimated) ? matchedPt.waterArea : vandom,
+    rbuTilstand: tilstand, rbuIndsats: iProgram,
     riskScore, foreRisk, _estimated: estimated, _estimatedDist: estimatedDist,
+    // Ved eksakt match (samme fysiske udløb) medtages den fulde PULS-historik
+    // og datakvalitet — det er trods alt SAMME udløb, ikke et separat punkt.
+    quality:            (matchedPt && !estimated) ? matchedPt.quality            : undefined,
+    eventsPerYear:      (matchedPt && !estimated) ? matchedPt.eventsPerYear      : undefined,
+    volumeM3Year:       (matchedPt && !estimated) ? matchedPt.volumeM3Year       : undefined,
+    meanVolumePerEvent: (matchedPt && !estimated) ? matchedPt.meanVolumePerEvent : undefined,
     weatherKey: `${clat.toFixed(4)}:${clng.toFixed(4)}`,
   });
 }
