@@ -151,18 +151,23 @@
   }
   #point-panel-body { padding: .6rem .8rem .8rem; font-size: .78rem; color: #1a2733; }
 
-  /* RETTET (punkt 9): #point-panel-body havde INGEN egen .label/.value-styling
-     — den delte ved et uheld ingen CSS med #panel-body (forskellig ID), så
-     hvert felt blev vist som almindelig, ustylet tekst uden visuel adskillelse
-     mellem titel og indhold. Hvert felt er nu sin egen blok med tydelig
-     luft, en lille dæmpet label over en fremhævet værdi. */
-  #point-panel-body .field {
+  /* RETTET (punkt 9, og igen efter fuld-side-konverteringen): #point-panel-body
+     havde INGEN egen .label/.value-styling — den delte ved et uheld ingen CSS
+     med #panel-body (forskellig ID), så hvert felt blev vist som almindelig,
+     ustylet tekst uden visuel adskillelse mellem titel og indhold. Hvert felt
+     er nu sin egen blok med tydelig luft, en lille dæmpet label over en
+     fremhævet værdi. #ud-info-body (udløbssidens "Oplysninger"-kort) delte
+     samme fejl — den er nu tilføjet til samme selector. */
+  #point-panel-body .field,
+  #ud-info-body .field {
     margin: 0 0 .7rem;
     padding-bottom: .55rem;
     border-bottom: 1px solid #f0f3f5;
   }
-  #point-panel-body .field:last-child { border-bottom: none; margin-bottom: 0; }
-  #point-panel-body .label {
+  #point-panel-body .field:last-child,
+  #ud-info-body .field:last-child { border-bottom: none; margin-bottom: 0; }
+  #point-panel-body .label,
+  #ud-info-body .label {
     display: block;
     font-family: var(--mono);
     font-size: .62rem;
@@ -171,7 +176,8 @@
     letter-spacing: .07em;
     margin-bottom: .2rem;
   }
-  #point-panel-body .value {
+  #point-panel-body .value,
+  #ud-info-body .value {
     display: block;
     font-size: .86rem;
     font-weight: 400;
@@ -533,25 +539,6 @@
   #lag.collapsed #lag-btn  { display: block; }
   #lag.collapsed #lag-body { display: none; }
 
-  /* ═══ #locate — flydende "Min placering"-knap, gruppperet med legend/lag
-     i samme hjørne (bund-venstre), stablet øverst i klyngen. ═══ */
-  #locate-btn {
-    position: absolute;
-    bottom: 118px;
-    left: 14px;
-    z-index: 900;
-    width: 32px; height: 32px;
-    border-radius: 50%;
-    background: var(--paper);
-    border: 1px solid var(--line);
-    color: var(--accent);
-    font-size: .95rem;
-    cursor: pointer;
-    box-shadow: var(--shadow);
-  }
-  #locate-btn:hover { border-color: var(--accent); background: rgba(26,107,138,.15); }
-  #locate-btn:active { transform: scale(.94); }
-
   /* ═══ Strømpile (punkt 11 + opfølgning) ═══ */
   /* RETTET: Leaflet sætter automatisk hvid baggrund + kant på divIcon via
      .leaflet-div-icon — det skjulte reelt vores pile bag en hvid boks.
@@ -560,23 +547,10 @@
     background: transparent !important;
     border: none !important;
   }
-  /* Flow-animation: stiplet hale, hvor stroke-dashoffset animeres, så
-     stiplerne visuelt "flyder" hen mod pilehovedet — en reel bevægelses-
-     fornemmelse (ikke bare en opacity-puls), inspireret af Windy. Stadig
-     billigt: stroke-dashoffset-animation på en linje er en veloptimeret,
-     udbredt SVG-teknik, og antallet af synlige pile er begrænset til
-     kortets synsfelt (se buildCurrentsArrowLayer). animation-duration/delay
-     sættes pr. pil ud fra hastighed og position, så kraftigere strøm
-     "flyder" synligt hurtigere, og pilene ikke bevæger sig synkront.*/
-  @keyframes current-flow-dash {
-    from { stroke-dashoffset: 18; }
-    to   { stroke-dashoffset: 0;  }
-  }
-  .current-flow-dash {
-    animation-name: current-flow-dash;
-    animation-timing-function: linear;
-    animation-iteration-count: infinite;
-  }
+  /* Flow-animationen er nu indlejret direkte i hver pils SVG via et SMIL
+     <animate>-element (se buildCurrentsArrowLayer) i stedet for en ekstern
+     CSS-klasse/keyframes — mere robust, uafhængigt af hvordan Leaflet
+     indsætter divIcon-indholdet i DOM'en. */
 
   #legend h4 {
     font-family: var(--mono);
@@ -1214,8 +1188,12 @@
     <div class="leg-row"><div class="leg-swatch" style="background:#2d7d4f"></div> Lav (&lt;20%)</div>
     <div class="leg-row"><div class="leg-swatch" style="background:#d4a020"></div> Moderat (20–60%)</div>
     <div class="leg-row"><div class="leg-swatch" style="background:#c84b1f"></div> Høj (&gt;60%)</div>
+    <div class="leg-row" style="font-size:.62rem;color:rgba(240,237,230,.55);margin-top:-.15rem">
+      Vejledende: ~5 mm nedbør ≈ moderat · ~15+ mm ≈ høj (varierer pr. udløb)
+    </div>
     <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
     <div class="leg-row"><div class="leg-swatch" style="background:linear-gradient(to right,#4b0082,#da00ff)"></div> Viral risiko</div>
+    <div class="leg-row"><div class="leg-swatch" style="background:linear-gradient(to right,#0d3b1a,#d4f000)"></div> Algerisiko</div>
     <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
     <div class="leg-row"><div class="leg-swatch" style="background:#1a6faf;opacity:.5;border:1px solid #1a6faf"></div> Kystvande (VP3)</div>
     <div class="leg-row"><div class="leg-swatch" style="background:#f0c040;opacity:.5;border:1px solid #e6a817"></div> Badevandsområder</div>
@@ -1248,11 +1226,11 @@
       <button class="ctrl-btn" id="btn-pts"   onclick="togglePoints()">📍 Udløbspunkter</button>
       <button class="ctrl-btn" id="btn-heat"  onclick="toggleHeat()">🌡 Bakterielt kort</button>
       <button class="ctrl-btn" id="btn-viral" onclick="toggleViral()">🧬 Viralt kort</button>
+      <button class="ctrl-btn" id="btn-algae" onclick="toggleAlgae()">🌿 Algerisiko</button>
       <button class="ctrl-btn" id="btn-fore"  onclick="toggleForecast()">⚡ 24h Varsling</button>
     </div>
   </div>
 </div>
-<button id="locate-btn" onclick="locateUser()" title="Min placering">📍</button>
 
   </div><!-- /tab-kort -->
 
@@ -1449,7 +1427,15 @@
         <p><strong>Trin 3 — Strømjustering:</strong> Risikoen fra hvert nærliggende PULS-udløb (trin 2) justeres med en <em>opstrøms-vægt</em> baseret på den aktuelle strømretning og -hastighed mellem udløbet og badevandslokaliteten, hentet fra CMEMS' Østersø-model (dataset <span class="doc-mono">cmems_mod_bal_phy_anfc_PT1H-i</span>, opdateret hver time). Vægten beregnes som prikproduktet mellem strømvektoren (øst-/nordkomponent) og retningsvektoren fra udløb til badevand:</p>
         <p class="doc-mono" style="font-size:.82rem">vægt = 0,15 + 0,85 × max(0, (cos θ + 1) / 2)</p>
         <p>hvor θ er vinklen mellem strømretningen og udløb→badevand-retningen. En strøm der løber direkte fra udløbet mod badevandet giver vægt ≈ 1,0 (fuld risiko slår igennem); en strøm der løber væk fra badevandet (fortynder aktivt) giver vægt ≈ 0,15 (kraftigt reduceret, men aldrig nul — strømme skifter retning inden for timer). Uden strømdata, eller ved meget svag strøm (&lt;0,05 m/s), bruges en neutral vægt på 0,5. Den justerede risiko er <span class="doc-mono">pt.riskScore × vægt</span>, og den højeste værdi blandt alle nærliggende udløb bestemmer badevandslokalitetens endelige farve.</p>
-        <p><strong>Strøm-kortlaget:</strong> Under "Kortlag" kan strømretning og -hastighed vises direkte som pile på kortet — kun over vandområder (samme kystvand-polygoner som trin 1, testet med en ray-casting point-in-polygon-algoritme). Pilens retning viser strømretningen, størrelse og farve (blå→gul→rød) viser hastigheden. Dette er en statisk øjebliksvisning, ikke en animeret partikelstrøm som fx Windy — opdateres når strømdata forny hver 6. time.</p>
+        <p><strong>Strøm-kortlaget:</strong> Under "Kortlag" kan strømretning og -hastighed vises direkte som pile på kortet — kun over vandområder (samme kystvand-polygoner som trin 1, testet med en ray-casting point-in-polygon-algoritme). Pilens retning viser strømretningen, størrelse og farve (blå→gul→rød) viser hastigheden. Animeret som en "flydende" komet-hale (SMIL) — opdateres når strømdata forny hver 6. time.</p>
+
+        <p><strong>Algerisiko (🌿):</strong> Et separat, supplerende risikolag baseret på en <em>forenklet, ikke-videnskabeligt kalibreret</em> heuristik — ikke en valideret model. Algeopblomstring (herunder cyanobakterier) er en forsinket reaktion (dage-uger) på næringsstoftilførsel, kombineret med tilstrækkelig varme til reel vækst — modsat bakteriel/viral risiko, som er en mere øjeblikkelig konsekvens af selve overløbshændelsen. Modellen kombinerer:</p>
+        <ul class="doc-list">
+          <li><strong>Næringsstof-proxy:</strong> 7-dages nedbør (afstrømning) × udløbets historiske volumen (større udløb ≈ mere næringsstof pr. hændelse)</li>
+          <li><strong>Temperatur-gate:</strong> en sigmoid centreret ~18°C — algevækst er stort set fraværende under ~12°C og øges markant over ~18-20°C</li>
+        </ul>
+        <p>Vandtemperatur hentes fra to kilder afhængig af recipienttype: <span class="doc-mono">kystvande</span> bruger CMEMS' Østersø-model (variablen <span class="doc-mono">thetao</span>, samme datasæt som strøm), mens <strong>søer, åer og vandløb</strong> ikke dækkes af CMEMS og i stedet får vandtemperaturen <em>estimeret</em> ud fra et 72-timers glidende gennemsnit af lufttemperatur via en Mohseni-Stefan-lignende sigmoid-model (velkendt i hydrologisk litteratur til at omregne lufttemperatur til vandtemperatur i mindre, lavvandede vandområder). Punkter markeret "estimeret" i detaljevisningen bruger denne tilnærmelse, ikke en direkte måling.</p>
+        <div class="doc-callout">Algerisiko-modellen er en forsøgsvis, ukalibreret tilnærmelse baseret på generelle principper fra forskningslitteraturen (næringsstoftilførsel × temperatur-tærskel) — den er IKKE valideret mod faktiske alge-observationer i danske farvande, og bør tolkes som en grov indikator, ikke en pålidelig prognose.</div>
         <div class="doc-callout">Badevandsvurderingen er en modelbaseret indikator for CSO-risiko. Den afspejler ikke de officielle badevandsprofiler fra Miljøstyrelsen, som baseres på flerårige bakteriemålinger og lokale forureningskilder.</div>
       </section>
 
@@ -1463,7 +1449,9 @@
           <li>Modellen skelner ikke mellem salt-, brak- og ferskvand i patogenoverlevelse.</li>
           <li>Ingen tidevands- eller fortyndingsmodellering for fjorde og Vadehavet.</li>
           <li>Strømdata (CMEMS) har ~10 km rumlig opløsning og opdateres hver time — lokale strømforhold i smalle sunde og havne kan afvige fra modellen.</li>
-          <li>Strøm-kortlaget viser et statisk øjebliksbillede ved seneste opdatering, ikke en løbende animeret prognose.</li>
+          <li>Strøm-kortlaget viser data fra seneste 6-timers opdatering, ikke en løbende prognose.</li>
+          <li>Algerisiko-modellen er en ukalibreret heuristik, ikke en videnskabeligt valideret prognose — den bruger ikke faktiske observationer af algeopblomstring til at kalibrere sine parametre.</li>
+          <li>Vandtemperatur i søer/åer/vandløb er estimeret fra lufttemperatur, ikke direkte målt — kan afvige fra faktiske forhold, særligt i dybe søer med større termisk træghed end modellen antager.</li>
         </ul>
       </section>
 
@@ -1771,8 +1759,9 @@ const pointsLayer    = L.layerGroup();
 const forecastLayer  = L.layerGroup();
 
 // Heatmap state — ref sættes ved første synlige visning (se nedenfor)
-const heatLayer      = { ref: null, visible: true,  pendingData: [] };
+const heatLayer      = { ref: null, visible: false, pendingData: [] };  // RETTET: matcher nu showHeat=false
 const viralHeatLayer = { ref: null, visible: false, pendingData: [] };
+const algaeHeatLayer = { ref: null, visible: false, pendingData: [] };  // lazy — se createHeatLayerRef
 
 // Centraliseret heatmap-opdatering
 //
@@ -1800,6 +1789,9 @@ function createHeatLayerRef(state) {
   const opts = state === heatLayer
     ? { radius: 28, blur: 22, maxZoom: 12, max: 1,
         gradient: { 0: '#2d7d4f', 0.3: '#d4a020', 0.6: '#c84b1f', 1.0: '#ff2200' } }
+    : state === algaeHeatLayer
+    ? { radius: 30, blur: 24, maxZoom: 12, max: 1,
+        gradient: { 0: '#0d3b1a', 0.3: '#3f8f3f', 0.6: '#9acd32', 1.0: '#d4f000' } }  // mørkegrøn → limegul, algeagtig farveskala
     : { radius: 32, blur: 26, maxZoom: 12, max: 1,
         gradient: { 0: '#1a1a4a', 0.25: '#4b0082', 0.55: '#8b00ff', 0.8: '#da00ff', 1.0: '#ff80ff' } };
   state.ref = L.heatLayer([], opts).addTo(map);
@@ -2048,6 +2040,61 @@ function computeViralRisk(pt) {
   return { viralRisk, tauV: seasonalTauViral() };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ALGERISIKO — nedbør/udløb + vandtemperatur
+// ═══════════════════════════════════════════════════════════════════════════
+// Algeopblomstring (herunder cyanobakterier) er IKKE en øjeblikkelig reaktion
+// på nedbør/overløb som bakteriel/viral risiko — det er en forsinket reaktion
+// (dage-uger) på næringsstoftilførsel (kvælstof/fosfor fra overløb),
+// kombineret med tilstrækkeligt varmt vand og lys til reel vækst. Modellen
+// her er en forenklet, ikke-valideret heuristik — IKKE en kalibreret
+// videnskabelig model — baseret på to faktorer:
+//   1. Næringsstof-proxy: 7-dages nedbør (afstrømning) × udløbets historiske
+//      volumen (større udløb ≈ mere næringsstof pr. hændelse)
+//   2. Temperatur-gate: algevækst er stort set fraværende under ~12°C og
+//      øges markant over ~18-20°C — modelleret som en sigmoid centreret ~18°C
+
+// Mohseni-Stefan-lignende sigmoid til at ESTIMERE ferskvandstemperatur
+// (søer/åer/vandløb) ud fra nylig lufttemperatur, når der ikke er en direkte
+// CMEMS-måling tilgængelig (CMEMS dækker kun selve havet). μ/α/β/γ er
+// generiske, ukalibrerede parametre for tempereret klima — IKKE stedspecifikt
+// kalibreret, kun en rimelig tilnærmelse.
+function computeFreshwaterTemp(airTempAvg) {
+  if (airTempAvg === null || airTempAvg === undefined) return null;
+  const mu = 1, alpha = 24, beta = 9, gamma = 0.2;
+  return mu + (alpha - mu) / (1 + Math.exp(gamma * (beta - airTempAvg)));
+}
+
+// Finder vandtemperatur for et givet punkt: CMEMS-målt hvis punktet ligger i
+// kystvand, ellers estimeret fra lokal lufttemperatur (ferskvand).
+function getWaterTemp(pt) {
+  if (currentsGrid && isInDanishWater(pt.lat, pt.lng)) {
+    const c = getCurrentAt(pt.lat, pt.lng);
+    if (c && c.temp != null) return { temp: c.temp, source: 'cmems' };
+  }
+  if (pt.recentAirTempAvg != null) {
+    return { temp: computeFreshwaterTemp(pt.recentAirTempAvg), source: 'estimated' };
+  }
+  return { temp: null, source: null };
+}
+
+function computeAlgaeRisk(pt) {
+  if (pt.totalRain7d === null || pt.totalRain7d === undefined) {
+    return { algaeRisk: null, waterTemp: null, tempSource: null };
+  }
+  const { temp: waterTemp, source: tempSource } = getWaterTemp(pt);
+  if (waterTemp === null) {
+    return { algaeRisk: null, waterTemp: null, tempSource: null };
+  }
+
+  const nutrientProxy = Math.min((pt.totalRain7d || 0) / 40, 1) *
+    (0.5 + 0.5 * Math.min(Math.log10((pt.volumeM3Year || 0) / 50 + 1) / 3, 1));
+  const tempFactor = 1 / (1 + Math.exp(-(waterTemp - 18) / 2.5));
+  const algaeRisk  = Math.min(nutrientProxy * tempFactor * 1.3, 1);
+
+  return { algaeRisk, waterTemp, tempSource };
+}
+
 
 function riskLabel(r) {
   if (r === null || r === undefined) return { label: 'Ingen data', cls: 'risk-nodata', cardCls: 'risk-nodata' };
@@ -2076,6 +2123,7 @@ function renderMap() {
 
   const heatData   = [];
   const viralData  = [];
+  const algaeData  = [];
   const warnPoints = [];
 
   // Update legend with current seasonal τ values
@@ -2094,6 +2142,12 @@ function renderMap() {
     pt.noData      = riskResult.noData;
     pt.viralScore  = viralRisk;
     const foreRisk = computeForecastRisk(pt);
+
+    const { algaeRisk, waterTemp, tempSource } = computeAlgaeRisk(pt);
+    pt.algaeScore  = algaeRisk;
+    pt.waterTemp   = waterTemp;
+    pt.tempSource  = tempSource;
+    if (algaeRisk !== null) algaeData.push([pt.lat, pt.lng, algaeRisk]);
 
     // Heatmap points — skip if no weather data
     if (risk !== null) heatData.push([pt.lat, pt.lng, risk]);
@@ -2173,6 +2227,7 @@ function renderMap() {
   // Opdatér heatmaps via CSS-synlighed — ingen addTo/removeLayer
   updateHeatmap(heatLayer,      heatData);
   updateHeatmap(viralHeatLayer, viralData);
+  updateHeatmap(algaeHeatLayer, algaeData);
 
   updateStatusTime();
   saveWarnPoints(warnPoints);  // persist for varsel-side.html
@@ -2323,6 +2378,13 @@ function updatePanel(pt, risk, foreRisk) {
       <span class="value"><span class="chip ${vrl.cls}">${vrl.label} · ${Math.round((pt.viralScore||0)*100)}%</span></span>
     </div>
     <div class="field">
+      <span class="label">🌿 Algerisiko${pt.waterTemp!=null?` (${pt.waterTemp.toFixed(1)}°C${pt.tempSource==='estimated'?', estimeret':''})`:''}</span>
+      <span class="value">${pt.algaeScore !== null && pt.algaeScore !== undefined
+        ? `<span class="chip ${riskLabel(pt.algaeScore).cls}">${riskLabel(pt.algaeScore).label} · ${Math.round(pt.algaeScore*100)}%</span>`
+        : '<span style="color:#5a6b78;font-size:.78rem">Ingen data</span>'
+      }</span>
+    </div>
+    <div class="field">
       <span class="label">⚡ 24h varsling (bakteriel)</span>
       <span class="value"><span class="chip ${fr.cls}">${fr.label} · ${Math.round(foreRisk*100)}%</span></span>
     </div>`;
@@ -2343,6 +2405,13 @@ async function saveWarnPoints(pts) {
       ts: Date.now()
     }));
     await dbPut('weather_store', '__warnpoints__', { ts: Date.now(), data: payload });
+    // RETTET (punkt 1): header-badgen ("🔔 Varsler") blev kun opdateret når
+    // brugeren selv åbnede Varsler-fanen — ellers stod den fast på den
+    // hardcodede startværdi "0" fra HTML'en, uafhængigt af de reelle,
+    // aktuelle varsler. loadVarselData() beregner og opdaterer badgen, og
+    // #alarm-grid m.fl. findes altid i DOM'en (skjult via CSS, ikke fjernet),
+    // så det er trygt at køre den proaktivt her, uanset aktiv fane.
+    loadVarselData();
   } catch(e) { /* non-fatal */ }
 }
 
@@ -2572,6 +2641,7 @@ async function loadAll() {
 let showPoints   = false;  // ÆNDRET: lazy — indlæses/beregnes stadig i baggrunden, men vises ikke før brugeren slår det til
 let showHeat     = false;  // ÆNDRET: lazy — se updateHeatmap()
 let showViral    = false;
+let showAlgae    = false;  // algerisiko — nyt lag
 let showForecast = false;
 
 function toggleHeat() {
@@ -2600,6 +2670,18 @@ function toggleViral() {
       viralHeatLayer.ref._canvas.style.display = showViral ? '' : 'none';
     }
     if (showViral) renderMap();
+  });
+}
+
+function toggleAlgae() {
+  showAlgae = !showAlgae;
+  document.getElementById('btn-algae').classList.toggle('active', showAlgae);
+  requestAnimationFrame(() => {
+    algaeHeatLayer.visible = showAlgae;
+    if (algaeHeatLayer.ref?._canvas) {
+      algaeHeatLayer.ref._canvas.style.display = showAlgae ? '' : 'none';
+    }
+    if (showAlgae) renderMap();
   });
 }
 
@@ -2884,9 +2966,10 @@ function buildCurrentsArrowLayer() {
                 </linearGradient>
               </defs>
               <line x1="12" y1="34" x2="12" y2="11" stroke="url(#${gradId})"
-                    stroke-width="3" stroke-linecap="round" stroke-dasharray="5 4"
-                    class="current-flow-dash"
-                    style="animation-duration:${duration}s;animation-delay:${delay}s"/>
+                    stroke-width="3" stroke-linecap="round" stroke-dasharray="5 4">
+                <animate attributeName="stroke-dashoffset" from="18" to="0"
+                         dur="${duration}s" begin="${delay}s" repeatCount="indefinite"/>
+              </line>
               <path d="M12 0 L18.5 12.5 L12 9 L5.5 12.5 Z" fill="${color}"/>
             </svg>`,
       iconSize:   [sizePx, sizePx * 1.5],
@@ -2976,13 +3059,15 @@ function riskTooltipText(risk) {
 function colorKystvandByRisk() {
   if (!vp3KystvandLayer || !overflowPoints || overflowPoints.length === 0) return;
 
-  // Sæt ikke styles på lag der er slukket — Leaflet's SVG-renderer
-  // re-inserter detached path-elementer ved setStyle(), hvilket får
-  // fjernede lag til at dukke op igen.
-  if (!showVP3Kyst) {
-    colorBadevandByRisk();  // badevand kan stadig være slået til
-    return;
-  }
+  // RETTET: tidligere sprang funktionen helt over farveberegningen når laget
+  // var skjult (showVP3Kyst=false), af hensyn til en ældre SVG-specifik
+  // gentegningsfejl (_path-elementer der uventet dukkede op igen ved
+  // setStyle() på et fjernet lag). Den fejl er ikke relevant med Canvas-
+  // rendering (preferCanvas:true), hvor lag uden for kortets render-træ
+  // ikke tegnes uanset setStyle()-kald. Uden denne rettelse blev risikoen
+  // ALDRIG beregnet, mens kystvande var skjult som standard — hvilket også
+  // ødelagde badevands-fallback-opslaget (layer._riskScore), da
+  // colorBadevandByRisk() (kaldt til sidst i denne funktion) læser den værdi.
 
   // ── Trin 1: PULS waterArea → max riskScore ──────────────────────────────
   const areaRisk = new Map();
@@ -3070,7 +3155,9 @@ function getNearbyPulsPoints(index, cellDeg, lat, lng) {
 
 function colorBadevandByRisk() {
   if (!vp3BadevandLayer || !overflowPoints || overflowPoints.length === 0) return;
-  if (!showVP3Bade) return;  // sæt ikke styles på slukket lag
+  // RETTET: samme forældede SVG-specifikke blokering fjernet som i
+  // colorKystvandByRisk() — se forklaring der. Risikoen beregnes nu altid,
+  // uanset synlighed, så data er klar med det samme hvis laget slås til.
 
   // Byg array af kystvand-centroider + risiko til hurtig opslag
   const kystCenters = [];
@@ -3896,13 +3983,32 @@ function buildWeeklyChart(weekObs, fore, totalMM) {
     const h = Math.max((mm / maxMM) * H, 2);
     bars += `<rect x="${((obs.length+i)*barW).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${Math.max(barW-.5,.3).toFixed(1)}" height="${h.toFixed(1)}" fill="${mm>=5?'#c84b1f':'rgba(13,110,140,.7)'}"/>`;
   });
+
+  // ── mm-skala (punkt 6): et par vandrette referencelinjer med mm-værdier,
+  // så søjlehøjder kan aflæses som faktiske mængder, ikke kun relative
+  // størrelser. "Pæn" trinstørrelse vælges ud fra maxMM (1/2/5/10/20/50 mm),
+  // så tallene bliver runde og letlæselige uanset regnmængde.
+  function niceStep(max) {
+    const steps = [1, 2, 5, 10, 20, 50, 100];
+    for (const s of steps) if (max / s <= 4) return s;
+    return 100;
+  }
+  const step = niceStep(maxMM);
+  let mmGrid = '', mmLabels = '';
+  for (let v = step; v < maxMM; v += step) {
+    const y = H - (v / maxMM) * H;
+    mmGrid   += `<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="rgba(26,39,51,.1)" stroke-width="1" stroke-dasharray="2,2"/>`;
+    mmLabels += `<text x="3" y="${(y-2).toFixed(1)}" font-size="7" fill="#9aaab5">${v} mm</text>`;
+  }
+
   return `<svg viewBox="0 0 ${W} ${H+14}" width="100%" style="display:block;overflow:visible">
-    <rect width="${W}" height="${H}" fill="#f4f7f9" rx="3"/>${dayLines}${bars}
+    <rect width="${W}" height="${H}" fill="#f4f7f9" rx="3"/>${dayLines}${mmGrid}${bars}
     <line x1="${nowX.toFixed(1)}" y1="0" x2="${nowX.toFixed(1)}" y2="${H}" stroke="#1a6b8a" stroke-width="1.5" stroke-dasharray="3,2"/>
     <text x="2" y="${H+11}" font-size="7.5" fill="#9aaab5">-7 dage</text>
     <text x="${nowX.toFixed(1)}" y="${H+11}" text-anchor="middle" font-size="7.5" fill="#1a6b8a" font-weight="bold">NU</text>
     <text x="${W-2}" y="${H+11}" text-anchor="end" font-size="7.5" fill="#1a6b8a">+24h</text>
     ${dayLabels}
+    ${mmLabels}
     ${totalMM!=null?`<text x="${W-2}" y="9" text-anchor="end" font-size="7" fill="#5a6b78">${totalMM.toFixed(1)} mm/7d</text>`:''}
   </svg>`;
 }
@@ -3995,11 +4101,11 @@ async function showBadevandPanel(feature) {
   document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
 
   // Nulstil risikobarer
-  ['bv-bact-bar','bv-viral-bar','bv-total-bar'].forEach(id => {
+  ['bv-bact-bar','bv-viral-bar','bv-algae-bar','bv-total-bar'].forEach(id => {
     const el = document.getElementById(id);
     if (el) { el.style.width = '0'; el.style.background = '#ccc'; }
   });
-  ['bv-bact-pct','bv-viral-pct','bv-total-pct'].forEach(id => {
+  ['bv-bact-pct','bv-viral-pct','bv-algae-pct','bv-total-pct'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.textContent = '—';
   });
@@ -4018,7 +4124,8 @@ async function showBadevandPanel(feature) {
   // ── Risikoscores ──────────────────────────────────────────────────────────
   const bactRisk  = nearby.length ? Math.max(...nearby.map(pt => pt.riskScore  || 0)) : 0;
   const viralRisk = nearby.length ? Math.max(...nearby.map(pt => pt.viralScore || 0)) : 0;
-  const totalRisk = Math.max(bactRisk, viralRisk);
+  const algaeRisk = nearby.length ? Math.max(...nearby.map(pt => pt.algaeScore || 0)) : 0;
+  const totalRisk = Math.max(bactRisk, viralRisk, algaeRisk);
 
   function setBar(barId, pctId, risk) {
     const pct = Math.round(risk * 100);
@@ -4030,6 +4137,7 @@ async function showBadevandPanel(feature) {
   }
   setBar('bv-bact-bar',  'bv-bact-pct',  bactRisk);
   setBar('bv-viral-bar', 'bv-viral-pct', viralRisk);
+  setBar('bv-algae-bar', 'bv-algae-pct', algaeRisk);
   setBar('bv-total-bar', 'bv-total-pct', totalRisk);
 
   // ── Udløbsliste ───────────────────────────────────────────────────────────
@@ -4152,6 +4260,21 @@ async function showUdlobPanel(pt) {
   }
 
   // ── Stamdata ───────────────────────────────────────────────────────────────
+  // ── Vandkvalitet — supplerende (ANDEN slags risiko end overløb ovenfor) ────
+  const qualityBody = document.getElementById('ud-quality-body');
+  function qChip(score) {
+    if (score === null || score === undefined) return '<span style="color:#5a6b78;font-size:.78rem">Ingen data</span>';
+    const rl = riskLabel(score);
+    return `<span class="chip ${rl.cls}">${rl.label} · ${Math.round(score*100)}%</span>`;
+  }
+  qualityBody.innerHTML = `
+    <div class="field"><span class="label">🦠 Bakteriel risiko</span><span class="value">${qChip(pt.riskScore)}</span></div>
+    <div class="field"><span class="label">🧬 Viral risiko</span><span class="value">${qChip(pt.viralScore)}</span></div>
+    <div class="field">
+      <span class="label">🌿 Algerisiko${pt.waterTemp!=null?` (${pt.waterTemp.toFixed(1)}°C${pt.tempSource==='estimated'?', estimeret ud fra lufttemp.':' — CMEMS'})`:''}</span>
+      <span class="value">${qChip(pt.algaeScore)}</span>
+    </div>`;
+
   const infoBody = document.getElementById('ud-info-body');
   const mapsLink = `<a class="value" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${pt.lat},${pt.lng}" title="Åbn i Google Maps">📍 ${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}</a>`;
   if (isPuls) {
@@ -4258,6 +4381,8 @@ function openPulsUdlobPanel(pt, risk, foreRisk) {
     riskScore: risk, foreRisk: foreRisk, quality: pt.quality,
     eventsPerYear: pt.eventsPerYear, volumeM3Year: pt.volumeM3Year,
     meanVolumePerEvent: pt.meanVolumePerEvent,
+    viralScore: pt.viralScore, algaeScore: pt.algaeScore,
+    waterTemp: pt.waterTemp, tempSource: pt.tempSource,
     weatherKey: `${clat.toFixed(4)}:${clng.toFixed(4)}`,
   });
 }
@@ -4327,6 +4452,10 @@ function openRbuUdlobPanel(feature) {
     eventsPerYear:      (matchedPt && !estimated) ? matchedPt.eventsPerYear      : undefined,
     volumeM3Year:       (matchedPt && !estimated) ? matchedPt.volumeM3Year       : undefined,
     meanVolumePerEvent: (matchedPt && !estimated) ? matchedPt.meanVolumePerEvent : undefined,
+    viralScore: matchedPt ? matchedPt.viralScore : undefined,
+    algaeScore: matchedPt ? matchedPt.algaeScore : undefined,
+    waterTemp:  matchedPt ? matchedPt.waterTemp  : undefined,
+    tempSource: matchedPt ? matchedPt.tempSource : undefined,
     weatherKey: `${clat.toFixed(4)}:${clng.toFixed(4)}`,
   });
 }
@@ -4518,7 +4647,7 @@ async function loadVarselData() {
       : `Ingen aktive varsler inden for 50 km`;
   } else if (!hasPos) {
     filtered = [];
-    note = '📍 Tryk "Min placering" på kortet for at se varsler i dit område';
+    note = '📍 Aktivér lokation i din browser for at se varsler i dit område';
   } else {
     filtered = alarms.sort((a,b) => (b.foreRisk||0) - (a.foreRisk||0)).slice(0, 25);
     note = `Alle ${filtered.length} varsler — aktivér lokation for lokal filtrering`;
@@ -4613,8 +4742,9 @@ function updateVarslerBadge(n) {
   badge.className = 'tab-badge' + (n === 0 ? ' zero' : '');
 }
 
-// Hook into saveWarnPoints to refresh badge live
-const _origSaveWarnPoints = saveWarnPoints;
+// (Tidligere stod der her et ufuldendt forsøg på at hooke saveWarnPoints for
+// at opdatere badgen live — det er nu implementeret direkte i selve
+// saveWarnPoints()-funktionen i stedet, se ovenfor.)
 
 
 // Remove the external varsler link from controls since it's now a tab
@@ -4702,7 +4832,7 @@ registerSW().then(() => restorePushSubscription());
       </div>
     </div>
 
-    <!-- Bakterier + Virus -->
+    <!-- Bakterier + Virus + Alger -->
     <div class="bv-card" id="bv-risk-card">
       <div class="bv-card-title">Opdelt risiko</div>
       <div class="bv-risk-row">
@@ -4714,6 +4844,11 @@ registerSW().then(() => restorePushSubscription());
         <span class="bv-risk-label">🧬 Virus</span>
         <div class="bv-risk-bar-wrap"><div class="bv-risk-bar" id="bv-viral-bar"></div></div>
         <span class="bv-risk-pct" id="bv-viral-pct">—</span>
+      </div>
+      <div class="bv-risk-row">
+        <span class="bv-risk-label">🌿 Alger</span>
+        <div class="bv-risk-bar-wrap"><div class="bv-risk-bar" id="bv-algae-bar"></div></div>
+        <span class="bv-risk-pct" id="bv-algae-pct">—</span>
       </div>
     </div>
 
@@ -4776,6 +4911,14 @@ registerSW().then(() => restorePushSubscription());
         <div class="bv-risk-bar-wrap"><div class="bv-risk-bar" id="ud-fore-bar"></div></div>
         <span class="bv-risk-pct" id="ud-fore-pct">—</span>
       </div>
+    </div>
+
+    <!-- Supplerende vandkvalitets-indikatorer — ANDEN slags risiko end
+         overløbsrisikoen ovenfor (forureningskonsekvens, ikke overløbs-
+         sandsynlighed). Vises separat for at undgå at blande begreberne. -->
+    <div class="bv-card" id="ud-quality-card">
+      <div class="bv-card-title">Vandkvalitet — supplerende indikatorer</div>
+      <div id="ud-quality-body"></div>
     </div>
 
     <!-- Stamdata -->

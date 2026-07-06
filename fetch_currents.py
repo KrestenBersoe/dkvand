@@ -121,7 +121,7 @@ try:
             dataset_id=DATASET_ID,
             username=USERNAME,
             password=PASSWORD,
-            variables=["uo", "vo"],
+            variables=["uo", "vo", "thetao"],  # thetao = havvands potentiel temperatur (°C) — bruges til algerisiko-model
             minimum_longitude=LON_MIN,
             maximum_longitude=LON_MAX,
             minimum_latitude=LAT_MIN,
@@ -171,24 +171,32 @@ try:
 
         lats = latest[lat_name].values
         lons = latest[lon_name].values
-        uo_vals = latest["uo"].values
-        vo_vals = latest["vo"].values
+        uo_vals   = latest["uo"].values
+        vo_vals   = latest["vo"].values
+        temp_vals = latest["thetao"].values
 
         points = []
         for i, lat in enumerate(lats):
             for j, lon in enumerate(lons):
                 u = float(uo_vals[i, j])
                 v = float(vo_vals[i, j])
+                t = float(temp_vals[i, j])
                 if math.isnan(u) or math.isnan(v):
                     continue
                 if abs(u) > 10 or abs(v) > 10:  # fill-value sentinel
                     continue
-                points.append({
+                point = {
                     "lat": round(float(lat), 4),
                     "lng": round(float(lon), 4),
                     "uo": round(u, 4),
                     "vo": round(v, 4),
-                })
+                }
+                # Temperatur kan mangle/være fill-value uden at strømdata gør —
+                # medtag kun hvis reel, men lad ikke en manglende værdi fjerne
+                # selve strømpunktet.
+                if not math.isnan(t) and -5 < t < 40:
+                    point["temp"] = round(t, 2)
+                points.append(point)
 
         if not points:
             fail("no current points extracted from dataset")

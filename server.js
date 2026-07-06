@@ -217,7 +217,7 @@ function fetchOpenMeteo(lat, lng) {
   return new Promise((resolve, reject) => {
     const url = `https://api.open-meteo.com/v1/forecast` +
       `?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
-      `&hourly=precipitation&past_days=7&forecast_days=2` +
+      `&hourly=precipitation,temperature_2m&past_days=7&forecast_days=2` +
       `&models=best_match&timezone=Europe%2FCopenhagen`;
     https.get(url, resp => {
       if (resp.statusCode !== 200) {
@@ -255,13 +255,21 @@ async function fetchOpenMeteoWithRetry(lat, lng, retries = 2) {
 
 // Compute derived precipitation metrics from raw Open-Meteo JSON.
 function computeMetrics(json) {
-  const times  = json?.hourly?.time         || [];
-  const values = json?.hourly?.precipitation || [];
+  const times    = json?.hourly?.time          || [];
+  const values   = json?.hourly?.precipitation || [];
+  const tempVals = json?.hourly?.temperature_2m || [];
   const now    = Date.now();
   const MS_HOUR = 3600 * 1000;
   const TAU    = 3.0;
   let antecedentMM = 0, todayMM = 0, forecastMM = 0, totalRain7d = 0;
   const hourlyObs = [], hourlyFore = [], hourlyWeek = [];
+  // Luft-temperatur — bruges til at estimere vandtemperatur i søer/åer/
+  // vandløb (Mohseni-Stefan-model, se computeFreshwaterTemp() client-side).
+  // Et glidende gennemsnit over de seneste 72 timer bruges som input, da
+  // små/lavvandede vandområder reagerer på den seneste tids vejr, ikke
+  // det øjeblikkelige lufttemperatur alene (termisk træghed, om end langt
+  // mindre end havets).
+  let tempSum72h = 0, tempCount72h = 0;
   times.forEach((tStr, i) => {
     const mm  = Math.max(Number(values[i]) || 0, 0);
     const tMs = new Date(tStr).getTime();
@@ -273,11 +281,16 @@ function computeMetrics(json) {
       totalRain7d += mm;
       hourlyWeek.push(mm);  // full 7-day history
       if (diffMs < 24 * MS_HOUR) { todayMM += mm; hourlyObs.push(mm); }
+      if (diffMs >= 0 && diffMs < 72 * MS_HOUR) {
+        const t = Number(tempVals[i]);
+        if (!isNaN(t)) { tempSum72h += t; tempCount72h++; }
+      }
     } else {
       if (-diffMs <= 24 * MS_HOUR) { forecastMM += mm; hourlyFore.push(mm); }
     }
   });
-  return { antecedentMM, todayMM, forecastMM, totalRain7d, hourlyObs, hourlyFore, hourlyWeek };
+  const recentAirTempAvg = tempCount72h > 0 ? tempSum72h / tempCount72h : null;
+  return { antecedentMM, todayMM, forecastMM, totalRain7d, hourlyObs, hourlyFore, hourlyWeek, recentAirTempAvg };
 }
 
 // ── Proactive cache warming ──────────────────────────────────────────────────
@@ -766,7 +779,7 @@ function buildCurrentGrid(points) {
     const speed = Math.hypot(p.uo, p.vo);
     const dir   = (Math.atan2(p.uo, p.vo) * 180 / Math.PI + 360) % 360; // 0=N,90=E
     const key   = `${p.lat.toFixed(2)}:${p.lng.toFixed(2)}`;
-    grid.set(key, { uo: p.uo, vo: p.vo, speed, dir });
+    grid.set(key, { uo: p.uo, vo: p.vo, speed, dir, temp: p.temp ?? null });
   }
   return grid;
 }
