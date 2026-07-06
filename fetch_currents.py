@@ -116,6 +116,14 @@ end_dt   = now + _dt.timedelta(hours=6)
 tmp_dir = tempfile.mkdtemp(prefix="cmems_subset_")
 
 try:
+    # RETTET: hvis "thetao" ikke er en gyldig variabel for dette datasæt (set
+    # for andre CMEMS-produkter, hvor temperatur er splittet ud i et separat
+    # "-tem"-datasæt fra strøm), fejler subset()-kaldet typisk med det samme,
+    # FØR vi når til selve dataudtrækningen — og ville derfor vælte HELE
+    # strømhentningen, inkl. uo/vo. Første forsøg inkluderer thetao; hvis det
+    # fejler, gentages kaldet uden thetao, så strøm aldrig går tabt på grund
+    # af en manglende temperaturvariabel.
+    included_temp = True
     try:
         response = copernicusmarine.subset(
             dataset_id=DATASET_ID,
@@ -137,7 +145,31 @@ try:
             overwrite=True,
         )
     except Exception as e:
-        fail(f"subset failed: {describe_exception(e)}")
+        print(f"[warn] subset med thetao fejlede ({describe_exception(e)}) — "
+              f"prøver igen uden temperatur-variabel", file=sys.stderr)
+        included_temp = False
+        try:
+            response = copernicusmarine.subset(
+                dataset_id=DATASET_ID,
+                username=USERNAME,
+                password=PASSWORD,
+                variables=["uo", "vo"],
+                minimum_longitude=LON_MIN,
+                maximum_longitude=LON_MAX,
+                minimum_latitude=LAT_MIN,
+                maximum_latitude=LAT_MAX,
+                minimum_depth=0,
+                maximum_depth=1,
+                start_datetime=start_dt,
+                end_datetime=end_dt,
+                output_directory=tmp_dir,
+                output_filename="currents.nc",
+                file_format="netcdf",
+                disable_progress_bar=True,
+                overwrite=True,
+            )
+        except Exception as e2:
+            fail(f"subset failed (også uden thetao): {describe_exception(e2)}")
 
     try:
         import xarray as xr
@@ -161,6 +193,13 @@ try:
         elif "elevation" in latest.dims:
             latest = latest.isel(elevation=0)
 
+        # Diagnostik: log hvilke variable datasættet FAKTISK indeholder — det
+        # afgør definitivt om "thetao" findes her, eller om CMEMS har splittet
+        # temperatur ud i et separat datasæt (set for andre CMEMS-produkter,
+        # hvor "cur"-datasæt kun indeholder uo/vo, og temperatur ligger i et
+        # separat "-tem"-datasæt). Vises i fly logs, ikke i selve JSON-outputtet.
+        print(f"[debug] variable i datasæt: {list(latest.data_vars)} (thetao forsøgt: {included_temp})", file=sys.stderr)
+
         lat_name = "latitude" if "latitude" in latest.coords else "lat"
         lon_name = "longitude" if "longitude" in latest.coords else "lon"
 
@@ -171,16 +210,27 @@ try:
 
         lats = latest[lat_name].values
         lons = latest[lon_name].values
-        uo_vals   = latest["uo"].values
-        vo_vals   = latest["vo"].values
-        temp_vals = latest["thetao"].values
+        uo_vals = latest["uo"].values
+        vo_vals = latest["vo"].values
+
+        # RETTET: "thetao"-opslaget skete tidligere UBETINGET før selve løkken
+        # — hvis variablen ikke findes i datasættet, fejlede HELE hentningen
+        # (inkl. uo/vo), ikke kun temperaturen. Nu er det defensivt: mangler
+        # thetao, fortsætter strømdata uden temperatur i stedet for at fejle
+        # totalt, og en tydelig advarsel logges til stderr.
+        temp_vals = None
+        if "thetao" in latest.data_vars:
+            temp_vals = latest["thetao"].values
+        else:
+            print("[warn] 'thetao' findes ikke i dette datasæt — "
+                  "strømdata fortsætter uden vandtemperatur. "
+                  f"Tilgængelige variable: {list(latest.data_vars)}", file=sys.stderr)
 
         points = []
         for i, lat in enumerate(lats):
             for j, lon in enumerate(lons):
                 u = float(uo_vals[i, j])
                 v = float(vo_vals[i, j])
-                t = float(temp_vals[i, j])
                 if math.isnan(u) or math.isnan(v):
                     continue
                 if abs(u) > 10 or abs(v) > 10:  # fill-value sentinel
@@ -194,8 +244,10 @@ try:
                 # Temperatur kan mangle/være fill-value uden at strømdata gør —
                 # medtag kun hvis reel, men lad ikke en manglende værdi fjerne
                 # selve strømpunktet.
-                if not math.isnan(t) and -5 < t < 40:
-                    point["temp"] = round(t, 2)
+                if temp_vals is not None:
+                    t = float(temp_vals[i, j])
+                    if not math.isnan(t) and -5 < t < 40:
+                        point["temp"] = round(t, 2)
                 points.append(point)
 
         if not points:
