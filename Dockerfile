@@ -31,6 +31,8 @@ COPY overloeb-sw.js ./
 COPY vp3_kystvande_simplified.geojson ./
 COPY vp3_badevand.geojson ./
 COPY vp3_rbu_slim.geojson ./
+COPY vp3_soeer.geojson ./
+COPY vp3_vandlob.geojson ./
 
 EXPOSE 8080
 
