@@ -494,7 +494,12 @@
     padding: .75rem 1rem;
     box-shadow: var(--shadow);
     min-width: 170px;
-    max-height: calc(100vh - 120px);
+    /* RETTET: brugte tidligere 100vh, som også talte header/faner med —
+       panelet kunne derfor stikke ud over eller under selve kort-området.
+       #tab-kort (positioneret forælder) har en reel, flex-beregnet højde,
+       så % refererer nu korrekt til DET tilgængelige kort-område, ikke
+       hele skærmen. 100px trækkes fra for luft foroven/nedenfor. */
+    max-height: calc(100% - 100px);
     overflow-y: auto;
   }
   #lag-body h4 {
@@ -4162,6 +4167,12 @@ function closeBadevandPanel() {
   document.getElementById('badevand-panel').classList.remove('open');
   _currentBvFeature = null;
   history.pushState(null, '', window.location.pathname);
+  // RETTET: badevand-panel er en fuld-skærms overlay uden for tab-systemet
+  // (switchTab() ved derfor intet om den), så kortet fik aldrig besked om at
+  // genberegne sin størrelse, når overlayet lukkedes — det gav et korrumperet
+  // layout ved returnering til kortet (mobilbrowserens viewport-højde kan
+  // ændre sig marginalt, mens overlayet er åbent).
+  setTimeout(() => map && map.invalidateSize(), 50);
 }
 
 // Luk badevandspanel med ESC
@@ -4308,6 +4319,7 @@ function ud_currentPtId() {
 
 function closeUdlobPanel() {
   document.getElementById('udlob-panel').classList.remove('open');
+  setTimeout(() => map && map.invalidateSize(), 50);
 }
 
 function ud_setBar(barId, pctId, val) {
