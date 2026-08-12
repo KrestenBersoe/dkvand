@@ -1,0 +1,242 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// seo-pages.js — server-side rendering af Tier 1/2/3-siderne
+// (/badested/:slug, /soe/:slug, /udloeb/:id) + sitemap.xml + OG-badges
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Genbruger den ALLEREDE cachede, komprimerede app-shell (server.js's
+// getCompressedHtml()) som base — INGEN ny templating-motor. To ting
+// injiceres, begge via simple, streng-ankrede .replace()-kald på allerede
+// kendte, stabile understrenge i dansk-overloeb-kort.html:
+//   1. <title> + en blok nye meta-tags (description/OG/canonical/JSON-LD/
+//      robots), indsat lige efter <title>.
+//   2. For Tier 1/2 ALENE: en synlig, semantisk #ssr-content-blok lige
+//      efter <body> åbner (rigtigt indhold i det RÅ svar, ikke kun efter en
+//      efterfølgende JS-fetch), samt et lille window.__SSR_ROUTE__-script
+//      så klienten kan åbne det korrekte panel uden selv at slå slug op.
+//
+// Risiko-farver/labels HOLDES I SYNC med klientens riskStyle()/riskLabel()
+// (dansk-overloeb-kort.html) — samme tærskler (0.6/0.2), samme hex-farver.
+// ═══════════════════════════════════════════════════════════════════════════
+
+'use strict';
+
+const SITE_URL = 'https://www.ditbadevand.dk';
+
+// Samme tærskler/farver som klientens riskStyle()/riskLabel() — se filhoved.
+function riskInfo(risk) {
+  if (risk === null || risk === undefined) return { label: 'Ingen data', color: '#1a6faf', pct: null };
+  if (risk >= 0.6) return { label: 'Høj risiko',     color: '#c84b1f', pct: Math.round(risk * 100) };
+  if (risk >= 0.2) return { label: 'Moderat risiko', color: '#d4a020', pct: Math.round(risk * 100) };
+  return              { label: 'Lav risiko',       color: '#2d7d4f', pct: Math.round(risk * 100) };
+}
+
+// Samme tekst som klientens confirmReasonTooltipText() — se dansk-overloeb-
+// kort.html for hvorfor de tre grunde er reelt forskellige bekræftelser.
+function confirmReasonText(reason) {
+  if (reason === 'id15-empty')     return 'Ingen kendte spildevandsudledninger i oplandet (ID15-bekræftet)';
+  if (reason === 'all-stormwater') return 'Ingen kendte spildevandsudledninger i nærheden (kun regnvandsudløb)';
+  if (reason === 'no-candidates')  return 'Ingen registrerede udløb i nærheden';
+  return 'Ingen kendte spildevandsudledninger i nærheden';
+}
+
+function riskFromBactViral(entry) {
+  const active = [entry.bact, entry.viral].filter(v => v !== null && v !== undefined);
+  const risk = active.length ? Math.max(...active) : null;
+  const { label, pct } = riskInfo(risk);
+  if (pct === null) return { label, text: 'Der mangler pt. nedbørsdata til at beregne en aktuel risiko.' };
+  return { label, text: `Aktuel forureningsrisiko: ${label.toLowerCase()} (${pct}%), baseret på nedbør og nærliggende overløbsudledninger.` };
+}
+
+/**
+ * Badested-udgaven — badevandRiskCache.badevand[]-entries bruger `source`
+ * (streng: 'soe'|'kystvand'|'nedstroms-bekraeftet'|'ingen-bekraeftet'|'ingen')
+ * + `noDataMatch`, IKKE en confirmedNoOutlet-boolean (den findes kun på
+ * lakes{}/kystvande{}, se describeSoeRisk() nedenfor). Replikerer PRÆCIST
+ * samme fem grene som klientens colorBadevandByRisk() (dansk-overloeb-
+ * kort.html) — se dens kommentarer for den fulde begrundelse pr. gren.
+ * BEVIDST holdt adskilt fra describeSoeRisk() fremfor ét fælles, duck-typet
+ * forsøg — de to kilder har reelt forskellig form, og denne tekst indgår i
+ * en OFFENTLIGT INDEKSERET side, hvor en forkert sammenblanding er værre
+ * end i en klient-tooltip.
+ */
+function describeBadestedRisk(entry) {
+  if (!entry) return { label: 'Ingen data', text: 'Der er ikke fundet nogen aktuel risikovurdering for dette sted endnu.' };
+  if (entry.source === 'ingen-bekraeftet') {
+    return { label: 'Lav risiko', text: confirmReasonText(entry.confirmReason) + '.' };
+  }
+  if (entry.source === 'nedstroms-bekraeftet') {
+    return { label: 'Lav risiko', text: 'Kendte udløb er lige nu strømbekræftet nedstrøms — ingen aktuel kilde mod badestedet.' };
+  }
+  if (entry.source === 'ingen' && !entry.noDataMatch) {
+    return { label: 'Lav risiko', text: 'Ingen registrerede udløb, som udleder til denne lokation.' };
+  }
+  return riskFromBactViral(entry);
+}
+
+/**
+ * Sø-udgaven — badevandRiskCache.lakes[navn]-entries har derimod en
+ * boolean `confirmedNoOutlet` + `confirmReason` direkte (se badevand-
+ * risk.js's opbygning af lakes{}), en simplere to-vejs gren.
+ */
+function describeSoeRisk(entry) {
+  if (!entry) return { label: 'Ingen data', text: 'Der er ikke fundet nogen aktuel risikovurdering for denne sø endnu.' };
+  if (entry.confirmedNoOutlet) {
+    return { label: 'Lav risiko', text: confirmReasonText(entry.confirmReason) + '.' };
+  }
+  return riskFromBactViral(entry);
+}
+
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+/**
+ * Injicerer titel + meta-tags i den allerede cachede app-shell (raw HTML-
+ * streng, se server.js's getCompressedHtml()). `robotsContent` er valgfri —
+ * udelades for Tier 1/2 (skal indekseres, default-adfærd), sat til
+ * 'noindex, follow' for Tier 3.
+ */
+function injectHead(html, { title, description, canonicalPath, ogImagePath, robotsContent, jsonLd }) {
+  const canonical = `${SITE_URL}${canonicalPath}`;
+  const metaBlock = [
+    `<meta name="description" content="${escHtml(description)}">`,
+    robotsContent ? `<meta name="robots" content="${escHtml(robotsContent)}">` : '',
+    `<link rel="canonical" href="${escHtml(canonical)}">`,
+    `<meta property="og:type" content="website">`,
+    `<meta property="og:title" content="${escHtml(title)}">`,
+    `<meta property="og:description" content="${escHtml(description)}">`,
+    `<meta property="og:url" content="${escHtml(canonical)}">`,
+    ogImagePath ? `<meta property="og:image" content="${escHtml(SITE_URL + ogImagePath)}">` : '',
+    jsonLd ? `<script type="application/ld+json">${JSON.stringify(jsonLd)}</script>` : '',
+  ].filter(Boolean).join('\n');
+
+  let out = html.replace(
+    /<title>[^<]*<\/title>/,
+    `<title>${escHtml(title)}</title>\n${metaBlock}`
+  );
+  return out;
+}
+
+/** Kun for Tier 3 (/udloeb/:id) — ingen data-forudfyldning, kun robots-metaen. */
+function injectRobotsOnly(html, canonicalPath) {
+  const canonical = `${SITE_URL}${canonicalPath}`;
+  return html.replace(
+    /<title>([^<]*)<\/title>/,
+    `<title>$1</title>\n<meta name="robots" content="noindex, follow">\n<link rel="canonical" href="${escHtml(canonical)}">`
+  );
+}
+
+/**
+ * Synligt, crawlbart indhold lige efter <body> åbner — se filhoved for
+ * hvorfor dette er en SEPARAT blok, ikke et forsøg på at forhåndsudfylde
+ * den eksisterende, JS-vedligeholdte #badevand-panel-DOM. Klienten skjuler
+ * denne blok, når det rigtige panel åbnes (se dansk-overloeb-kort.html).
+ */
+function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets }) {
+  // NYT (ustabil-id-rettelse — se server.js's loadPulsPointsFull()):
+  // bruger outfallId (stabil GUID) i stedet for o.id (rækkeindekset) til
+  // selve linket — dette er server-renderet, crawlbart HTML, indekseret af
+  // søgemaskiner og potentielt bogmærket direkte af brugere. Et
+  // rækkeindeks-baseret link her ville forblive KORREKT lige nu, men
+  // uigenkaldeligt pege på et andet, forkert udløb efter blot ÉN
+  // dataopdatering (samme klasse fejl som "F-U9 i Furesø" åbnede et udløb
+  // i Odense) — modsat klient-cachede referencer er dette link permanent,
+  // det kan ikke "opdage" at det er blevet forældet.
+  // NYT (opstrøms sø/kystvand-propagering — se badevand-risk.js's
+  // lakeEdges-afsnit): syntetiske "opstrøms sø"-udløb har hverken id eller
+  // outfallId (de er ikke et enkelt PULS-punkt) — vist som ren tekst i
+  // stedet for et /udloeb/-link, der ellers ville pege på "/udloeb/null".
+  const outletLinks = (outlets || []).slice(0, 20).map(o =>
+    (o.outfallId || o.id) != null
+      ? `<li><a href="/udloeb/${escHtml(o.outfallId || o.id)}">${escHtml(o.name || `Udløb ${o.id}`)}</a></li>`
+      : `<li>${escHtml(o.name || 'Opstrøms kilde')}</li>`
+  ).join('');
+  return `
+<div id="ssr-content" style="max-width:640px;margin:0 auto;padding:2rem 1.2rem;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1a2733">
+  <h1>${escHtml(navn)}${kommune ? ` — ${escHtml(kommune)}` : ''}</h1>
+  <p>${escHtml(riskText)}</p>
+  <p style="color:#5a6b78;font-size:.85rem">Sidst opdateret: ${escHtml(updatedAt)}</p>
+  ${outletLinks ? `<h2>Udløb der påvirker dette sted</h2><ul>${outletLinks}</ul>` : ''}
+</div>`;
+}
+
+/** Slår window.__SSR_ROUTE__ ind, så klienten slipper for slug→id-opslag. */
+function buildSsrRouteScript(route) {
+  return `<script>window.__SSR_ROUTE__=${JSON.stringify(route)};</script>`;
+}
+
+function injectBodyContent(html, bodyHtml) {
+  return html.replace('<body>', `<body>${bodyHtml}`);
+}
+
+function buildJsonLd({ name, lat, lng, addressLocality }) {
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'Place',
+    name,
+    ...(addressLocality ? { address: { '@type': 'PostalAddress', addressLocality } } : {}),
+    ...(lat != null && lng != null ? { geo: { '@type': 'GeoCoordinates', latitude: lat, longitude: lng } } : {}),
+  };
+}
+
+/** Let, håndrullet SVG-badge til og:image — se planens begrundelse for hvorfor SVG (ikke PNG) i første omgang. */
+function buildOgSvg({ navn, kommune, label, color }) {
+  const W = 1200, H = 630;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <rect width="${W}" height="${H}" fill="#0d1720"/>
+  <rect x="0" y="0" width="${W}" height="14" fill="${color}"/>
+  <text x="80" y="220" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="30" fill="#4fb8d6" font-weight="700">DIT BADEVAND</text>
+  <text x="80" y="330" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="64" fill="#f0ede6" font-weight="800">${escHtml(navn)}</text>
+  ${kommune ? `<text x="80" y="385" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="30" fill="#9fb0bb">${escHtml(kommune)}</text>` : ''}
+  <rect x="80" y="440" width="26" height="26" rx="6" fill="${color}"/>
+  <text x="118" y="461" font-family="-apple-system,Segoe UI,Roboto,sans-serif" font-size="30" fill="#f0ede6" font-weight="600">${escHtml(label)}</text>
+</svg>`;
+}
+
+/**
+ * Punkt 5 (planen) — "intern linking": et skjult, men EGTE crawlbart
+ * <a href>-link pr. Tier 1/2-side, så Google kan crawle sig ind til alle
+ * ~2.024 sider via almindelige links, ikke kun via sitemap.xml/JS-
+ * klik-handlere på selve kort-markørerne (som ikke er rigtige DOM-anchors —
+ * kortet er Canvas/SVG-renderet, se dansk-overloeb-kort.html's
+ * pointsPane-filhoved). Bygges ÉN gang ved opstart (samme livscyklus som
+ * slug-index/sitemap selv) og injiceres i den ALLEREDE cachede app-shell
+ * (server.js's getCompressedHtml()) FØR gzip/brotli beregnes — nul
+ * pr.-request-omkostning, samme princip som selve komprimeringen.
+ *
+ * Visuelt skjult (position:absolute, 1×1px, clip) — IKKE display:none
+ * (som visse crawlere behandler som et signal om skjult/spam-indhold) —
+ * standard, legitim teknik for navigation til indhold der ellers kun er
+ * tilgængeligt via et Canvas-renderet kort, ikke en forsøg på cloaking:
+ * indholdet (badested-/sø-navnet) er identisk med hvad en bruger reelt ser.
+ */
+function buildSitelinksHtml(badestedSlugToInfo, soeSlugToInfo) {
+  const badestedLinks = [...badestedSlugToInfo.entries()]
+    .map(([slug, info]) => `<a href="/badested/${slug}">${escHtml(info.navn)}</a>`).join('');
+  const soeLinks = [...soeSlugToInfo.entries()]
+    .map(([slug, info]) => `<a href="/soe/${slug}">${escHtml(info.navn)}</a>`).join('');
+  return `<nav id="seo-sitelinks" aria-hidden="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap">${badestedLinks}${soeLinks}</nav>`;
+}
+
+function buildSitemapXml(urls) {
+  const items = urls.map(({ loc, priority }) =>
+    `  <url><loc>${escHtml(loc)}</loc><priority>${priority}</priority></url>`
+  ).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${items}\n</urlset>`;
+}
+
+module.exports = {
+  SITE_URL,
+  riskInfo,
+  describeBadestedRisk,
+  describeSoeRisk,
+  injectHead,
+  injectRobotsOnly,
+  buildSsrContent,
+  buildSsrRouteScript,
+  injectBodyContent,
+  buildJsonLd,
+  buildOgSvg,
+  buildSitemapXml,
+  buildSitelinksHtml,
+};

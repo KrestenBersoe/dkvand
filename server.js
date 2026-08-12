@@ -1,0 +1,2844 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// Overløbsrisiko — Node/Express server
+//
+// Serves the static map app and provides a weather proxy with a shared
+// server-side cache. This collapses Open-Meteo calls from "per browser"
+// to "per 0.25° grid cell per 3h, globally".
+//
+// Run:
+//   npm install
+//   node server.js
+//   → http://localhost:3000
+//
+// Endpoints:
+//   GET /                         → dansk-overloeb-kort.html
+//   GET /puls-data.json           → PULS dataset (Cache-Control 14 days)
+//   GET /api/weather/all          → full pre-warmed grid as one cacheable response
+//   GET /api/weather/hourly?key=  → hourlyObs+hourlyFore for one cell (on demand)
+//   GET /api/weather?lat=&lng=    → single cell (fallback)
+//   GET /api/health               → status + cache stats
+// ═══════════════════════════════════════════════════════════════════════════
+
+const express     = require('express');
+const compression = require('compression');
+const path        = require('path');
+const https       = require('https');
+const fs          = require('fs');
+const zlib        = require('zlib');
+const webpush     = require('web-push');
+// NYT: portering af risikomodellen fra dansk-overloeb-kort.html, så
+// serveren selv kan evaluere overløbsrisiko UAFHÆNGIGT af om en klient har
+// en fane åben — se server-modules/risk-model.js for fuld begrundelse.
+const riskModel    = require('./risk-model');
+const waterClass    = require('./water-classification');
+const badevandRisk  = require('./badevand-risk');
+// NYT: borgerobservationer (ét-tryks status + algeobservation) — se modulets
+// eget filhoved for den HÅRDE grænse mod at dette nogensinde må påvirke
+// badevandRisk's officielle farve/badge. Egen SQLite-fil på samme Volume,
+// ikke en del af badevandRisk's eget datagrundlag.
+const badestedObs  = require('./badested-observations');
+// NYT: installations-telemetri (stille heartbeat, aktiv-installationstal pr.
+// platform) + daglig badevands-risikohistorik (grundlag for ugentlig
+// badested-digest) — se modulets eget filhoved for begrundelsen bag
+// persisteret løbende gennemsnit frem for in-memory-akkumulering.
+const appMetrics   = require('./app-metrics');
+// NYT (bruger-ønske 2026-08-10 — URL-arkitektur/SEO): navn-kommune-slugs for
+// Tier 1/2 (/badested/:slug, /soe/:slug) + sitemap.xml — se modulets eget
+// filhoved for hvorfor slug-skemaet er bekræftet mod reelle data (0
+// kollisioner), ikke antaget.
+const slugIndex    = require('./slug-index');
+const seoPages     = require('./seo-pages');
+// NYT: delt Postgres-forbindelse — push-abonnementer/-kø (nedenfor) er den
+// sidste del af appen der stadig lå i en lokal, ikke-delt fil/Map, se
+// db.js's filhoved for den fulde begrundelse (samme multi-maskine-
+// fragmenterings-problem som app-metrics.js/badested-observations.js
+// allerede blev migreret væk fra).
+const { query } = require('./db');
+const multer       = require('multer');
+
+// ── Persistent Volume-mount, hvis tilgængelig ────────────────────────────────
+// Se fly.toml [[mounts]]. Containerens rodfilsystem (__dirname) nulstilles
+// ved hvert fuldt Fly-autostop, så alt der skal overleve en rigtig genstart
+// (strøm-cache, push-subscriptions) skal ligge her i stedet. Falder tilbage
+// til __dirname hvis /data ikke findes (lokal udvikling, eller før volumen
+// er oprettet), så koden virker uændret begge steder.
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+
+// ── VAPID configuration ─────────────────────────────────────────────────────
+// Set these as environment variables on Fly.io:
+//   fly secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=...
+// Never commit private key to git.
+const VAPID_PUBLIC_KEY  = process.env.VAPID_PUBLIC_KEY  || '';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || '';
+const VAPID_SUBJECT     = process.env.VAPID_SUBJECT     || 'mailto:admin@ditbadevand.dk';
+
+if (VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
+  webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
+  console.log('Web Push VAPID configured');
+} else {
+  console.warn('VAPID keys not set — push notifications disabled. Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY.');
+}
+
+// ── Push-subscriptions + -afsendelseskø: Postgres (Fly Managed Postgres) ────
+// RETTET (2026-08-02): var tidligere en in-memory Map + JSON-fil på den
+// lokale /data-volume — SAMME multi-maskine-fragmenteringsproblem som
+// app-metrics.js/badested-observations.js allerede blev migreret væk fra
+// (se disse moduler, og fly.toml's [[mounts]]-advarsel, for den fulde
+// begrundelse: to Fly-maskiner ville ende med to helt adskilte
+// abonnentlister). Postgres er netværkstilgængeligt fra alle maskiner.
+//
+// Konsekvens af migreringen — INGEN in-memory tilstand længere: hot-path-
+// funktioner (enqueuePushNotifications(), runPeriodicEngagementJob())
+// henter nu en FRISK kopi af alle abonnementer ÉN gang pr. kørsel (samme
+// batch-hentnings-mønster som badevand_daily_risk i app-metrics.js), i
+// stedet for at iterere en langtlevende Map. CRUD-endepunkterne
+// (subscribe/unsubscribe/update-favourites) er nu direkte, målrettede
+// Postgres-forespørgsler — INGEN fil-persistering, ingen crash-vindue at
+// bekymre sig om (en INSERT/UPDATE ER allerede holdbart gemt, i modsætning
+// til den tidligere synkrone fs.writeFileSync()-af-hele-filen-hver-gang).
+//
+// push-afsendelseskøen (tidligere pushSendQueue-arrayet + push-queue.json)
+// er samme historie: en INSERT er allerede persisteret, så den tidligere
+// "genindlæs ventende jobs fra disk ved opstart"-logik er overflødig — et
+// job, der blev BESLUTTET men ikke nået at blive SENDT før en genstart,
+// ligger stadig i push_send_queue-tabellen og bliver naturligt hentet af
+// den NÆSTE flushPushQueue()-kørsel (kaldt periodisk fra
+// evaluatePushNotifications()-kæden) uden nogen særskilt opstartslogik.
+const schema = query(`
+  CREATE TABLE IF NOT EXISTS push_subscriptions (
+    endpoint        TEXT PRIMARY KEY,
+    subscription    JSONB NOT NULL,
+    favourites      JSONB NOT NULL DEFAULT '[]',
+    badevand_groups JSONB NOT NULL DEFAULT '[]',
+    install_id      TEXT,
+    platform        TEXT,
+    notified_state  JSONB NOT NULL DEFAULT '{}',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE IF NOT EXISTS push_send_queue (
+    id          BIGSERIAL PRIMARY KEY,
+    endpoint    TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    payload     TEXT NOT NULL,
+    hit_stamps  JSONB NOT NULL DEFAULT '[]',
+    enqueued_at BIGINT NOT NULL
+  );
+`).then(() => console.info('push_subscriptions/push_send_queue: Postgres-skema klar'))
+  .catch(e => { console.error('push_subscriptions/push_send_queue: skemaoprettelse fejlede —', e.message); throw e; });
+
+// NYT: de fire typer beskeder appen reelt sender — sat på hvert job ved
+// enqueue-tidspunkt (se de fire pushSendQueue-INSERT-kaldssteder), læst af
+// flushPushQueue() til at logge FAKTISK lykkedes afsendelser via
+// appMetrics.recordPushSent(), til /api/stats' "hvor mange push, af hvilken
+// slags"-rapportering (se appMetrics.getPushSendStats()).
+const PUSH_SEND_TYPES = {
+  RISIKOVARSEL:     'risikovarsel',      // overløbs-/badevands-risikovarsel (enqueuePushNotifications())
+  HEARTBEAT:        'heartbeat',         // stille installations-heartbeat (runPeriodicEngagementJob())
+  UGENTLIG_DIGEST:  'ugentlig-digest',   // ugentlig badested-status (runPeriodicEngagementJob())
+  NY_VURDERING:     'ny-vurdering',      // dagens første borger-vurdering af et badested (broadcastFirstVurderingOfDay())
+};
+
+// Rå Postgres-række → samme feltnavne (camelCase) som resten af koden
+// allerede forventede fra den gamle in-memory Map's entry-objekter.
+function mapSubscriptionRow(row) {
+  return {
+    endpoint: row.endpoint,
+    subscription: row.subscription,
+    favourites: row.favourites || [],
+    badevandGroups: row.badevand_groups || [],
+    installId: row.install_id,
+    platform: row.platform,
+    notifiedState: row.notified_state || {},
+  };
+}
+
+/** Alle abonnementer, ÉN batch-hentning — se filhovedet for hvorfor. */
+async function getAllPushSubscriptions() {
+  const { rows } = await query(`SELECT * FROM push_subscriptions`);
+  return rows.map(mapSubscriptionRow);
+}
+
+async function getPushSubscriptionCount() {
+  const { rows } = await query(`SELECT COUNT(*)::int AS n FROM push_subscriptions`);
+  return rows[0].n;
+}
+
+// Sender ét job — fanger ALTID selv sin fejl og returnerer et almindeligt
+// resultat-objekt i stedet for at kaste, så Promise.all (ikke .allSettled)
+// er tilstrækkeligt og enkelt i flushPushQueue() nedenfor.
+async function sendOnePushJob(job, subsByEndpoint) {
+  // Slår abonnementet op i den batch, flushPushQueue() allerede har hentet
+  // (se dér) — respekterer korrekt en afmelding, der skete i det korte
+  // vindue mellem enqueue og selve afsendelsen, da den batch hentes FRISK
+  // ved hvert flush-kald, ikke ved enqueue-tidspunktet.
+  const entry = subsByEndpoint.get(job.endpoint);
+  if (!entry) return { job, ok: false, expired: false };
+  try {
+    await webpush.sendNotification(entry.subscription, job.payload);
+    return { job, entry, ok: true };
+  } catch (e) {
+    return { job, entry, ok: false, expired: e.statusCode === 410 || e.statusCode === 404 };
+  }
+}
+
+let _flushingPushQueue = false;
+async function flushPushQueue() {
+  // Samme reentrancy-mønster som evaluatePushNotifications() — et
+  // samtidigt kald genbruger blot resultatet af den allerede kørende
+  // tømning, i stedet for at starte en overlappende ekstra kørsel.
+  if (_flushingPushQueue) return;
+  _flushingPushQueue = true;
+  try {
+    // NYT: DELETE ... RETURNING claimer og fjerner HELE køen ATOMISK i ét
+    // statement — simplere og mere robust end den tidligere splice-array-
+    // så-persistér-tom-fil-to-trins-proces (ingen mellemtilstand hvor køen
+    // er tømt i hukommelsen men endnu ikke gemt).
+    const { rows: jobs } = await query(`
+      DELETE FROM push_send_queue
+      RETURNING endpoint, type, payload, hit_stamps, enqueued_at
+    `);
+    if (jobs.length === 0) return;
+
+    // ÉT batch-opslag af de abonnementer, der reelt er relevante for denne
+    // afsendelse — ikke ét opslag PR. job (ville kunne udtømme pg.Pool'ens
+    // forbindelser ved en stor kø, se db.js).
+    const endpoints = [...new Set(jobs.map(j => j.endpoint))];
+    const { rows: subRows } = await query(`SELECT * FROM push_subscriptions WHERE endpoint = ANY($1)`, [endpoints]);
+    const subsByEndpoint = new Map(subRows.map(r => [r.endpoint, mapSubscriptionRow(r)]));
+
+    // NYT: SAMTIDIG afsendelse — Promise.all i stedet for en sekventiel
+    // for-await-løkke. Ved den nuværende, beskedne abonnenttal (typisk
+    // få-til-nogle-og-tyve) er der ingen grund til en kunstig
+    // samtidigheds-grænse (p-limit-lignende); bliver abonnenttallet
+    // markant større (hundreder+), er det værd at genoverveje for ikke at
+    // ramme push-tjenesternes egne rate-grænser.
+    const results = await Promise.all(jobs.map(job => sendOnePushJob(job, subsByEndpoint)));
+
+    let sent = 0, failed = 0;
+    const expiredEndpoints = [];
+    const notifiedStateByEndpoint = new Map(); // endpoint -> sammenflettet notifiedState-objekt
+    const pushSentLogs = [];
+
+    for (const r of results) {
+      if (r.ok) {
+        sent++;
+        const merged = notifiedStateByEndpoint.get(r.job.endpoint) || { ...(r.entry.notifiedState || {}) };
+        for (const h of r.job.hit_stamps) merged[h.key] = { ts: Number(r.job.enqueued_at), risk: h.risk };
+        notifiedStateByEndpoint.set(r.job.endpoint, merged);
+        // NYT: logger KUN her — ved bekræftet vellykket levering, aldrig ved
+        // blot kø-tilmelding — se app-metrics.js's recordPushSent(). Samlet
+        // op og afventet SAMTIDIGT nedenfor (uafhængige inserts, ingen
+        // rækkefølge-afhængighed) i stedet for at afvente hver enkelt
+        // sekventielt inde i loopet.
+        pushSentLogs.push(appMetrics.recordPushSent(r.job.type));
+      } else {
+        failed++;
+        if (r.expired) expiredEndpoints.push(r.job.endpoint);
+      }
+    }
+
+    await Promise.all([
+      ...pushSentLogs,
+      ...[...notifiedStateByEndpoint.entries()].map(([endpoint, state]) =>
+        query(`UPDATE push_subscriptions SET notified_state = $1 WHERE endpoint = $2`, [JSON.stringify(state), endpoint])),
+      expiredEndpoints.length > 0
+        ? query(`DELETE FROM push_subscriptions WHERE endpoint = ANY($1)`, [expiredEndpoints])
+        : Promise.resolve(),
+    ]).catch(e => console.warn('flushPushQueue (efterbehandling) fejl:', e.message));
+
+    console.info(`Push-kø tømt: ${sent} sendt (samtidigt), ${failed} fejlet/udløbet/afmeldt siden`);
+  } finally {
+    _flushingPushQueue = false;
+  }
+}
+
+const app  = express();
+const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || '0.0.0.0';
+
+// Gzip everything — JSON payloads compress ~70-80%
+app.use(compression());
+
+// ── Static files with appropriate cache headers ─────────────────────────────
+const STATIC_DIR = __dirname;
+
+// NYT (bruger-ønske 2026-08-10): bygges ÉN gang her, synkront, ved opstart —
+// se slug-index.js's filhoved for hvorfor runtime-genopbygning ikke er
+// nødvendig (kilde-filerne ændres kun via den offline update-all-data.sh-
+// pipeline). Bruges af /badested/:slug, /soe/:slug og /sitemap.xml nedenfor.
+const { badestedSlugToInfo, idToBadestedSlug, soeSlugToInfo, navnToSoeSlug } = slugIndex.buildSlugIndex(STATIC_DIR);
+
+// PULS data: changes once a year → cache aggressively
+app.get('/puls-data.json', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=1209600');  // 14 days
+  res.sendFile(path.join(STATIC_DIR, 'puls-data.json'));
+});
+
+// VP3 geodata: static reference files updated rarely, men "rarely" var
+// før i dag også hvad vi troede om selve indholdet, indtil et helt kodet og
+// deployet farve-skel (spildevand vs. ikke) forblev usynligt for brugeren i
+// flere runder, fordi klientens browser-cache (max-age=604800 = 7 dage)
+// aldrig gengav en betinget forespørgsel — den så end ikke om filen var
+// ændret på serveren, uanset hvor mange gange VI redeployede. no-cache
+// tvinger en (billig, ETag-baseret) revalidering ved HVER indlæsning i
+// stedet, så en fil-opdatering slår igennem med det samme, ikke op til en
+// uge senere.
+const VP3_FILES = [
+  'vp3_kystvande_simplified.geojson',
+  'vp3_badevand.geojson',
+  'vp3_rbu_slim.geojson',
+];
+VP3_FILES.forEach(f => {
+  app.get('/' + f, (req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.sendFile(path.join(STATIC_DIR, f));
+  });
+});
+
+// HTML: no-cache so the browser always revalidates with the server.
+// (Use a short max-age in production once stable; no-cache avoids stale-JS
+// confusion during active development.)
+//
+// RETTET/FJERNET: injicerede tidligere en MAPTILER_KEY fra en Fly secret
+// ind i HTML'en ved hvert kald (se git-historik hvis den gamle mekanisme
+// skal genfindes). Overflødig nu — kortet henter fliser fra vores egen,
+// selv-hostede tileserver (se tileserver/-mappen), som ikke kræver nogen
+// nøgle. Simplere OG fjerner afhængigheden af en ekstern kvote helt.
+// RETTET: no-cache tillader browseren at GEMME en kopi, blot med krav om at
+// den først bekræfter med serveren, om noget er ændret (via ETag/Last-
+// Modified), før den bruges — en revalideringsdans, iOS' WebView-motor for
+// installerede PWA'er er kendt for at håndtere upålideligt/for aggressivt i
+// praksis. no-store er en langt mere utvetydig instruks: cache overhovedet
+// intet, hent altid en frisk kopi. For selve app-skallen (denne ene HTML-
+// fil, ikke de store statiske datafiler) er den lille bandbredde-omkostning
+// et fornuftigt bytte mod at udelukke forældet-app-kode som forklaring.
+// ── Pre-komprimeret app-skal — gzip/brotli beregnes ÉN gang pr. filversion,
+// ikke pr. forespørgsel ─────────────────────────────────────────────────────
+// RETTET (bruger-ønske: "optimer i forhold til gzip og hurtig levering af
+// scripts og html"): denne rute svarer med Cache-Control: no-store
+// (bevidst, se kommentaren nedenfor — undgår en kendt iOS WebView-cache-
+// fejl for installerede PWA'er), hvilket betyder browseren ALDRIG selv
+// cacher filen — hver eneste sidevisning henter (og, indtil nu,
+// GENkomprimerer) samtlige ~430 KB fra bunden. Den generiske
+// compression()-middleware ovenfor gzip'er responsen PÅ NY for hver
+// forespørgsel, selvom selve filindholdet kun ændrer sig ved en deploy —
+// ren spildt CPU-tid for identisk output, især mærkbart på den delte vCPU
+// (se samtalen om evaluatePushNotifications()' egen overbelastningshændelse).
+//
+// Beregner nu i stedet gzip (niveau 9, maksimal kompression — billigt at
+// vælge det højeste niveau, når arbejdet alligevel kun sker én gang) OG
+// brotli (kvalitet 11 — ~19% mindre end gzip for denne fil, moderne
+// browsere foretrækker br via Accept-Encoding) ÉN gang, cachet i
+// hukommelsen og nøglet på filens mtime (ugyldiggøres automatisk, hvis
+// filen skulle ændre sig uden en fuld proces-genstart — sker ikke i
+// praksis, da en deploy altid genstarter processen, men koster intet at
+// være korrekt om). Selve HTTP-cachingen (no-store) er UÆNDRET — dette
+// handler kun om at undgå at gentage identisk kompressionsarbejde ved
+// hver eneste forespørgsel, ikke om at ændre klientens cache-adfærd.
+//
+// Sætter selv Content-Encoding, FØR noget skrives til res — compression()-
+// middleware'ns egen shouldCompress()-tjek springer korrekt over en
+// response, der allerede har Content-Encoding sat (bekræftet ved test:
+// ingen dobbelt-komprimering).
+let _htmlCompressedCache = null; // { mtimeMs, raw, gzip, brotli }
+function getCompressedHtml() {
+  const filePath = path.join(STATIC_DIR, 'dansk-overloeb-kort.html');
+  const stat = fs.statSync(filePath);
+  if (_htmlCompressedCache && _htmlCompressedCache.mtimeMs === stat.mtimeMs) return _htmlCompressedCache;
+  // NYT (bruger-ønske 2026-08-10 — URL-arkitektur/SEO, punkt 5 "intern
+  // linking"): den skjulte, men egte crawlbare sitelinks-liste (se
+  // seo-pages.js's buildSitelinksHtml()) injiceres HER, FØR gzip/brotli
+  // beregnes — nul pr.-request-omkostning, samme princip som selve
+  // forkomprimeringen. Gælder derfor automatisk BÅDE '/' og de nye Tier
+  // 1/2/3-sider (som alle genbruger denne cache som base, se
+  // baseAppHtml()/de nye routes).
+  const rawFile = fs.readFileSync(filePath, 'utf8');
+  const withSitelinks = rawFile.replace('<body>', `<body>${seoPages.buildSitelinksHtml(badestedSlugToInfo, soeSlugToInfo)}`);
+  const raw    = Buffer.from(withSitelinks, 'utf8');
+  const gzip   = zlib.gzipSync(raw, { level: 9 });
+  const brotli = zlib.brotliCompressSync(raw, {
+    params: {
+      [zlib.constants.BROTLI_PARAM_QUALITY]:   11,
+      [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length,
+    },
+  });
+  _htmlCompressedCache = { mtimeMs: stat.mtimeMs, raw, gzip, brotli };
+  console.log(`HTML forkomprimeret: ${raw.length} B → gzip ${gzip.length} B (${Math.round(100*gzip.length/raw.length)}%), brotli ${brotli.length} B (${Math.round(100*brotli.length/raw.length)}%)`);
+  return _htmlCompressedCache;
+}
+
+app.get(['/', '/dansk-overloeb-kort.html'], (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.set('Vary', 'Accept-Encoding'); // afgørende for korrekthed bag Cloudflare — se samtalen om cachelaget foran appen
+  const cached = getCompressedHtml();
+  const acceptEncoding = req.headers['accept-encoding'] || '';
+  if (acceptEncoding.includes('br')) {
+    res.set('Content-Encoding', 'br');
+    res.end(cached.brotli);
+  } else if (acceptEncoding.includes('gzip')) {
+    res.set('Content-Encoding', 'gzip');
+    res.end(cached.gzip);
+  } else {
+    // Ekstremt sjældent i praksis (stort set alle klienter siden ~2010
+    // understøtter gzip) — men et ukomprimeret svar er stadig korrekt,
+    // fremfor at antage support og risikere en ulæselig side.
+    res.end(cached.raw);
+  }
+});
+
+// ── Statistikside — offentlig, ingen adgangsbeskyttelse (bevidst valg) ──────
+// Letvægts, selvstændig side (IKKE en del af den store SPA-fil ovenfor) —
+// henter selv GET /api/stats client-side, se stats.html.
+app.get('/stats', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(STATIC_DIR, 'stats.html'));
+});
+
+// Service worker: never cache (must update immediately)
+app.get('/overloeb-sw.js', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/javascript');
+  res.sendFile(path.join(STATIC_DIR, 'overloeb-sw.js'));
+});
+
+// robots.txt: egen eksplicitte route (samme mønster som ovenfor), IKKE
+// dækket af PUBLIC_STATIC_EXTENSIONS-allowlisten nedenfor — '.txt' er
+// bevidst udeladt derfra, da det ellers også ville have åbnet
+// requirements.txt (se dens filhoved for den fulde begrundelse).
+app.get('/robots.txt', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.type('text/plain');
+  res.sendFile(path.join(STATIC_DIR, 'robots.txt'));
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// URL-arkitektur/SEO (bruger-ønske 2026-08-10) — Tier 1 (/badested/:slug),
+// Tier 2 (/soe/:slug), Tier 3 (/udloeb/:id), sitemap.xml + OG-badges.
+// Se seo-pages.js/slug-index.js for selve render-/slug-logikken — disse
+// routes wire'r blot serverens allerede eksisterende, hvert-15.-minut-
+// opdaterede badevandRiskCache/badevandByIdCache sammen med dem. Dynamisk
+// pr. request (ingen ny build-pipeline), risikostatus derfor altid ≤15 min
+// frisk — se planen (staged-doodling-eagle.md) for hvorfor denne tilgang
+// blev valgt frem for prækomputerede statiske filer.
+//
+// KRITISK: skal stå FØR PUBLIC_STATIC_EXTENSIONS-gatemiddleware'en
+// (længere nede i filen) — disse stier har ingen fil-endelse og ville
+// ellers blive 404'et af den.
+// ═══════════════════════════════════════════════════════════════════════════
+
+function baseAppHtml() {
+  return getCompressedHtml().raw.toString('utf8');
+}
+
+app.get('/badested/:slug', (req, res) => {
+  const info = badestedSlugToInfo.get(req.params.slug);
+  if (!info) {
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    return res.status(404).type('text/plain').send('Badested ikke fundet.');
+  }
+  const entry = badevandByIdCache.get(info.id);
+  const { text } = seoPages.describeBadestedRisk(entry);
+  const kommune = info.kommune ? info.kommune.replace(/\s*kommune\s*$/i, '').trim() : null;
+  const title = `${info.navn} badevand – aktuel risiko | Dit Badevand`;
+  const description = `${info.navn}${kommune ? ' i ' + kommune : ''}: ${text}`;
+
+  let html = seoPages.injectHead(baseAppHtml(), {
+    title, description,
+    canonicalPath: `/badested/${req.params.slug}`,
+    ogImagePath: `/og/badested/${req.params.slug}`,
+    jsonLd: seoPages.buildJsonLd({ name: info.navn, lat: info.lat, lng: info.lng, addressLocality: kommune }),
+  });
+  const ssrContent = seoPages.buildSsrContent({
+    navn: info.navn, kommune, riskText: text,
+    updatedAt: new Date(badevandRiskCache.ts || Date.now()).toLocaleString('da-DK'),
+    outlets: entry?.outlets || [],
+  });
+  // RETTET (bruger-rapporteret 2026-08-10 — /badested/:slug-siden viste
+  // permanent kun det statiske SSR-indhold, aldrig den rigtige app): denne
+  // linje sendte tidligere { type: 'badested', id: info.id } — men
+  // dansk-overloeb-kort.html's handleSsrRoute() tjekker udelukkende
+  // "route.lat != null && route.lng != null" for netop denne type (se dens
+  // egen goToBadevand(lat, lng)-kald, SAMME koordinat-baserede mønster som
+  // sitets etablerede #badevand=lat:lng-dybe-links, aldrig id-baseret).
+  // Betingelsen var derfor ALTID falsk, goToBadevand() blev aldrig kaldt,
+  // og appen forblev permanent på det statiske SSR-indhold uden nogensinde
+  // at overtage. info.lat/info.lng findes allerede på samme objekt
+  // (slug-index.js's buildBadestedSlugs), ingen ny data nødvendig.
+  html = seoPages.injectBodyContent(html, ssrContent + seoPages.buildSsrRouteScript({ type: 'badested', lat: info.lat, lng: info.lng }));
+
+  res.set('Cache-Control', 'no-store');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
+app.get('/soe/:slug', (req, res) => {
+  const info = soeSlugToInfo.get(req.params.slug);
+  if (!info) {
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    return res.status(404).type('text/plain').send('Sø ikke fundet.');
+  }
+  const entry = badevandRiskCache.lakes?.[info.navn];
+  const { text } = seoPages.describeSoeRisk(entry);
+  const kommune = info.kommune ? info.kommune.replace(/\s*kommune\s*$/i, '').trim() : null;
+  const title = `${info.navn} – søvand risiko | Dit Badevand`;
+  const description = `${info.navn}${kommune ? ' i ' + kommune : ''}: ${text}`;
+
+  let html = seoPages.injectHead(baseAppHtml(), {
+    title, description,
+    canonicalPath: `/soe/${req.params.slug}`,
+    ogImagePath: `/og/soe/${req.params.slug}`,
+    jsonLd: seoPages.buildJsonLd({ name: info.navn, lat: info.lat, lng: info.lng, addressLocality: kommune }),
+  });
+  const ssrContent = seoPages.buildSsrContent({
+    navn: info.navn, kommune, riskText: text,
+    updatedAt: new Date(badevandRiskCache.ts || Date.now()).toLocaleString('da-DK'),
+    outlets: entry?.outlets || [],
+  });
+  html = seoPages.injectBodyContent(html, ssrContent + seoPages.buildSsrRouteScript({ type: 'soe', navn: info.navn }));
+
+  res.set('Cache-Control', 'no-store');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
+// Tier 3 — bevidst INGEN data-forudfyldning server-side (se planen: "kan
+// forblive rent client-side renderet"), kun robots/canonical injiceret.
+// Holder de ~21.000 sider billige at servere.
+app.get('/udloeb/:id', (req, res) => {
+  // RETTET (bruger-rapporteret 2026-08-11 — se loadPulsPointsFull()'s
+  // filhoved for den fulde begrundelse, inkl. hvorfor id IKKE (endnu) er
+  // outfallId): behandler id som en ugennemsigtig streng, ikke et heltal
+  // — den gamle parseInt/Number.isInteger-grænsetjek er unødvendigt
+  // restriktiv og ville forhindre en fremtidig GUID-baseret id. Slår op i
+  // et Set af faktiske id'er i stedet for et rent bounds-tjek.
+  const id = req.params.id;
+  const points = loadPulsPointsFull();
+  // NYT: indeholder nu BÅDE id (rækkeindeks) og outfallId (stabil GUID, se
+  // loadPulsPointsFull()) — points ændrer sig aldrig i processens levetid
+  // (kun ved genstart, som også nulstiller _pulsIdSet), så et simpelt
+  // engangs-lazy-build er nok; det gamle size-baserede staleness-tjek gav
+  // ingen reel beskyttelse og ville fejlagtigt gen-bygge hver gang (dobbelt
+  // størrelse pga. outfallId-nøglerne).
+  if (!_pulsIdSet) {
+    _pulsIdSet = new Set();
+    for (const p of points) { _pulsIdSet.add(p.id); if (p.outfallId) _pulsIdSet.add(p.outfallId); }
+  }
+  if (!_pulsIdSet.has(id)) {
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    return res.status(404).type('text/plain').send('Udløb ikke fundet.');
+  }
+  const html = seoPages.injectRobotsOnly(baseAppHtml(), `/udloeb/${id}`);
+  res.set('Cache-Control', 'no-store');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.set('X-Robots-Tag', 'noindex, follow');
+  res.send(html);
+});
+
+// Bygget ÉN gang her (samme livscyklus som slug-index selv — se dens
+// filhoved) — kun Tier 1+2, se planens robots.txt-afsnit for hvorfor Tier 3
+// hverken må stå her eller disallowes i robots.txt (noindex alene, via
+// meta-taggen ovenfor, er den korrekte mekanisme).
+const _sitemapXml = seoPages.buildSitemapXml([
+  ...[...badestedSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/badested/${slug}`, priority: '0.8' })),
+  ...[...soeSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/soe/${slug}`, priority: '0.5' })),
+]);
+app.get('/sitemap.xml', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.type('application/xml');
+  res.send(_sitemapXml);
+});
+
+app.get('/og/badested/:slug', (req, res) => {
+  const info = badestedSlugToInfo.get(req.params.slug);
+  if (!info) return res.status(404).type('text/plain').send('Badested ikke fundet.');
+  const entry = badevandByIdCache.get(info.id);
+  const { label } = seoPages.describeBadestedRisk(entry);
+  const active = [entry?.bact, entry?.viral].filter(v => v != null);
+  const risk = active.length ? Math.max(...active) : (entry?.source === 'ingen-bekraeftet' || entry?.source === 'nedstroms-bekraeftet' || (entry?.source === 'ingen' && !entry?.noDataMatch) ? 0 : null);
+  const { color } = seoPages.riskInfo(risk);
+  const kommune = info.kommune ? info.kommune.replace(/\s*kommune\s*$/i, '').trim() : null;
+  res.set('Cache-Control', 'public, max-age=900'); // 15 min — matcher badevandRiskCache's eget opdateringsinterval
+  res.type('image/svg+xml');
+  res.send(seoPages.buildOgSvg({ navn: info.navn, kommune, label, color }));
+});
+
+app.get('/og/soe/:slug', (req, res) => {
+  const info = soeSlugToInfo.get(req.params.slug);
+  if (!info) return res.status(404).type('text/plain').send('Sø ikke fundet.');
+  const entry = badevandRiskCache.lakes?.[info.navn];
+  const { label } = seoPages.describeSoeRisk(entry);
+  const active = [entry?.bact, entry?.viral].filter(v => v != null);
+  const risk = active.length ? Math.max(...active) : (entry?.confirmedNoOutlet ? 0 : null);
+  const { color } = seoPages.riskInfo(risk);
+  const kommune = info.kommune ? info.kommune.replace(/\s*kommune\s*$/i, '').trim() : null;
+  res.set('Cache-Control', 'public, max-age=900');
+  res.type('image/svg+xml');
+  res.send(seoPages.buildOgSvg({ navn: info.navn, kommune, label, color }));
+});
+
+// ── Weather proxy with shared server-side cache ─────────────────────────────
+// Grid: 0.25° (~17×28 km) — 4× finer than original 0.5°, reliable API usage.
+// TTL: 3 hours. warmCache uses individual single-location calls (proven to work).
+// API budget: ~220 cells × 8 warmups/day = ~1.760 calls/day (well under 10.000).
+const GRID_DEG       = 0.25;
+// RETTET: sat til 6 timer — men DMI's HARMONIE-model (som Open-Meteos
+// best_match rent faktisk bruger for Danmark, bekræftet via DMI's egen
+// dokumentation) opdaterer selv sin prognose hver 3. time, ikke hver 6.
+// At hente sjældnere end kilden selv opdaterer betyder at appen kan gå
+// glip af en hel modelopdatering — særligt relevant for HARMONIE, som er
+// specifikt designet til at fange lokale, hurtigt udviklende
+// sommerbyger bedre end grovere modeller. At hente OFTERE end hver 3.
+// time ville omvendt være spild (samme, uændrede prognose igen). API-
+// forbrug ved 3 timer: ~170 celler × 8 hentninger/dag = 1.360 kald/dag —
+// stadig under den oprindeligt accepterede budgetramme (1.680/dag).
+const WEATHER_TTL_MS = 3 * 3600 * 1000;  // 3 timer — matcher DMI HARMONIE's egen opdateringstakt
+const weatherCache   = new Map();
+let   apiCallCount   = 0;
+let   cacheHitCount  = 0;
+const fetchErrors    = [];   // ring buffer — last 5 errors from fetchOpenMeteo
+
+function gridKey(lat, lng) {
+  const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+  const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+  return `${clat.toFixed(4)}:${clng.toFixed(4)}`;
+}
+
+// Build grid from actual PULS overflow point coordinates — only cells that
+// contain real data points. Avoids warming ~220 sea/foreign bbox cells.
+// puls-data.json format: { a: [authorities], w: [waterAreas], d: [[lat,lng,...], ...] }
+// Typically ~150-180 unique 0.25° cells vs 420 for full bbox.
+let _pulsGrid = null;
+function buildPulsGrid() {
+  if (_pulsGrid) return _pulsGrid;
+  try {
+    const raw  = require('fs').readFileSync(path.join(STATIC_DIR, 'puls-data.json'), 'utf8');
+    const data = JSON.parse(raw);
+    const rows = data?.d || data;                  // compressed: { d: rows } or raw array
+    const seen = new Set();
+    const cells = [];
+    for (const r of rows) {
+      const lat = parseFloat(Array.isArray(r) ? r[0] : (r.lat ?? r.Lat));
+      const lng = parseFloat(Array.isArray(r) ? r[1] : (r.lng ?? r.Lon ?? r.lon));
+      if (isNaN(lat) || isNaN(lng)) continue;
+      const key = gridKey(lat, lng);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const [ls, gs] = key.split(':');
+      cells.push({ lat: parseFloat(ls), lng: parseFloat(gs) });
+    }
+    console.log(`buildPulsGrid: ${cells.length} unique cells from ${rows.length} PULS points`);
+    _pulsGrid = cells;
+    return cells;
+  } catch(e) {
+    console.warn('buildPulsGrid failed, falling back to bbox grid:', e.message);
+    return buildDenmarkGrid();
+  }
+}
+
+// Denmark + Bornholm bounding box at 0.25°. Fallback if buildPulsGrid fails.
+function buildDenmarkGrid() {
+  const iLatMin = Math.floor(54.5 / GRID_DEG);
+  const iLatMax = Math.ceil(57.9  / GRID_DEG);
+  const iLngMin = Math.floor(8.0  / GRID_DEG);
+  const iLngMax = Math.ceil(15.4  / GRID_DEG);
+  const cells = [], seen = new Set();
+  for (let iLat = iLatMin; iLat < iLatMax; iLat++) {
+    for (let iLng = iLngMin; iLng < iLngMax; iLng++) {
+      const key = gridKey((iLat + 0.1) * GRID_DEG, (iLng + 0.1) * GRID_DEG);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const [ls, gs] = key.split(':');
+      cells.push({ lat: parseFloat(ls), lng: parseFloat(gs) });
+    }
+  }
+  return cells;
+}
+
+// Single-location fetch — proven reliable with Open-Meteo.
+function fetchOpenMeteo(lat, lng) {
+  return new Promise((resolve, reject) => {
+    const url = `https://api.open-meteo.com/v1/forecast` +
+      `?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
+      // NYT: windspeed_10m/winddirection_10m tilføjet — samme kilde vi
+      // allerede henter nedbør+temperatur fra, blot udvidet med to ekstra
+      // variable. wind_speed_unit=ms sikrer samme enhed (m/s) som
+      // strømdataen (CMEMS uo/vo), så de to kan sammenlignes direkte i UI'en.
+      `&hourly=precipitation,temperature_2m,windspeed_10m,winddirection_10m` +
+      `&wind_speed_unit=ms&past_days=7&forecast_days=2` +
+      `&models=best_match&timezone=Europe%2FCopenhagen`;
+    https.get(url, resp => {
+      if (resp.statusCode !== 200) {
+        reject(new Error(`Open-Meteo HTTP ${resp.statusCode}`));
+        resp.resume(); return;
+      }
+      let body = '';
+      resp.on('data', c => body += c);
+      resp.on('end', () => {
+        try { resolve(JSON.parse(body)); }
+        catch(e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+
+// Transiente serverfejl (503/502/504) hos Open-Meteo er ofte kortvarige —
+// et par sekunders pause og ét gen-forsøg løser typisk problemet, i stedet
+// for at give hele cellen op med det samme. Ikke-transiente fejl (4xx,
+// netværksfejl) gives videre uden forsinkelse.
+function isTransientOpenMeteoError(err) {
+  return /Open-Meteo HTTP (502|503|504)/.test(err.message || '');
+}
+
+async function fetchOpenMeteoWithRetry(lat, lng, retries = 2) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchOpenMeteo(lat, lng);
+    } catch (e) {
+      if (attempt >= retries || !isTransientOpenMeteoError(e)) throw e;
+      await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+}
+
+// Compute derived precipitation metrics from raw Open-Meteo JSON.
+function computeMetrics(json) {
+  const times     = json?.hourly?.time             || [];
+  const values    = json?.hourly?.precipitation    || [];
+  const tempVals  = json?.hourly?.temperature_2m   || [];
+  const windVals  = json?.hourly?.windspeed_10m    || [];
+  const windDirs  = json?.hourly?.winddirection_10m || [];
+  const now    = Date.now();
+  const MS_HOUR = 3600 * 1000;
+  const TAU    = 3.0;
+  let todayMM = 0, forecastMM = 0, totalRain7d = 0;
+  const hourlyObs = [], hourlyFore = [], hourlyWeek = [];
+  // Luft-temperatur — TO ADSKILTE FORMÅL, der tidligere delte samme tal:
+  //   1) recentAirTempAvg (72h glidende gennemsnit): bruges INTERNT til at
+  //      ESTIMERE vandtemperatur i søer/åer (Mohseni-Stefan-model, se
+  //      computeFreshwaterTemp() client-side) — et gennemsnit er her
+  //      hydrologisk korrekt, fordi selv lavvandede vandområder har en vis
+  //      termisk træghed og reagerer på flere dages vejr, ikke et enkelt
+  //      døgns udsving.
+  //   2) todayMaxAirTemp (RETTET/NYT): den faktiske lufttemperatur en
+  //      badegæst oplever — dagens HØJESTE temperatur, ikke et
+  //      bagudskuende gennemsnit der iblander kolde nattetimer. Blev
+  //      tidligere fejlagtigt vist til brugeren i stedet for dette tal,
+  //      hvilket kunne gøre luft "koldere" end vand, selvom det reelt var
+  //      dagens varmeste periode der var relevant. Dækker HELE
+  //      kalenderdagen (allerede observerede timer + resten af dagens
+  //      prognose), ikke kun et ±24-timers rullende vindue, så en
+  //      forespørgsel om morgenen stadig fanger eftermiddagens forventede
+  //      maksimum.
+  //   3) hourlyTempWeek (NYT): fuld time-for-time temperaturkurve for hele
+  //      7-dages-vinduet (parallel til hourlyWeek for nedbør) — til en
+  //      fremtidig graf, hvis et enkelt dagsmaksimum ikke er nok.
+  let tempSum72h = 0, tempCount72h = 0;
+  const hourlyTempWeek = [];
+  let todayMaxAirTemp = null;
+  const todayDateStr = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' }); // "YYYY-MM-DD", matcher Open-Meteos lokale hourly.time-strenge
+
+  // NYT: vind — i modsætning til temperatur (hvor dagens HØJESTE er det
+  // relevante) er det NUVÆRENDE vindforhold, der er relevant for en
+  // badegæst — vind ændrer sig hurtigt, og et dagsgennemsnit/-maksimum
+  // ville være misvisende. Finder timen tættest på "nu" (mindste |diffMs|),
+  // uanset om den er observeret eller prognoseret.
+  let currentWindSpeed = null, currentWindDir = null, bestWindDiffMs = Infinity;
+
+  times.forEach((tStr, i) => {
+    const mm  = Math.max(Number(values[i]) || 0, 0);
+    const tMs = new Date(tStr).getTime();
+    if (isNaN(tMs)) return;
+    const diffMs  = now - tMs;
+
+    const temp = Number(tempVals[i]);
+    const hasTemp = !isNaN(temp);
+    hourlyTempWeek.push(hasTemp ? temp : null);
+    if (hasTemp && tStr.slice(0, 10) === todayDateStr) {
+      if (todayMaxAirTemp === null || temp > todayMaxAirTemp) todayMaxAirTemp = temp;
+    }
+
+    const windSpeed = Number(windVals[i]);
+    if (!isNaN(windSpeed) && Math.abs(diffMs) < bestWindDiffMs) {
+      bestWindDiffMs = Math.abs(diffMs);
+      currentWindSpeed = windSpeed;
+      const wd = Number(windDirs[i]);
+      currentWindDir = isNaN(wd) ? null : wd;
+    }
+
+    if (diffMs >= 0) {
+      totalRain7d += mm;
+      hourlyWeek.push(mm);  // full 7-day history
+      if (diffMs < 24 * MS_HOUR) { todayMM += mm; hourlyObs.push(mm); }
+      if (hasTemp && diffMs < 72 * MS_HOUR) { tempSum72h += temp; tempCount72h++; }
+    } else {
+      if (-diffMs <= 24 * MS_HOUR) { forecastMM += mm; hourlyFore.push(mm); }
+    }
+  });
+  const recentAirTempAvg = tempCount72h > 0 ? tempSum72h / tempCount72h : null;
+  // RETTET: antecedentMM regnede tidligere sin egen, parallelle udgave af
+  // samme henfaldsformel inline i loopet ovenfor. Genbruger nu
+  // riskModel.accumulateDecayed() (samme rullende τ=3-dages henfald som
+  // estimateLastEventAge() allerede brugte) — sidste værdi i den returnerede
+  // serie SVARER til "akkumuleret henfaldet nedbør ved seneste observerede
+  // time", som er præcis hvad antecedentMM altid har repræsenteret. Se
+  // kommentar ved accumulateDecayed() i risk-model.js for den mikroskopiske
+  // (<1,5 %), accepterede præcisionsforskel dette medfører.
+  const decayedSeries = riskModel.accumulateDecayed(hourlyWeek, TAU);
+  const antecedentMM  = decayedSeries.length ? decayedSeries[decayedSeries.length - 1] : 0;
+  return {
+    antecedentMM, todayMM, forecastMM, totalRain7d, hourlyObs, hourlyFore, hourlyWeek,
+    recentAirTempAvg, todayMaxAirTemp, hourlyTempWeek,
+    currentWindSpeed, currentWindDir,
+  };
+}
+
+// ── Proactive cache warming ──────────────────────────────────────────────────
+// Individual single-location calls, CONCURRENCY=30. ~220 cells → ~10s warmup.
+let warmRunning       = false;
+let currentWarmPromise = null;
+
+function warmCache() {
+  if (warmRunning) return currentWarmPromise;
+  warmRunning = true;
+  currentWarmPromise = (async () => {
+    const cells = buildPulsGrid();
+    const CONC  = 10;    // 10 parallelle kald — undgår burst rate-limit hos Open-Meteo
+    let idx = 0, fetched = 0, skipped = 0, failed = 0;
+    const t0 = Date.now();
+
+    async function worker(workerIdx) {
+      // Stagger worker start times med 200ms — fordeler burst-toppen
+      await new Promise(r => setTimeout(r, workerIdx * 200));
+      while (idx < cells.length) {
+        const cell = cells[idx++];
+        const key  = gridKey(cell.lat, cell.lng);
+        const cached = weatherCache.get(key);
+        if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) { skipped++; continue; }
+        try {
+          apiCallCount++;
+          const raw  = await fetchOpenMeteoWithRetry(cell.lat, cell.lng);
+          const data = computeMetrics(raw);
+          weatherCache.set(key, { ts: Date.now(), data });
+          fetched++;
+        } catch(e) {
+          failed++;
+          const errMsg = e.message;
+          console.warn('warmCache cell failed:', key, errMsg);
+          fetchErrors.push({ ts: new Date().toISOString(), key, error: errMsg });
+          if (fetchErrors.length > 10) fetchErrors.shift();
+          // Vent 2s ved 429 inden næste forsøg i denne worker
+          if (errMsg.includes('429')) await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(CONC, cells.length) }, (_, i) => worker(i)));
+    const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+    console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s — cache: ${weatherCache.size} cells`);
+    warmRunning = false;
+    currentWarmPromise = null;
+  })();
+  return currentWarmPromise;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SERVERSTYRET PUSH-EVALUERING
+// ═══════════════════════════════════════════════════════════════════════════
+// TIDLIGERE: push-notifikationer blev KUN udløst hvis en klient selv havde
+// en fane åben, opdagede risikoen client-side, og POSTede den til
+// /api/push/warnpoints (se checkFavNotifications() i dansk-overloeb-kort.html
+// og /api/push/warnpoints-routen nedenfor, som stadig findes og virker som
+// supplement). Det modsagde selve formålet med web push — at kunne advare
+// brugere UDEN at de har appen åben. Nu evaluerer SERVEREN selv risikoen for
+// alle PULS-punkter, hver gang frisk vejrdata er hentet (warmCache), uanset
+// om nogen klient overhovedet er tilsluttet.
+
+// Fuld PULS-punktliste (ikke kun unikke gitterceller som buildPulsGrid()) —
+// indlæst og cachet én gang, ligesom buildPulsGrid() gør det for celler.
+let _pulsPointsFull = null;
+let _pulsIdSet = null; // Set af PULS-punkt-id'er — cachet lazy, se /udloeb/:id-routen
+function loadPulsPointsFull() {
+  if (_pulsPointsFull) return _pulsPointsFull;
+  try {
+    const raw  = fs.readFileSync(path.join(STATIC_DIR, 'puls-data.json'), 'utf8');
+    const data = JSON.parse(raw);
+    const auths = data.a || [];
+    const areas = data.w || [];
+    const rows  = data.d || data;
+    // RETTET (bruger-rapporteret 2026-08-11 — "F-U9 i Furesø" åbnede et
+    // udløb i Odense ved klik): id bruger rækkeindekset (i) i puls-data.
+    // json's d-array som id for /udloeb/:id-URL'er, udløbslister,
+    // favoritter osv. — men filen genopbygges periodisk, og rækkefølgen er
+    // IKKE stabil på tværs af genopbygninger (bekræftet: samme indeks 4050
+    // var tre FORSKELLIGE reelle udløb i tre snapshots taget uger fra
+    // hinanden), mens klienten cacher filen i IndexedDB i 14 dage
+    // (TTL_PULS_MS) — en klient med en ældre cache er derfor midlertidigt
+    // uenig med serveren om hvad et givet id betyder.
+    //
+    // FORSØGT RETTET til r[8] (outfallId, en ægte stabil GUID fra selve
+    // PULS-kilden — se update-puls.js's egen kommentar) — men RULLET
+    // TILBAGE samme dag: id15-lake-matches.json, id15-kystvand-matches.json
+    // og vandlob-upstream-matches.json (offline-forudberegnede ID15-match-
+    // filer, bygget af scripts/id15/*.js) refererer ALLE PULS-punkter via
+    // PRÆCIS dette rækkeindeks, ikke outfallId — GUID-skiftet brød derfor
+    // pointsById-opslaget for ALLE tre filer på én gang, hvilket viste sig
+    // som confirmedNoOutlet/"no-candidates" for stort set alle søer/
+    // kystvande der er afhængige af ID15-matching (værre end fejlen det
+    // skulle løse). En fuld migrering kræver enten at genköre de tre
+    // scripts mod det AKTUELLE puls-data.json (så de selv outputter
+    // outfallId i stedet for indeks), eller en oversættelsestabel — begge
+    // dele et separat, større arbejde, IKKE gjort her. id er derfor
+    // bevidst tilbage ved rækkeindekset (som streng, ikke tal — resten af
+    // kodebasen behandler det allerede som en ugennemsigtig streng efter
+    // denne rettelses øvrige ændringer, se handleUdloebPath()/#udlob=
+    // parsing/onclick-quoting, som ALLE forbliver korrekte uanset hvilken
+    // streng id rent faktisk er).
+    _pulsPointsFull = rows.map((r, i) => {
+      const derived = riskModel.derivePulsFields(r);
+      const [, , , authIdx, areaIdx] = r;
+      // NYT (rettelse af ustabil-id-fejlen ovenfor): outfallId (felt 8) er
+      // den ægte stabile GUID fra PULS-kilden — bruges IKKE til at erstatte
+      // id (rækkeindekset, stadig grundlaget for pointsById/id15-matching,
+      // se ovenfor), men medbringes som et PARALLELT felt til alt der
+      // krydser en dataopdatering: klientens favoritter (toggleFav()) og
+      // badevands-favoritgruppers pulsIds (toggleBadevandFav()). pointRisks
+      // (se enqueuePushNotifications()) slår op via BÅDE id og outfallId,
+      // så gamle (indeks-baserede) og nye (GUID-baserede) klientreferencer
+      // begge virker under overgangen. (Push for INDIVIDUELLE udløbs-
+      // favoritter — det tidligere warnMap/outletHits — er fjernet efter
+      // bruger-ønske 2026-08-12: push handler nu udelukkende om badesteder.)
+      const outfallId = (r[8] != null && r[8] !== '') ? String(r[8]) : null;
+      return {
+        id: String(i),
+        outfallId,
+        name: derived.name || `Udløb ${i}`,
+        municipality: auths[authIdx] || '—',
+        waterArea: areas[areaIdx] || 'Ukendt',
+        lat: derived.lat, lng: derived.lng,
+        meanVolumePerEvent: derived.meanVolumePerEvent,
+        overflowProbBase: derived.overflowProbBase,
+        thresholdMm: derived.thresholdMm,
+        // NYT (bruger-ønske 2026-07-25): se derivePulsFields()'s filhoved —
+        // bruges af badevandRisk.computeBadevandRiskCascade() til at
+        // udelukke bekræftede regnvandsudløb fra bakteriel/viral-risikoen.
+        isWastewater: derived.isWastewater,
+      };
+    });
+    console.log(`loadPulsPointsFull: ${_pulsPointsFull.length} PULS-punkter indlæst til push-evaluering`);
+  } catch (e) {
+    console.warn('loadPulsPointsFull fejlede:', e.message);
+    _pulsPointsFull = [];
+  }
+  return _pulsPointsFull;
+}
+
+// NYT (bruger-ønske 2026-07-26): koordinat -> bathingwat-ID-opslag for
+// vp3_badevand.geojson, indlæst/cachet én gang — bruges af
+// enqueuePushNotifications() til at slå en favoriseret badested-gruppes
+// gemte lat/lng (se getBadevandFavGroups() i dansk-overloeb-kort.html) op
+// mod det FAKTISKE, allerede spildevands-filtrerede resultat fra
+// badevandRisk.computeBadevandRiskCascade(), i stedet for kun at genberegne
+// en simpel, ufiltreret max-værdi over den gemte 15 km-udløbsliste.
+// Nøglet på 4 decimaler (samme afrunding som klientens egen favKey, se
+// toggleBadevandFav()) — lat/lng stammer fra PRÆCIS samme GeoJSON-feature,
+// så et eksakt (afrundet) match er pålideligt.
+let _badevandCoordIndex = null;
+function getBadevandCoordIndex() {
+  if (_badevandCoordIndex) return _badevandCoordIndex;
+  _badevandCoordIndex = new Map();
+  try {
+    const raw  = fs.readFileSync(path.join(STATIC_DIR, 'vp3_badevand.geojson'), 'utf8');
+    const data = JSON.parse(raw);
+    for (const f of data.features || []) {
+      const coords = f.geometry?.coordinates;
+      const id = f.properties?.bathingwat ?? f.properties?.ov_id ?? f.properties?.id ?? null;
+      if (!coords || id == null) continue;
+      const key = `${coords[1].toFixed(4)}:${coords[0].toFixed(4)}`; // lat:lng
+      _badevandCoordIndex.set(key, String(id));
+    }
+  } catch (e) {
+    console.warn('getBadevandCoordIndex fejlede:', e.message);
+  }
+  return _badevandCoordIndex;
+}
+
+// Kører EFTER hver warmCache()-opdatering (se de tre kaldssteder nedenfor) —
+// ALDRIG på en selvstændig timer, for at undgå at evaluere på forældet vejr,
+// og for at undgå gentagne/overflødige kørsler mellem reelle datafriskninger.
+// RETTET: brugte tidligere en ekstra "hasRain"-port (forecastMM/todayMM >
+// 5mm) oveni selve risikotærsklen — men risikoen (foreRisk) inkluderer
+// allerede korrekt henfaldsvægtet nedbør (antecedentMM). Et reelt fund
+// (foreRisk=0,835) blev filtreret fra, fordi det havde regnet for et par
+// dage siden, men var tørt lige nu/i nærmeste prognose. Nu er ren risiko
+// (foreRisk > minRisk) det ENESTE filter — se checkFavNotifications() i
+// dansk-overloeb-kort.html, som SKAL holdes i sync med denne ændring.
+// NYT: `testThresholds` er UDELUKKENDE til manuel afprøvning via
+// /api/push/evaluate-now?test=1 (se routen nedenfor) — når parameteren
+// udelades (som ved ALLE periodiske/automatiske kald, se de tre
+// warmCache()-kædede kaldssteder), bruges de rigtige produktionstærskler
+// (0,35 risiko / 5mm regn) helt uændret. Formålet er at kunne bekræfte
+// hele find-og-send-kæden med en kunstigt lav tærskel, uden at kunne
+// risikere at sænke tærsklen for de RIGTIGE, automatiske varsler, der går
+// til jeres faktiske brugere.
+// NYT: persisteret cache af FÆRDIGBEREGNET risiko pr. PULS-punkt —
+// grundlaget for at flytte den tunge klient-side beregning (21.556 punkter,
+// målt til 276-2244 ms pr. sidevisning, se samtalen om første-sidevisnings
+// ydelse) over på serveren. Beregnes ÉN GANG pr. opdateringscyklus her,
+// leveres færdigt til alle klienter via /api/risk-scores nedenfor, i stedet
+// for at hver eneste klient genberegner nøjagtig det samme selv.
+// RETTET: denne beregning lå tidligere UDELUKKENDE inde i
+// evaluatePushNotifications(), som selv sprang HELT over, hvis ingen havde
+// et push-abonnement (pushSubscriptions.size === 0) — hvilket betød ingen
+// server-side risikoberegning overhovedet fandt sted for de fleste
+// installationer. Beregningen kører nu ALTID; kun selve push-AFSENDELSEN
+// (nederst i funktionen) forbliver betinget af at der findes abonnenter.
+let riskScoresCache = { ts: 0, points: [] };
+// NYT: se badevand-risk.js — { ts, lakes, kystvande, badevand }
+let badevandRiskCache = { ts: 0, lakes: {}, kystvande: {}, badevand: [] };
+// NYT (bruger-ønske 2026-08-10 — /badested/:slug m.fl.): badevandRiskCache.badevand
+// er et ARRAY (1.039 elementer) — de nye path-baserede sider slår et enkelt
+// badested op PR. CRAWL-HIT, så et O(1)-Map-opslag er værd at holde ved siden
+// af arrayet, i stedet for at gentage en lineær .find() pr. request.
+// Genopbygges sammen med badevandRiskCache selv, se evaluatePushNotifications().
+let badevandByIdCache = new Map();
+
+// NYT: se water-classification.js for fuld begrundelse. Beregnes ÉN GANG
+// her (ikke pr. opdateringscyklus som vejr/risiko — geometrien ændrer sig
+// praktisk talt aldrig, kun ved en manuel VP3-dataopdatering), og slås op
+// pr. punkt, når /api/risk-scores bygges nedenfor.
+let waterFlagsCache = null;
+async function ensureWaterFlagsCache() {
+  // NYT: kun EGENTLIGT vellykkede resultater "låser" cachen (undgår
+  // genberegning hver 15. minut, unødvendigt for statisk geometri). Et
+  // tomt resultat (fil manglede/fejlede) forsøges IGEN ved næste kald —
+  // billigt hvis fejlen er permanent (fx en glemt Dockerfile-linje, retter
+  // sig alligevel kun ved redeploy/genstart), men lader en forbigående
+  // fejl (kortvarig filsystem-hikke) rette sig selv i stedet for at
+  // fastfryse en tom cache resten af serverens levetid.
+  if (waterFlagsCache && waterFlagsCache.size > 0) return;
+  try {
+    const points = loadPulsPointsFull().map(p => ({ id: p.id, lat: p.lat, lng: p.lng }));
+    // RETTET (forårsagede fuld serverfrysning — se water-classification.js
+    // filhoved): brugte tidligere den SYNKRONE computeWaterFlags(), som
+    // blokerede hele Node-processen (og dermed ALLE brugeres HTTP-
+    // forespørgsler samtidig) i så lang tid beregningen tog. Bruger nu den
+    // ikke-blokerende, portionsvise udgave, der løbende giver kontrollen
+    // tilbage til event loopet.
+    waterFlagsCache = await waterClass.computeWaterFlagsAsync(points, STATIC_DIR);
+  } catch (e) {
+    console.warn('ensureWaterFlagsCache fejlede:', e.message);
+    waterFlagsCache = new Map(); // tomt kort — isWater falder tilbage til undefined, klienten falder videre tilbage til lokal beregning
+  }
+}
+
+// RETTET (produktionshændelse, opdaget lige efter deploy af
+// ensureFreshRiskCaches() nedenfor): denne funktion havde INGEN
+// reentrancy-lås — modsat warmCache()'s egen warmRunning-mønster.
+// warmCache() selv var korrekt beskyttet, men INTET forhindrede flere
+// SAMTIDIGE kald til evaluatePushNotifications() — én fra de tre
+// warmCache()-kædede periodiske kaldssteder nedenfor (2s/10s/interval), én
+// fra ensureFreshRiskCaches()'s nye on-demand kold-cache-opvarmning, som
+// typisk rammer PRÆCIS samme 2-10 sekunders vindue efter en deploy. Hvert
+// overlappende kald gentog UAFHÆNGIGT 21.600 punkters risikoberegning +
+// hele badevands-kaskaden — og ensureWaterFlagsCache()'s egen
+// "kun-vellykket-resultat-låser"-tjek (se ovenfor) er ikke atomisk imod et
+// samtidigt kald, så selv den engangs-beregning kunne udløses flere gange.
+// På en delt vCPU (Fly.io) spiralerede det: observeret badevand-risk-tid
+// 12s → 26s → 43s, water-classification genkørt og målt til 89s — imens
+// var HELE Node-processen (single-threaded event loop) så optaget, at selv
+// /api/health blev uansvarlig i flere minutter. Samme mønster som
+// water-classification.js's egen tidligere "fuld serverfrysning"-fejl (se
+// ensureWaterFlagsCache()'s kommentar), blot forårsaget af et andet
+// manglende lås. Rettet identisk til warmCache()'s warmRunning-mønster:
+// et samtidigt kald genbruger nu det allerede kørende kalds promise, i
+// stedet for at starte endnu en parallel kørsel.
+let _evalPushInFlight = null;
+async function evaluatePushNotifications(testThresholds) {
+  if (_evalPushInFlight) return _evalPushInFlight;
+  _evalPushInFlight = _evaluatePushNotificationsInner(testThresholds).finally(() => { _evalPushInFlight = null; });
+  return _evalPushInFlight;
+}
+
+// NYT: selve arbejdet, uændret fra før — kun kaldt via låsen ovenfor.
+// BEMÆRK: hvis dette kald genbruger et allerede kørende kald (låsen ovenfor
+// slog til), IGNORERES dette kalds testThresholds stiltiende — accepteret
+// afvejning, da det kun rammer den sjældne, manuelle /api/push/evaluate-now
+// (se dens rute nedenfor), og kun i det korte vindue hvor en automatisk
+// cyklus allerede kører. Uendeligt bedre end det alternativ, dette retter.
+async function _evaluatePushNotificationsInner(testThresholds) {
+  const points = loadPulsPointsFull();
+  if (points.length === 0) return;
+
+  // RETTET og genindsat: se ensureWaterFlagsCache() — bruger nu den
+  // ikke-blokerende udgave, som ikke længere kan fryse serveren.
+  await ensureWaterFlagsCache();
+
+  const minRisk   = testThresholds?.minRisk   ?? 0.35;
+
+  const warnPoints = [];
+  const pointRisks = new Map();
+  // NYT: fuld liste til /api/risk-scores — bact/viral BÅDE nu og prognose,
+  // for hvert punkt, uanset om det krydser nogen varslingstærskel. Klienten
+  // erstatter sin egen computeRisk()/computeViralRisk()-løkke med denne.
+  const allPointRisks = [];
+
+  let cellMatched = 0, cellMissing = 0;
+  let maxForecastMMSeen = 0, maxTodayMMSeen = 0, maxForeRiskSeen = 0;
+
+  for (const pt of points) {
+    const key = riskModel.cellKey(pt.lat, pt.lng);
+    const cached = weatherCache.get(key);
+    const w = cached ? cached.data : null;
+    if (!w) { cellMissing++; continue; } // ingen vejrdata for denne celle endnu
+    cellMatched++;
+
+    const precipMM    = w.antecedentMM ?? null;
+    const todayMM      = w.todayMM ?? null;
+    const forecastMM   = w.forecastMM ?? null;
+    const lastEventAge = riskModel.estimateLastEventAge(w.hourlyWeek);
+
+    const riskInput = {
+      overflowProbBase: pt.overflowProbBase,
+      meanVolumePerEvent: pt.meanVolumePerEvent,
+      thresholdMm: pt.thresholdMm,
+      precipMM, forecastMM, lastEventAge,
+    };
+    // NYT: beregner nu ogsÅ "nu"-risikoen (uden prognose-tillæg), ikke kun
+    // foreRisk — det er DEN, klientens hovedtal ("Samlet forureningsrisiko")
+    // faktisk viser i dag, ikke prognoseværdien.
+    const nowResult      = riskModel.computeRisk(riskInput);
+    const nowViralRisk   = riskModel.computeViralRisk(riskInput);
+    const foreRisk        = riskModel.computeForecastRisk(riskInput);
+    const foreViralRisk   = riskModel.computeForecastViralRisk(riskInput);
+    // NYT: sat DIREKTE på selve punktet (ikke kun i allPointRisks/
+    // pointRisks nedenfor), så badevandRisk.computeBadevandRiskCascade()
+    // kan bruge SAMME `points`-array uden at genopbygge det — det array
+    // har allerede name/waterArea/municipality, som kun mangler i de to
+    // andre, mere begrænsede datastrukturer.
+    pt.riskScore  = nowResult.risk;
+    pt.viralScore = nowViralRisk;
+    // RETTET: foreRisk/foreViralRisk blev tidligere KUN gemt i de lokale
+    // pointRisks/allPointRisks-strukturer nedenfor, ikke sat direkte på pt
+    // selv — i modsætning til riskScore/viralScore/algaeScore lige ovenfor.
+    // badevandRisk.computeBadevandRiskCascade() (se badevand-risk.js) læser
+    // udelukkende felter direkte på pt via samme points-array, og kunne
+    // derfor ikke se prognosen overhovedet — den forsvandt stille fra
+    // sø-/kystvand-tooltippen ved server-omlægningen af badevands-risiko.
+    pt.foreRisk      = foreRisk;
+    pt.foreViralRisk = foreViralRisk;
+
+    // NYT: se risk-model.js's computeAlgaeRisk() filhoved — alt dette har
+    // brug for var allerede hentet server-side (CMEMS-temp, 7-dages
+    // nedbør, glidende lufttemperatur-gennemsnit), kun selve
+    // beregningen manglede at blive flyttet fra klienten.
+    let algaeScore = null;
+    const isWaterPt = waterFlagsCache?.get(pt.id);
+    let waterTemp = null;
+    if (isWaterPt && currentsCache.grid) {
+      const c = getCurrentAtServer(pt.lat, pt.lng, currentsCache.grid);
+      if (c && c.temp != null) waterTemp = c.temp;
+    }
+    if (waterTemp === null && w.recentAirTempAvg != null) {
+      waterTemp = riskModel.computeFreshwaterTemp(w.recentAirTempAvg);
+    }
+    if (waterTemp !== null) {
+      algaeScore = riskModel.computeAlgaeRisk({ totalRain7d: w.totalRain7d, volumeM3Year: pt.volumeM3Year, waterTemp });
+    }
+    pt.algaeScore = algaeScore;
+    if ((forecastMM || 0) > maxForecastMMSeen) maxForecastMMSeen = forecastMM || 0;
+    if ((todayMM || 0) > maxTodayMMSeen) maxTodayMMSeen = todayMM || 0;
+    if ((foreRisk || 0) > maxForeRiskSeen) maxForeRiskSeen = foreRisk || 0;
+
+    const riskEntry = {
+      id: pt.id, outfallId: pt.outfallId, name: pt.name, municipality: pt.municipality, waterArea: pt.waterArea,
+      foreRisk, foreViralRisk, forecastMM, todayMM,
+      // NYT (bruger-ønske 2026-07-26): se derivePulsFields()'s filhoved i
+      // risk-model.js — bruges af enqueuePushNotifications() til at
+      // udelukke bekræftede regnvandsudløb fra badested-favoritters
+      // prognose-baserede varsling, samme filter som badevand-risk.js's
+      // "nu"-beregning allerede respekterer.
+      isWastewater: pt.isWastewater,
+    };
+    // NYT (ustabil-id-rettelse — se loadPulsPointsFull()): registreres
+    // under BEGGE id'er, samme objekt, så et opslag fra en klient (som nu
+    // kan sende enten det gamle rækkeindeks eller den nye stabile
+    // outfallId — se toggleFav()/toggleBadevandFav()) rammer uanset hvilket.
+    pointRisks.set(String(pt.id), riskEntry);
+    if (pt.outfallId) pointRisks.set(pt.outfallId, riskEntry);
+
+    allPointRisks.push({
+      id: pt.id,
+      riskScore: nowResult.risk,   // null hvis noData
+      viralScore: nowViralRisk,
+      algaeScore,  // NYT: se risk-model.js's computeAlgaeRisk() — tidligere kun beregnet klient-side
+      foreRisk, foreViralRisk,
+      noData: nowResult.noData,
+      isWater: waterFlagsCache?.get(pt.id),  // NYT: undefined hvis cachen ikke kunne bygges — klienten falder tilbage til lokal beregning i så fald
+    });
+
+    if ((foreRisk || 0) > minRisk) {
+      warnPoints.push({
+        id: pt.id, outfallId: pt.outfallId, name: pt.name, municipality: pt.municipality, waterArea: pt.waterArea,
+        foreRisk, forecastMM, todayMM,
+      });
+    }
+  }
+
+  riskScoresCache = { ts: Date.now(), points: allPointRisks };
+
+  // NYT: se badevand-risk.js filhoved — server-side gengivelse af sø-/
+  // kystvand-/badevands-kaskaden, der tidligere blokerede browseren i
+  // 6+ sekunder. Genbruger `points` (nu MED riskScore/viralScore sat
+  // direkte, se ovenfor) — ingen ekstra vejr-/risikoberegning her.
+  let cascadeResult = null;
+  try {
+    // NYT: sender nu en strømopslagsfunktion med — se badevand-risk.js's
+    // computeIsotropicKystvandResult() for hvordan den bruges til at
+    // udelukke nedstrøms/tværgående udløb og bruge MÅLT strømhastighed
+    // (i stedet for en antaget konstant) for bekræftede opstrøms udløb.
+    // Genbruger samme getCurrentAtServer()/currentsCache.grid som
+    // algeberegningen allerede bruger til vandtemperatur ovenfor.
+    const result = await badevandRisk.computeBadevandRiskCascade(points, riskModel.seasonalTau, riskModel.seasonalTauViral, STATIC_DIR, undefined, (lat, lng) => getCurrentAtServer(lat, lng, currentsCache.grid));
+    badevandRiskCache = { ts: Date.now(), ...result };
+    badevandByIdCache = new Map((result.badevand || []).map(b => [String(b.id), b]));
+    cascadeResult = result; // NYT: genbruges nedenfor af enqueuePushNotifications() til badested-favoritters "nu"-risiko, se dér
+    // NYT: akkumulerer dette tjeks bact/viral/algae/forecast pr. badested ind
+    // i det persisterede daglige løbende gennemsnit — se app-metrics.js's
+    // filhoved for hvorfor dette er en direkte SQL-UPSERT pr. tjek, ikke en
+    // in-memory-sum der ville forsvinde ved næste genstart/deploy.
+    await appMetrics.accumulateDailyBadevandRisk(result.badevand);
+  } catch (e) {
+    console.warn('computeBadevandRiskCascade fejlede:', e.message);
+    // Bevidst INGEN nulstilling af badevandRiskCache til tomt her — en
+    // forbigående fejl beholder den seneste, gyldige beregning i stedet
+    // for at slette god data. Klienten falder under alle omstændigheder
+    // tilbage til lokal beregning, hvis cachen mangler/er forældet.
+  }
+
+  const diagnostics = { cellMatched, cellMissing, maxForecastMMSeen, maxTodayMMSeen, maxForeRiskSeen };
+  _latestDiagnostics = diagnostics; // se /api/push/evaluate-now, hvor dette rapporteres tilbage i testMode
+
+  _latestWarnPoints = warnPoints; // samme delte tilstand som /api/push/warnpoints bruger, se Varsler-fanens øvrige endpoints
+  const subCount = VAPID_PUBLIC_KEY ? await getPushSubscriptionCount() : 0;
+  console.log(`evaluatePushNotifications: kørt (${points.length} punkter tjekket, ${cellMatched} matchet vejrcelle, ${cellMissing} manglede, maxForecastMM=${maxForecastMMSeen.toFixed(2)}, maxTodayMM=${maxTodayMMSeen.toFixed(2)}, maxForeRisk=${maxForeRiskSeen.toFixed(4)}, ${warnPoints.length} over tærsklen [minRisk=${minRisk}], ${subCount} abonnement(er))`);
+
+  // NYT: selve push-AFSENDELSEN er stadig (med rette) betinget af at der
+  // findes noget at sende til og en VAPID-nøgle er konfigureret — kun
+  // BEREGNINGEN ovenfor blev gjort ubetinget, ikke selve udsendelsen.
+  // enqueuePushNotifications() AFVENTES her (ren DB-INSERT, hurtig), men
+  // flushPushQueue() (den faktiske netværksdel mod eksterne push-
+  // tjenester) afventes IKKE — den periodiske risikoberegningscyklus (og
+  // dermed, via denne funktions egen reentrancy-lås, NÆSTE cyklus) skal
+  // ikke stå og vente på svar fra eksterne push-tjenester.
+  if (VAPID_PUBLIC_KEY && subCount > 0) {
+    await enqueuePushNotifications(warnPoints, pointRisks, !!testThresholds, cascadeResult);
+    flushPushQueue().catch(e => console.warn('flushPushQueue (automatisk cyklus) fejl:', e.message));
+  }
+}
+
+// RETTET (bruger-rapporteret: "Ingen data" ved allerførste sidevisning,
+// rettet med det samme ved en manuel genindlæsning) — root cause: efter en
+// deploy/genstart er riskScoresCache/badevandRiskCache tomme (ts:0) indtil
+// FØRSTE warmCache()+evaluatePushNotifications()-kørsel er færdig (kan tage
+// adskillige sekunder, se de tre kaldssteder nedenfor). /api/risk-scores og
+// /api/badevand-risk svarede tidligere ØJEBLIKKELIGT med den tomme cache i
+// dette vindue, i stedet for at vente — nøjagtig samme klasse fejl, som
+// allerede blev fundet og rettet for /api/weather/all nedenfor (se dens
+// kommentar), men de to ruter her manglede samme rettelse. Fly.io's
+// min_machines_running=1 (se fly.toml) betyder dette vindue KUN opstår lige
+// efter en `fly deploy` — men enhver bruger, der rammer akkurat dét vindue,
+// oplevede "ingen data", indtil en efterfølgende automatisk opdatering eller
+// en manuel genindlæsning ramte den nu-varme cache.
+//
+// Delt in-flight-promise (ikke bare "kald warmCache()+evaluatePushNotifications()
+// direkte i hver rute") — uden denne ville hver samtidig bruger i det kolde
+// vindue udløse sin EGEN fulde opvarmning parallelt (21.600 punkters
+// risikoberegning + badevands-kaskaden, hver for sig), unødvendigt
+// arbejdsspild og en reel risiko for at de skriver til de samme caches i
+// utilsigtet rækkefølge.
+let _coldCacheWarmupPromise = null;
+async function ensureFreshRiskCaches() {
+  if (riskScoresCache.ts !== 0 && badevandRiskCache.ts !== 0) return; // allerede varmet
+  if (_coldCacheWarmupPromise) return _coldCacheWarmupPromise;
+  console.log('Cache tom ved /api/risk-scores eller /api/badevand-risk — venter kort på warmCache + evaluatePushNotifications');
+  _coldCacheWarmupPromise = warmCache()
+    .then(() => evaluatePushNotifications())
+    .catch(e => console.warn('ensureFreshRiskCaches fejl:', e.message))
+    .finally(() => { _coldCacheWarmupPromise = null; });
+  return _coldCacheWarmupPromise;
+}
+
+// Opvarm ved opstart (2 forsøg: 2s og 10s) og tjek derefter HYPPIGT for
+// manglende/forældede celler.
+//
+// RETTET: den tidligere 10-sekunders-retry ("hvis cachen stadig er helt
+// tom") og selve den periodiske timer (kun hver WEATHER_TTL_MS = 6 timer)
+// dækkede ikke det tilfælde, hvor NOGLE (men ikke alle) celler lykkedes
+// ved opstart — fx ved en kortvarig forstyrrelse hos Open-Meteo, der ramte
+// de fleste, men ikke alle, af de 170 celler. Så snart blot 1-2 celler var
+// varme, var cachen ikke længere "helt tom", 10-sekunders-sikkerhedsnettet
+// udløste aldrig, og appen sad fast med en næsten-tom cache i op til 6
+// timer — observeret som "2 ud af 170 varme celler".
+//
+// Løsningen er at ADSKILLE hvor ofte vi TJEKKER for manglende celler fra
+// hvor LÆNGE en celle regnes som frisk (TTL). warmCache() springer allerede
+// enhver stadig-frisk celle over (se skipped++ i selve funktionen) — at
+// kalde den oftere koster derfor næsten intet ekstra i normal drift (næsten
+// alt bliver "skipped"), men betyder at en delvis fejl retter sig selv
+// inden for minutter i stedet for at kunne stå i op til 6 timer.
+const WEATHER_CHECK_INTERVAL_MS = 15 * 60 * 1000;  // tjek hvert 15. minut — billigt, da fortsat-friske celler bare springes over
+setTimeout(() => warmCache()
+  .then(() => evaluatePushNotifications())
+  .catch(e => console.warn('warmCache (2s):', e.message)), 2000);
+setTimeout(() => warmCache()
+  .then(() => evaluatePushNotifications())
+  .catch(e => console.warn('warmCache (10s):', e.message)), 10000);
+setInterval(() => warmCache()
+  .then(() => evaluatePushNotifications())
+  .catch(e => console.warn('warmCache (interval):', e.message)), WEATHER_CHECK_INTERVAL_MS);
+
+// NYT: leverer den server-beregnede risiko for alle PULS-punkter som ét,
+// kompakt JSON-svar — se riskScoresCache (bygget i evaluatePushNotifications())
+// for selve beregningen. Erstatter klientens egen computeRisk()/
+// computeViralRisk()-løkke over alle 21.556 punkter (målt til 276-2244 ms
+// ved første sidevisning, se samtalen om første-sidevisnings ydelse).
+// ETag baseret på beregningstidspunktet — ikke selve indholdet — så
+// klienter der allerede har den nyeste version får et billigt 304 i stedet
+// for at hente hele svaret igen unødigt.
+app.get('/api/risk-scores', async (req, res) => {
+  // Se ensureFreshRiskCaches()'s filhoved — kappet ved 25 sek som
+  // sikkerhedsnet (samme princip som /api/weather/all's 15 sek, men
+  // rummeligere, da denne opvarmning gør markant mere arbejde: fuld
+  // vejr-opvarmning OG 21.600 punkters risikoberegning OG badevands-
+  // kaskaden, ikke kun vejr-hentning).
+  if (riskScoresCache.ts === 0) {
+    await Promise.race([ensureFreshRiskCaches(), new Promise(resolve => setTimeout(resolve, 25000))]);
+  }
+  const etag = `"risk-${riskScoresCache.ts}"`;
+  res.set('ETag', etag);
+  res.set('Cache-Control', 'no-cache'); // altid revalider — data ændrer sig hvert 15. minut
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+  res.json({ ts: riskScoresCache.ts, points: riskScoresCache.points });
+});
+
+// NYT: se badevand-risk.js filhoved — server-beregnet sø-/kystvand-/
+// badevands-kaskade (bakteriel+viral, IKKE alge — se begrundelse i
+// badevand-risk.js). Erstatter klientens 6+ sekunders blokerende
+// colorBadevandByRisk()-løkke. Samme ETag-mønster som risk-scores.
+app.get('/api/badevand-risk', async (req, res) => {
+  // Se ensureFreshRiskCaches()'s filhoved. Deler samme in-flight-promise
+  // som /api/risk-scores ovenfor — rammer begge ruter cachen kold samtidig
+  // (meget sandsynligt, da klienten henter dem parallelt, se loadAll()),
+  // venter de på ÉN fælles opvarmning, ikke to.
+  if (badevandRiskCache.ts === 0) {
+    await Promise.race([ensureFreshRiskCaches(), new Promise(resolve => setTimeout(resolve, 25000))]);
+  }
+  const etag = `"bvrisk-${badevandRiskCache.ts}"`;
+  res.set('ETag', etag);
+  res.set('Cache-Control', 'no-cache');
+  if (req.headers['if-none-match'] === etag) return res.status(304).end();
+  // NYT (bruger-ønske 2026-08-10 — URL-arkitektur/SEO): slug tilføjet pr.
+  // badevand-entry, IKKE ved at mutere den delte badevandRiskCache selv
+  // (genbruges andre steder uændret) — kun i selve JSON-svaret her. Giver
+  // klienten det PRÆCISE, server-genererede slug (fra slug-index.js) for
+  // hash→path-omdirigering (se dansk-overloeb-kort.html's
+  // redirectBadevandHashToPath()) — klienten kan IKKE selv genudlede det
+  // korrekt, da kommune-feltet (en del af slug'et for 1.033 af 1.039
+  // badesteder) kun findes i badevand-analyseresultater.json, som kun
+  // serveren parser.
+  res.json({
+    ...badevandRiskCache,
+    badevand: (badevandRiskCache.badevand || []).map(b => ({ ...b, slug: idToBadestedSlug.get(String(b.id)) || null })),
+  });
+});
+
+// ── Borgerobservationer (badested-observations.js) ──────────────────────────
+// ⚠️ Se badested-observations.js's filhoved: disse to ruter må ALDRIG fodre
+// noget ind i badevandRisk/computeBadevandRisk — eget, adskilt lag.
+//
+// memoryStorage (ikke diskStorage): fotoet skal først valideres (magic
+// bytes, størrelse — se savePhoto() i modulet) FØR det overhovedet lander på
+// disk. Ellers ville en ondsindet/fejlbehæftet upload nå at ramme volumen,
+// også selvom den efterfølgende blev afvist.
+const observationUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: badestedObs.MAX_PHOTO_BYTES, files: 1 },
+});
+
+// RETTET: Fly.io's edge-proxy sætter 'Fly-Client-IP' direkte — mere
+// pålideligt end at stole på Express' req.ip/X-Forwarded-For-parsing uden
+// eksplicit 'trust proxy'-konfiguration (som IKKE er sat andetsteds i denne
+// fil). Falder tilbage til socket-adressen for lokal udvikling, hvor Fly's
+// header naturligvis ikke findes.
+function getClientIp(req) {
+  return req.headers['fly-client-ip'] || req.socket.remoteAddress || 'ukendt';
+}
+
+app.post('/api/badested-observation', (req, res) => {
+  // NYT: multer kaldes MANUELT her (i stedet for som deklarativ middleware)
+  // for at kunne fange dens egne fejl (fx LIMIT_FILE_SIZE, hvis fotoet
+  // overskrider MAX_PHOTO_BYTES) i almindelig JSON-form — ellers ville en
+  // sådan fejl aldrig nå ind i denne handler og i stedet ende som Expres'
+  // egen, rå (HTML/stack trace) standardfejlside.
+  observationUpload.single('photo')(req, res, async (uploadErr) => {
+    if (uploadErr) {
+      console.warn('badested-observation: upload-fejl —', uploadErr.message);
+      return res.status(400).json({ error: 'Kunne ikke behandle foto-upload (for stort, eller ugyldigt format).' });
+    }
+    try {
+      const { badestedId, algaeLevel } = req.body || {};
+      // NYT: klienten sender flere valgte statustyper som ÉN vurdering, se
+      // badested-observations.js's recordVurdering() — JSON-kodet i ét
+      // formfelt (fremfor gentagne 'observationTypes[]'-felter) for at
+      // undgå at skulle stole på multer/busboys array-håndtering af
+      // gentagne feltnavne i multipart-formularer.
+      let observationTypes;
+      try {
+        observationTypes = JSON.parse(req.body?.observationTypes || '[]');
+      } catch (parseErr) {
+        observationTypes = [];
+      }
+      const result = await badestedObs.recordVurdering({
+        badestedId,
+        observationTypes,
+        algaeLevel: algaeLevel || null,
+        photoBuffer: req.file ? req.file.buffer : null,
+        rawIp: getClientIp(req),
+      });
+      // NYT (bruger-ønske): dagens ALLERFØRSTE vurdering af et badested
+      // (se _insertVurderingTxn()'s isFirstToday, badested-observations.js)
+      // deles til badestedets push-abonnenter — KUN den første, for ikke at
+      // spamme abonnenter ved flere indsendelser samme dag. Fejler dette
+      // (fx VAPID ikke konfigureret), skal selve vurderingen stadig gemmes
+      // korrekt — derfor sit eget try/catch, adskilt fra hovedstien.
+      if (result.isFirstToday) {
+        try { await broadcastFirstVurderingOfDay(badestedId, observationTypes, algaeLevel || null); }
+        catch (e) { console.warn('broadcastFirstVurderingOfDay fejlede:', e.message); }
+      }
+      res.json({ ok: true, createdAt: result.createdAt });
+    } catch (e) {
+      if (e.code === 'RATE_LIMITED') {
+        // RETTET (bruger-ønske): viste tidligere BEVIDST en helt generisk
+        // besked her — begrundelsen var at undgå at lære en spam-bot
+        // præcis hvor grænsen går. Omgjort efter eksplicit ønske: en ægte
+        // bruger, der rammer grænsen, skal kunne se HVORFOR, ikke bare at
+        // "noget gik galt". e.message skelner de to reelle årsager (se
+        // _insertVurderingTxn() i badested-observations.js).
+        console.warn(`badested-observation: rate-limited (${e.message}), ip-hash=${badestedObs.hashIp(getClientIp(req)).slice(0, 12)}…, badested=${req.body?.badestedId}`);
+        const msg = e.message === 'rate-limited-max-per-day'
+          ? `Du har allerede indsendt ${badestedObs.MAX_VURDERINGER_PER_IP_PER_DAY} vurderinger i dag — prøv igen i morgen.`
+          : 'Du kan kun vurdere ét badested pr. dag, og har allerede vurderet et andet badested i dag.';
+        return res.status(429).json({ error: msg });
+      }
+      if (e.code === 'VALIDATION') {
+        return res.status(400).json({ error: e.message });
+      }
+      console.error('badested-observation: uventet fejl —', e.message);
+      res.status(500).json({ error: 'Kunne ikke registrere observation lige nu.' });
+    }
+  });
+});
+
+app.get('/api/badested-observation/:id', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');  // altid frisk — henfaldsvægten ændrer sig time for time
+    res.json(await badestedObs.getObservationSummary(req.params.id));
+  } catch (e) {
+    console.error('badested-observation GET: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente observationer lige nu.' });
+  }
+});
+
+// Servér uploadede fotos — filnavne er altid server-genererede UUID'er (se
+// savePhoto() i badested-observations.js), aldrig klient-leverede, så der
+// er ingen path traversal-risiko ved direkte statisk servering.
+app.use('/observation-photos', express.static(badestedObs.PHOTOS_DIR, { maxAge: '7d' }));
+
+app.get('/api/weather', async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lng = parseFloat(req.query.lng);
+  if (isNaN(lat) || isNaN(lng)) {
+    return res.status(400).json({ error: 'lat and lng required' });
+  }
+
+  const key    = gridKey(lat, lng);
+  const cached = weatherCache.get(key);
+
+  if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) {
+    cacheHitCount++;
+    res.set('Cache-Control', 'public, max-age=10800');  // 3h
+    res.set('X-Cache', 'HIT');
+    return res.json(cached.data);
+  }
+
+  try {
+    apiCallCount++;
+    const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+    const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
+    const raw  = await fetchOpenMeteoWithRetry(clat, clng);
+    const data = computeMetrics(raw);
+    weatherCache.set(key, { ts: Date.now(), data });
+    res.set('Cache-Control', 'public, max-age=10800');
+    res.set('X-Cache', 'MISS');
+    res.json(data);
+  } catch(e) {
+    if (cached) { res.set('X-Cache', 'STALE'); return res.json(cached.data); }
+    res.status(502).json({ error: e.message });
+  }
+});
+
+// ── GET /api/debug-status — samlet, utvetydig status for ALLE server-side
+// datasæt, med reelle tidsstempler. Bygget efter gentagne runder, hvor det
+// var uklart om et problem sad i klientens cache, serverens cache, eller
+// selve deploy-synkroniseringen — denne slags forvirring skal fremover
+// kunne afklares med ét kald, ikke gætværk. Sammenlign direkte med
+// klientens eget "Datakilder & cache-status"-panel (samme nøgler/navne med
+// vilje, for nem side-om-side sammenligning).
+app.get('/api/debug-status', async (req, res) => {
+  const now = Date.now();
+
+  // Vejr: ældste/nyeste celle i cachen, ikke kun et samlet tal
+  let weatherOldest = null, weatherNewest = null, weatherWarm = 0, weatherStale = 0;
+  for (const [, entry] of weatherCache) {
+    if (now - entry.ts < WEATHER_TTL_MS) weatherWarm++; else weatherStale++;
+    if (weatherOldest === null || entry.ts < weatherOldest) weatherOldest = entry.ts;
+    if (weatherNewest === null || entry.ts > weatherNewest) weatherNewest = entry.ts;
+  }
+
+  // PULS: statisk fil, ikke en runtime-cache — relevant "friskhed" er filens
+  // egen sidst-ændret-tidspunkt (hvornår update-puls.js sidst blev kørt og
+  // deployet), ikke noget serveren selv genopfrisker automatisk.
+  let pulsFileTs = null, pulsFileAgeHours = null;
+  try {
+    const stat = fs.statSync(path.join(STATIC_DIR, 'puls-data.json'));
+    pulsFileTs = stat.mtimeMs;
+    pulsFileAgeHours = Math.round((now - pulsFileTs) / 3600000 * 10) / 10;
+  } catch(e) { /* fil findes ikke — bør ikke ske i produktion */ }
+
+  // NYT: antal web push-abonnenter + ventende kø-jobs — begge nu Postgres-
+  // forespørgsler (se push_subscriptions/push_send_queue), ét samlet
+  // opslag i stedet for to separate round-trips.
+  const [{ rows: subCountRows }, { rows: queueLenRows }] = await Promise.all([
+    query(`SELECT COUNT(*)::int AS n FROM push_subscriptions`),
+    query(`SELECT COUNT(*)::int AS n FROM push_send_queue`),
+  ]);
+
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    servertid: now,
+    vejr: {
+      ttlTimer: WEATHER_TTL_MS / 3600000,
+      varmeCeller: weatherWarm,
+      forældedeCeller: weatherStale,
+      ældsteCelleAlderMin: weatherOldest !== null ? Math.round((now - weatherOldest) / 60000) : null,
+      nyesteCelleAlderMin: weatherNewest !== null ? Math.round((now - weatherNewest) / 60000) : null,
+    },
+    strøm: {
+      ttlTimer: CURRENTS_TTL / 3600000,
+      alderMin: currentsCache.ts ? Math.round((now - currentsCache.ts) / 60000) : null,
+      forældet: currentsCache.ts ? (now - currentsCache.ts) > CURRENTS_TTL : null,
+      punkter: currentsCache.grid ? currentsCache.grid.size : 0,
+      genhentningIGang: currentsRefreshInFlight,
+      sidsteFejl: currentsCache.error || null,
+    },
+    puls: {
+      filAlderTimer: pulsFileAgeHours,
+      filSidstÆndret: pulsFileTs,
+    },
+    // NYT: antal web push-abonnenter i "Datakilder & cache-status"-panelet
+    // (se showDebugPanel() i dansk-overloeb-kort.html) — bruger-ønske.
+    // ventendeIKø viser push_send_queue's aktuelle størrelse — normalt 0,
+    // kun midlertidigt >0 mens en samtidig afsendelses-batch er i gang.
+    push: {
+      abonnenter: subCountRows[0].n,
+      konfigureret: !!(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY),
+      ventendeIKø: queueLenRows[0].n,
+    },
+  });
+});
+
+// ── GET /api/weather/all — full pre-warmed grid in one cacheable response ────
+// Returns all warm cells as { "lat:lng": {antecedentMM, todayMM, forecastMM,
+// totalRain7d}, ... } — hourly arrays are excluded to keep payload small.
+// Browser caches with max-age=3600 (matches server TTL).
+// ETag allows 304 Not Modified when data hasn't changed.
+app.get('/api/weather/all', async (req, res) => {
+  // Hvis cachen er tom (typisk lige efter en genstart), er serverens egen
+  // warmCache() markant hurtigere end klientens fallback-metode (170 celler
+  // på ~2 sek ved 10 samtidige kald, mod klientens egen 1-2 minutter ved kun
+  // 4 samtidige kald). Vent derfor kort på den, i stedet for straks at sende
+  // en tom cache og tvinge klienten ud i den langsomme vej.
+  // Kappet ved 15 sek som sikkerhedsnet, hvis Open-Meteo selv skulle være
+  // usædvanligt langsom — så falder vi tilbage til at svare med hvad end vi
+  // har, fremfor at lade klienten vente i det uendelige.
+  if (weatherCache.size === 0) {
+    console.log('Cache tom ved /api/weather/all — venter kort på warmCache');
+    await Promise.race([
+      warmCache().catch(e => console.warn('warmCache fejl:', e.message)),
+      new Promise(resolve => setTimeout(resolve, 15000)),
+    ]);
+  }
+
+  const out = {};
+  let warm = 0, stale = 0, maxTs = 0;
+
+  for (const [key, entry] of weatherCache) {
+    if (Date.now() - entry.ts < WEATHER_TTL_MS) {
+      // Strip hourly arrays — client fetches /hourly on demand
+      const { hourlyObs: _o, hourlyFore: _f, ...slim } = entry.data;
+      out[key] = slim;
+      warm++;
+      cacheHitCount++;
+      if (entry.ts > maxTs) maxTs = entry.ts;
+    } else {
+      stale++;
+    }
+  }
+
+  // RETTET: ETag var tidligere KUN baseret på antal varme celler
+  // (`"w${warm}"`) — men det tal ændrer sig stort set aldrig mellem
+  // opdateringscyklusser (samme ~170 danske gittterceller varmes op hver
+  // gang), selvom selve VÆRDIERNE indeni har ændret sig fuldstændigt.
+  // Browseren ville derfor få et 304 Not Modified-svar og blive ved med at
+  // vise sin egen, lokalt cachede (og efterhånden forældede) kopi —
+  // UAFHÆNGIGT af appens egen IndexedDB-cache, da dette er et separat,
+  // lavere HTTP-cache-lag, som ikke ryddes ved at rydde app-data. Tilføjer
+  // nu det seneste faktiske opdateringstidspunkt til ETag'en, så den
+  // ÆNDRER SIG, hver gang mindst én celle reelt er blevet opdateret.
+  const etag = `"w${warm}-${maxTs}"`;
+  if (req.headers['if-none-match'] === etag) {
+    return res.status(304).end();
+  }
+
+  // no-cache: browser revaliderer altid via ETag.
+  // Forhindrer at en tom {} respons fra cold-start caches i 3 timer.
+  res.set('Cache-Control', 'no-cache');
+  res.set('ETag', etag);
+  res.set('X-Warm-Cells',  String(warm));
+  res.set('X-Stale-Cells', String(stale));
+  res.json(out);
+});
+
+// ── GET /api/weather/weekly?key= — 7-day hourly arrays for bathing water detail
+app.get('/api/weather/weekly', async (req, res) => {
+  const key = req.query.key;
+  if (!key) return res.status(400).json({ error: 'key required' });
+
+  let cached = weatherCache.get(key);
+
+  // Exact cache miss — try nearest cached cell (badevand may be in uncached coastal cell)
+  if (!cached || Date.now() - cached.ts >= WEATHER_TTL_MS) {
+    const parts = key.split(':');
+    const lat = parseFloat(parts[0]), lng = parseFloat(parts[1]);
+    if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'invalid key' });
+
+    // Find nearest warm cell in cache
+    let minDist = Infinity;
+    for (const [k, entry] of weatherCache) {
+      if (Date.now() - entry.ts >= WEATHER_TTL_MS) continue;
+      const [kLat, kLng] = k.split(':').map(Number);
+      const d = Math.hypot(kLat - lat, kLng - lng);
+      if (d < minDist) { minDist = d; cached = entry; }
+    }
+
+    // If still no cached cell or too far away (>0.5° ≈ 55km), fetch directly
+    if (!cached || minDist > 0.5) {
+      try {
+        apiCallCount++;
+        const raw  = await fetchOpenMeteoWithRetry(lat, lng);
+        const data = computeMetrics(raw);
+        weatherCache.set(key, { ts: Date.now(), data });
+        cached = { data };
+      } catch(e) {
+        return res.status(502).json({ error: `Open-Meteo: ${e.message}` });
+      }
+    }
+  }
+
+  const d = cached.data;
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.json({
+    hourlyObs:   d.hourlyObs  || [],
+    hourlyFore:  d.hourlyFore || [],
+    hourlyWeek:  d.hourlyWeek || [],
+    todayMM:     d.todayMM,
+    forecastMM:  d.forecastMM,
+    totalRain7d: d.totalRain7d,
+    // RETTET: recentAirTempAvg manglede tidligere helt i dette svar.
+    // NYT: todayMaxAirTemp — se computeMetrics() for hvorfor gennemsnittet
+    // alene ikke er retvisende at VISE til en badegæst (det er fortsat
+    // korrekt til den interne vandtemperatur-ESTIMERING, som beholder
+    // gennemsnittet uændret via recentAirTempAvg).
+    recentAirTempAvg: d.recentAirTempAvg,
+    todayMaxAirTemp:  d.todayMaxAirTemp,
+    hourlyTempWeek:   d.hourlyTempWeek || [],
+    // NYT: vind — samme Open-Meteo-kilde, nu udvidet med windspeed_10m/
+    // winddirection_10m (se fetchOpenMeteo()).
+    currentWindSpeed: d.currentWindSpeed,
+    currentWindDir:   d.currentWindDir,
+    // NYT: diagnostik til at afgøre om et manglende todayMaxAirTemp
+    // skyldes en reel datamangel hos Open-Meteo (validTempCount lavt/0)
+    // eller noget andet (validTempCount højt, men todayMaxAirTemp
+    // alligevel null ville pege på en fejl i selve dato-matchingen).
+    _tempDiagnostic: {
+      hourlyTempWeekLength: (d.hourlyTempWeek || []).length,
+      validTempCount: (d.hourlyTempWeek || []).filter(t => t !== null).length,
+    },
+  });
+});
+// Called when user clicks a point or opens a varsel card. Much cheaper than
+// bundling 48 floats × 2500 cells into the main /all response.
+app.get('/api/weather/hourly', (req, res) => {
+  const key    = req.query.key;
+  const cached = key ? weatherCache.get(key) : null;
+
+  if (!cached || Date.now() - cached.ts >= WEATHER_TTL_MS) {
+    return res.status(404).json({ error: 'Cell not in cache' });
+  }
+
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.json({
+    hourlyObs:  cached.data.hourlyObs  || [],
+    hourlyFore: cached.data.hourlyFore || [],
+  });
+});
+
+// ── POST /api/weather/bulk — fallback with limited individual fetches ─────────
+// Returns warm cells from cache immediately. Cold cells are fetched individually
+// with concurrency=4 so the endpoint is useful even before warmCache completes.
+app.use(express.json({ limit: '1mb' }));
+
+app.post('/api/weather/bulk', async (req, res) => {
+  const cells = Array.isArray(req.body?.cells) ? req.body.cells : [];
+  if (cells.length === 0 || cells.length > 5000) {
+    return res.status(400).json({ error: 'cells array (1–5000) required' });
+  }
+
+  const out     = {};
+  const cold    = [];
+  let   hits = 0, misses = 0;
+
+  for (const cell of cells) {
+    const lat = parseFloat(cell.lat), lng = parseFloat(cell.lng);
+    if (isNaN(lat) || isNaN(lng)) continue;
+    const key    = gridKey(lat, lng);
+    const cached = weatherCache.get(key);
+    if (cached && Date.now() - cached.ts < WEATHER_TTL_MS) {
+      const { hourlyObs: _o, hourlyFore: _f, ...slim } = cached.data;
+      out[key] = slim;
+      hits++;
+      cacheHitCount++;
+    } else {
+      cold.push({ lat, lng, key, cached });
+      misses++;
+    }
+  }
+
+  // Fetch cold cells individually with limited concurrency
+  if (cold.length > 0) {
+    const CONC = 4;
+    let idx = 0;
+    async function worker() {
+      while (idx < cold.length) {
+        const { lat, lng, key, cached } = cold[idx++];
+        try {
+          apiCallCount++;
+          const raw  = await fetchOpenMeteoWithRetry(lat, lng);
+          const data = computeMetrics(raw);
+          weatherCache.set(key, { ts: Date.now(), data });
+          const { hourlyObs: _o, hourlyFore: _f, ...slim } = data;
+          out[key] = slim;
+        } catch(e) {
+          if (cached) {
+            const { hourlyObs: _o, hourlyFore: _f, ...slim } = cached.data;
+            out[key] = slim;
+          } else {
+            out[key] = null;
+          }
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONC, cold.length) }, worker));
+  }
+
+  res.set('Cache-Control', 'no-store');
+  res.set('X-Cache-Hits',   String(hits));
+  res.set('X-Cache-Misses', String(misses));
+  res.json(out);
+});
+
+// ── Save latest warnPoints for push evaluation ──────────────────────────────
+// The client POSTs its computed warnPoints after each render so the server
+// can send push notifications to subscribers who have matching favourites.
+let _latestWarnPoints = [];
+let _latestDiagnostics = {}; // se evaluatePushNotifications() — cellMatched/cellMissing/hasRainCount/maxForecastMMSeen osv.
+app.post('/api/push/warnpoints', (req, res) => {
+  const { warnPoints } = req.body || {};
+  if (!Array.isArray(warnPoints)) return res.status(400).json({ error: 'Invalid' });
+  _latestWarnPoints = warnPoints;
+  // RETTET: klientens baggrunds-upload (checkFavNotifications(), kaldt ved
+  // hver renderMap()) skal ikke lade HTTP-svaret vente på faktiske
+  // push-afsendelser — enqueue er hurtig (rent CPU), selve afsendelsen
+  // fortsætter løsrevet. Se pushSendQueue's filhoved.
+  enqueuePushNotifications(warnPoints);
+  flushPushQueue().catch(e => console.warn('flushPushQueue (warnpoints) fejl:', e.message));
+  res.json({ ok: true, warned: warnPoints.length });
+});
+
+// ── Web Push: VAPID public key ─────────────────────────────────────────────
+// Client fetches this to create a push subscription.
+app.get('/api/push/vapid-public-key', (req, res) => {
+  if (!VAPID_PUBLIC_KEY) return res.status(503).json({ error: 'Push not configured' });
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+// ── Web Push: save subscription ────────────────────────────────────────────
+// Client POSTs its PushSubscription object here after subscribing.
+// Body: { subscription: {...}, favourites: [id, ...] }
+app.post('/api/push/subscribe', async (req, res) => {
+  const { subscription, favourites, badevandGroups, installId, platform } = req.body || {};
+  if (!subscription?.endpoint) return res.status(400).json({ error: 'Invalid subscription' });
+
+  try {
+    // RETTET: dette endpoint blev tidligere ALTID kaldt fra klientens
+    // syncPushSubscription() — som selv kaldes fra toggleFav() ved HVER
+    // ENESTE favorit-ændring, ikke kun ved førstegangs-tilmelding (der
+    // findes ikke noget separat "opdatér blot favoritter"-kald i klienten
+    // overhovedet — se dansk-overloeb-kort.html). Dette endpoint skrev
+    // tidligere ubetinget notifiedState: {} ved hvert kald, hvilket i
+    // praksis betød: favoriserer/fjerner en bruger favorit på ét sted,
+    // nulstilles varslingshistorikken for ALLE brugerens steder på én
+    // gang — uanset om selve risikoen for de øvrige, upåvirkede steder
+    // overhovedet havde ændret sig.
+    //
+    // ON CONFLICT DO UPDATE nedenfor rører BEVIDST ikke notified_state —
+    // en eksisterende rækkes varslingshistorik forbliver derfor urørt ved
+    // hver ny subscribe/favorit-opdatering, kun en HELT NY subscription
+    // (INSERT-grenen) starter med '{}'::jsonb. install_id/platform bevares
+    // via COALESCE hvis klienten ikke sender dem med (ældre klientkode).
+    await query(`
+      INSERT INTO push_subscriptions (endpoint, subscription, favourites, badevand_groups, install_id, platform, notified_state)
+      VALUES ($1, $2, $3, $4, $5, $6, '{}'::jsonb)
+      ON CONFLICT (endpoint) DO UPDATE SET
+        subscription    = EXCLUDED.subscription,
+        favourites      = EXCLUDED.favourites,
+        badevand_groups = EXCLUDED.badevand_groups,
+        install_id      = COALESCE(EXCLUDED.install_id, push_subscriptions.install_id),
+        platform        = COALESCE(EXCLUDED.platform, push_subscriptions.platform)
+    `, [
+      subscription.endpoint,
+      JSON.stringify(subscription),
+      JSON.stringify(favourites || []),
+      JSON.stringify(Array.isArray(badevandGroups) ? badevandGroups : []),
+      typeof installId === 'string' ? installId : null,
+      typeof platform === 'string' ? platform : null,
+    ]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('push/subscribe fejlede:', e.message);
+    res.status(500).json({ error: 'Kunne ikke gemme abonnement.' });
+  }
+});
+
+// ── Web Push: update favourites for a subscription ─────────────────────────
+app.post('/api/push/update-favourites', async (req, res) => {
+  const { endpoint, favourites } = req.body || {};
+  try {
+    const result = await query(`UPDATE push_subscriptions SET favourites = $1 WHERE endpoint = $2`, [JSON.stringify(favourites || []), endpoint]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Subscription not found' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('push/update-favourites fejlede:', e.message);
+    res.status(500).json({ error: 'Kunne ikke opdatere favoritter.' });
+  }
+});
+
+// ── Web Push: unsubscribe ──────────────────────────────────────────────────
+app.post('/api/push/unsubscribe', async (req, res) => {
+  const { endpoint } = req.body || {};
+  try {
+    await query(`DELETE FROM push_subscriptions WHERE endpoint = $1`, [endpoint]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('push/unsubscribe fejlede:', e.message);
+    res.status(500).json({ error: 'Kunne ikke afmelde abonnement.' });
+  }
+});
+
+// ── Installations-heartbeat ──────────────────────────────────────────────────
+// Kaldt fra klientens sendInstallHeartbeat() (forgrund/visibilitychange),
+// fra service workerens periodicsync-handler, og — for push-abonnenter — fra
+// selve SW'ens stille 'heartbeat'-push-håndtering (se overloeb-sw.js). Se
+// app-metrics.js's filhoved for hvorfor installationer skal bekræftes
+// GENTAGNE gange (ikke bare registreres én gang ved installation).
+app.post('/api/install/heartbeat', async (req, res) => {
+  try {
+    const { installId, platform, pushEnabled, via } = req.body || {};
+    await appMetrics.recordHeartbeat({ installId, platform, pushEnabled: !!pushEnabled, via });
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.code === 'VALIDATION') return res.status(400).json({ error: e.message });
+    console.error('install/heartbeat: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke registrere heartbeat.' });
+  }
+});
+
+// Finder alle push-abonnementer, der har ETSPECIFIKT badested favoriseret —
+// genbruges af det ugentlige digest-job og af "første vurdering i dag"-
+// beskeden (se POST /api/badested-observation). Samme koordinat-opslags-
+// mønster som enqueuePushNotifications() allerede bruger til badested-
+// grupper (se getBadevandCoordIndex()).
+async function getSubscriptionsForBadested(badestedId) {
+  const coordIndex = getBadevandCoordIndex();
+  const subs = await getAllPushSubscriptions();
+  const matches = [];
+  for (const entry of subs) {
+    for (const group of (entry.badevandGroups || [])) {
+      if (group.lat == null || group.lng == null) continue;
+      const bvId = coordIndex.get(`${group.lat.toFixed(4)}:${group.lng.toFixed(4)}`);
+      if (bvId != null && String(bvId) === String(badestedId)) {
+        matches.push({ endpoint: entry.endpoint, entry, group });
+        break; // ét match pr. abonnement er nok — undgå dubletter hvis samme badested optræder i flere grupper
+      }
+    }
+  }
+  return matches;
+}
+
+// Samme danske labels som selve indsendelses-UI'en (bv-obs-btn-knapperne og
+// bv-algae-level-btn-knapperne i dansk-overloeb-kort.html) — HOLD I SYNC,
+// så push-beskeden aldrig kan afvige fra hvad brugeren faktisk trykkede på.
+const VURDERING_TYPE_LABELS = {
+  ser_fint_ud: 'Ser fint ud',
+  alger_set:   'Alger set',
+  uklart_vand: 'Uklart vand',
+  affald:      'Affald',
+};
+const ALGAE_LEVEL_LABELS = { ingen: 'Ingen', faa: 'Få', mange: 'Mange' };
+
+// ── Besked ved dagens FØRSTE badestedsvurdering ─────────────────────────────
+// Kaldes fra POST /api/badested-observation når badestedObs.recordVurdering()
+// rapporterer isFirstToday — se badested-observations.js's _insertVurderingTxn().
+// Kun DENNE ene indsendelse pr. badested pr. dag udløser en besked; ingen
+// afsender-identificerbar info medtages (kun de valgte statustyper, som er
+// det eneste badestedObs kender om indsendelsen).
+async function broadcastFirstVurderingOfDay(badestedId, observationTypes, algaeLevel) {
+  if (!VAPID_PUBLIC_KEY) return;
+  const matches = await getSubscriptionsForBadested(badestedId);
+  if (matches.length === 0) return;
+
+  const typeLabels = (observationTypes || []).map(t => VURDERING_TYPE_LABELS[t]).filter(Boolean);
+  if (observationTypes?.includes('alger_set') && algaeLevel && ALGAE_LEVEL_LABELS[algaeLevel]) {
+    const idx = typeLabels.indexOf(VURDERING_TYPE_LABELS.alger_set);
+    if (idx !== -1) typeLabels[idx] = `Alger set (${ALGAE_LEVEL_LABELS[algaeLevel]})`;
+  }
+  const body = typeLabels.length > 0 ? typeLabels.join(', ') : 'Ny observation indsendt';
+  const now = Date.now();
+
+  await Promise.all(matches.map(({ endpoint, group }) => query(`
+    INSERT INTO push_send_queue (endpoint, type, payload, hit_stamps, enqueued_at)
+    VALUES ($1, $2, $3, '[]'::jsonb, $4)
+  `, [
+    endpoint,
+    PUSH_SEND_TYPES.NY_VURDERING,
+    JSON.stringify({
+      title: `🧑‍🤝‍🧑 Ny vurdering: ${group.name || 'dit badested'}`,
+      body,
+      tag: `vurdering-${badestedId}-${todayDateStringLocal()}`,   // dedup pr. badested pr. dag hvis SW modtager samme push flere gange
+      url: (group.lat != null && group.lng != null) ? `/#badevand=${group.lat}:${group.lng}` : '/',
+    }),
+    now,
+  ])));
+  console.info(`Ny vurdering (${badestedId}): ${matches.length} abonnent(er) varslet`);
+  flushPushQueue().catch(e => console.warn('flushPushQueue (ny vurdering) fejl:', e.message));
+}
+
+// UTC-datostreng, samme konvention som app-metrics.js's todayDateString() —
+// kun brugt til at give et stabilt 'tag' (Notification API dedup'er selv på
+// tag hvis samme device skulle modtage duplikerede pushes).
+function todayDateStringLocal() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// ── GET /api/stats — offentlig, ingen adgangsbeskyttelse (bevidst valg) ─────
+// Installationstal pr. platform, push-adoption, indsendte badestedsvurderinger,
+// og udsendte webpush pr. type (24t/7d/total). Se app-metrics.js's filhoved
+// for hvorfor "aktiv"/"nogensinde set" hhv. "24t/7d/total" rapporteres
+// adskilt i stedet for ét samlet tal.
+app.get('/api/stats', async (req, res) => {
+  try {
+    const [installStats, vurderingStats, pushSendStats, pushSubscriptionCount] = await Promise.all([
+      appMetrics.getInstallStats(),
+      badestedObs.getVurderingStats(),
+      appMetrics.getPushSendStats(),
+      getPushSubscriptionCount(),
+    ]);
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      generatedAt: Date.now(),
+      installs: installStats,
+      pushSubscriptions: pushSubscriptionCount,
+      vurderinger: vurderingStats,
+      pushSends: pushSendStats,
+    });
+  } catch (e) {
+    console.error('/api/stats fejlede:', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente statistik.' });
+  }
+});
+
+// ── GET /api/stats/history — dagligt statistik-øjebliksbillede over tid ────
+// Adskilt fra /api/stats ovenfor (som viser NUVÆRENDE totaler) — denne
+// leverer historikken der driver /stats' udviklingsgrafer, se
+// runDailyStatsSnapshotJob() og appMetrics.getStatsHistory(). Offentlig,
+// ingen adgangsbeskyttelse, samme bevidste valg som /api/stats selv.
+app.get('/api/stats/history', async (req, res) => {
+  try {
+    // NYT: ?days= valgfri, capped 7-365 — undgår både et meningsløst
+    // 0/negativt vindue og et ubegrænset stort opslag ved en forkert/
+    // ondsindet query-parameter. Standard 90 dage — nok til at vise en
+    // meningsfuld trend uden at overbelaste den lille graf med for mange
+    // punkter.
+    const requested = parseInt(req.query.days, 10);
+    const days = Number.isFinite(requested) ? Math.max(7, Math.min(365, requested)) : 90;
+    const history = await appMetrics.getStatsHistory(days);
+    res.set('Cache-Control', 'no-store');
+    res.json({ generatedAt: Date.now(), days, history });
+  } catch (e) {
+    console.error('/api/stats/history fejlede:', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente statistikhistorik.' });
+  }
+});
+
+// ── Web Push: send notifications to all subscribers ────────────────────────
+// Called internally by the server's weather-refresh cycle.
+// Also exposed as POST /api/push/send for manual triggering (e.g. cron job).
+//
+// RETTET (se samtalen for baggrund): sendte tidligere KUN varsler baseret på
+// enkelte udløbs egen bakterielle prognoserisiko — også for badested-
+// favoritter, hvor beskeden viste kryptiske udløbskoder ("U17 +2") i stedet
+// for badestedets navn. To problemer løst her:
+//   1. Badested-favoritter aggregeres nu til SAMME "samlede risiko"-metrik
+//      badevandspanelet selv viser (max af bakteriel+viral prognoserisiko
+//      på tværs af alle nærliggende udløb) — matematisk identisk
+//      udløsningsbetingelse som "mindst ét udløb over tærsklen", men nu
+//      korrekt navngivet efter badestedet, og inkluderer viral (ikke kun
+//      bakteriel som før).
+//   2. Alge UDELADT bevidst — afhænger af CMEMS-strømdata/vandmaske, der
+//      kun findes klient-side, se risk-model.js.
+// `pointRisks` er valgfri (Map af udløbs-ID -> {foreRisk, foreViralRisk,
+// hasRain, ...}) — udelades den (fx ved manuelle test-kald til
+// /api/push/send), fungerer badested-grupper simpelthen ikke, uden at
+// resten af funktionen fejler.
+// RETTET: gensendte tidligere SAMME varsel hver 15. minut, så længe en
+// risiko forblev over tærsklen — tag: 'overloeb-varsling' erstatter kun
+// notifikationen VISUELT i bakken, men forhindrer ikke enheden i at
+// ringe/vibrere igen ved hver kørsel. En regnhændelse holder typisk
+// risikoen forhøjet i mange timer, så dette betød reel, gentagen spam for
+// samme, uændrede situation. Deduplikerer nu pr. sted (udløb/badested):
+// et sted varsles kun igen hvis (a) det er FØRSTE gang det krydser
+// tærsklen, (b) der er gået mindst COOLDOWN_MS siden sidste varsel om
+// PRÆCIS dette sted, eller (c) risikoen er steget markant siden sidst
+// (reel, ny information, selv inden for cooldown-perioden).
+const NOTIFY_ESCALATION_DELTA = 0.15;              // 15 procentpoint stigning udløser genvarsling
+
+// RETTET: opdelt i enqueuePushNotifications() (ren beslutning, intet
+// netværkskald) og flushPushQueue() (selve den samtidige afsendelse) — se
+// pushSendQueue's filhoved ovenfor for fuld begrundelse. Denne funktion
+// beslutter fortsat PRÆCIS det samme som før (uændret dedup-/eskalerings-
+// logik og selve beskeden), men sætter nu jobbet i kø i stedet for at
+// afsende det direkte her.
+// RETTET (bruger-ønske 2026-07-26): `cascadeResult` (badevandRisk.
+// computeBadevandRiskCascade()'s {lakes, kystvande, badevand}-resultat) er
+// nu valgfri fjerde parameter — bruges til at give badested-favoritters
+// "nu"-signal PRÆCIS samme, allerede spildevands-filtrerede og (for
+// kystvand) afstandskorrigerede tal som badevandspanelet selv viser, i
+// stedet for udelukkende at stole på den simple 15 km-radius-prognose
+// nedenfor. Udelades den (fx den manuelle /api/push/send-test), falder
+// koden tilbage til KUN prognose-signalet, som før denne rettelse.
+async function enqueuePushNotifications(warnPoints, pointRisks, bypassDedup = false, cascadeResult = null) {
+  if (!VAPID_PUBLIC_KEY) return 0;
+  // NYT (Postgres-migrering): ÉT batch-opslag af ALLE abonnementer, i
+  // stedet for at iterere en langtlevende in-memory Map — se
+  // getAllPushSubscriptions()/mapSubscriptionRow() ovenfor. mapSubscriptionRow()
+  // garanterer allerede notifiedState er et objekt (aldrig undefined), så
+  // ingen særskilt "initialisér hvis manglende"-gren er nødvendig længere.
+  const subs = await getAllPushSubscriptions();
+  if (subs.length === 0) return 0;
+  pointRisks = pointRisks || new Map();
+  const badevandById = new Map((cascadeResult?.badevand || []).map(b => [String(b.id), b]));
+  const coordIndex = cascadeResult ? getBadevandCoordIndex() : null;
+
+  // RETTET (bruger-ønske 2026-08-12): der blev tidligere ALSO sendt push
+  // for individuelt favoriserede PULS-udløb (favourites-arrayet, se
+  // toggleFav()/warnMap ovenfor — begge nu fjernet), ikke kun for
+  // badested-favoritter (badevandGroups). Push skal alene handle om
+  // BADESTEDER — et enkelt regnvandsudløb er ikke i sig selv relevant nok
+  // til en notifikation, kun det SAMLEDE billede for et badested (som
+  // beachHits nedenfor allerede beregner, spildevands-filtreret og
+  // afstands-/strømkorrigeret). favourites-arrayet gemmes fortsat server-
+  // side (se /api/push/subscribe), men bruges ikke længere her.
+  const now = Date.now();
+  let queued = 0, skippedDuplicate = 0;
+  const inserts = [];
+
+  for (const entry of subs) {
+    const { endpoint, badevandGroups, notifiedState } = entry;
+
+    // Badested-grupper: aggregér til SAMME metrik badevandspanelet viser
+    const beachHits = [];
+    for (const group of (badevandGroups || [])) {
+      let nowRisk = 0;
+      let forecastRisk = 0;
+      let scopedForecast = false;
+      // NYT (bruger-ønske 2026-07-26): "nu"-signalet bruger badevandspanelets
+      // EGET, allerede beregnede resultat (wastewater-filtreret, og for
+      // kystvand gennemsnit af de faktisk matchede badesteders egne
+      // afstands-/strømkorrigerede scorer, se badevand-risk.js) — slås op
+      // via samme koordinat-nøgle som badestedet blev favoriseret med.
+      if (coordIndex && group.lat != null && group.lng != null) {
+        const bvId = coordIndex.get(`${group.lat.toFixed(4)}:${group.lng.toFixed(4)}`);
+        const bv = bvId != null ? badevandById.get(bvId) : null;
+        if (bv) {
+          nowRisk = Math.max(bv.bact || 0, bv.viral || 0);
+          // RETTET (bruger-rapporteret — "Vester Lyng ved Havnsø": push om
+          // natten, badestedssiden viste grønt og ingen 24h-varsel ved
+          // opslag): forecastRisk blev tidligere ALTID beregnet ud fra
+          // group.pulsIds (klientens rå, uretningsbestemte 15 km-boks — se
+          // toggleBadevandFav()/_currentBvNearbyIds), helt uafhængigt af
+          // badevandspanelets EGEN "⚡ 24h prognose"-visning, som bruger
+          // bv.forecast (badevand-risk.js's badested-scopede, spildevands-
+          // filtrerede prognose, samme kilde som lige ovenfor for nowRisk).
+          // Et PULS-punkt 10+ km væk, i et andet vandsystem, men inden for
+          // den rå boks, kunne dermed udløse et push, mens badestedets
+          // EGET prognosetal (det brugeren så ved at følge linket) forblev
+          // 0/grønt — nøjagtig samme klasse fejl som "Vollerup Badebro"
+          // (se isForecast nedenfor), blot i prognose-halvdelen af
+          // signalet, som den daværende rettelse ikke dækkede, fordi
+          // bv.forecast dengang ikke fandtes endnu.
+          if (bv.forecast != null) { forecastRisk = bv.forecast; scopedForecast = true; }
+        }
+      }
+      // Fallback KUN hvis badestedet ikke har noget cascade-match overhovedet
+      // (source:'ingen' — intet bekræftet sø-/kystvand fundet) — her findes
+      // intet scopet bv.forecast at falde tilbage på, så den brede,
+      // uretningsbestemte 15 km-radius-liste er stadig bedre end intet
+      // signal. Respekterer samme spildevandsfilter som før (se pointRisks'
+      // isWastewater, sat i _evaluatePushNotificationsInner()).
+      if (!scopedForecast) {
+        for (const id of (group.pulsIds || [])) {
+          const pr = pointRisks.get(String(id));
+          if (!pr || pr.isWastewater === false) continue;
+          forecastRisk = Math.max(forecastRisk, pr.foreRisk || 0, pr.foreViralRisk || 0);
+        }
+      }
+      const maxRisk = Math.max(nowRisk, forecastRisk);
+      if (maxRisk > 0.35) {
+        // RETTET (bruger-rapporteret — Vollerup Badebro: push viste "100%
+        // risiko", men badestedets EGEN nu-score var ~0%): et badested-
+        // varsel kan udløses UDELUKKENDE af forecastRisk (nærliggende PULS-
+        // punkters foreRisk/foreViralRisk, ingen relation til bv.bact/viral,
+        // som badevandspanelet selv viser som "nu"). isForecast afgør om
+        // det reelt VAR forecast-delen, der udløste varslet — bruges
+        // herunder til at tilføje en "(prognose)"-markering i selve
+        // beskeden, så den ikke fremstår som en påstand om nuet.
+        const isForecast = forecastRisk > nowRisk;
+        // NYT: lat/lng medbringes nu, så selve push-beskeden kan linke
+        // direkte til badestedets detaljeside (se url herunder) i stedet
+        // for altid at pege på forsiden.
+        beachHits.push({ kind: 'beach', key: `beach:${group.key || group.name}`, name: group.name, risk: maxRisk, isForecast, lat: group.lat, lng: group.lng });
+      }
+    }
+
+    // RETTET (bruger-ønske 2026-08-12): kun badested-hits — se filhovedets
+    // begrundelse ovenfor for hvorfor individuelle udløbs-favoritter
+    // (tidligere outletHits her) ikke længere bidrager til push.
+    const hits = beachHits;
+    if (hits.length === 0) continue;
+
+    // Afgør om MINDST ét sted reelt er "nyt nok" til at retfærdiggøre en
+    // notifikation nu — resten af hits vises stadig MED i selve beskeden
+    // for kontekst, men udløser ikke i sig selv en ny notifikation.
+    //
+    // RETTET: fjernet den tidsbaserede "påmindelse hver 6. time"-regel
+    // helt, efter eksplicit tilbagemelding — kun to betingelser udløser nu
+    // et varsel: (1) FØRSTE gang stedet krydser tærsklen, eller (2) risikoen
+    // er steget markant siden sidste varsel. INGEN automatisk gentagelse
+    // baseret på forløbet tid alene, uanset hvor længe risikoen forbliver
+    // uændret forhøjet.
+    const worthyHits = bypassDedup ? hits : hits.filter(h => {
+      const prev = notifiedState[h.key];
+      if (!prev) return true;                                            // aldrig varslet før
+      if ((h.risk || 0) - (prev.risk || 0) > NOTIFY_ESCALATION_DELTA) return true; // markant eskaleret
+      return false;
+    });
+    if (worthyHits.length === 0) { skippedDuplicate++; continue; }
+
+    // RETTET: url pegede tidligere ALTID på forsiden ('/'), uanset hvad
+    // varslet faktisk handlede om. Bruger nu det samme #badevand=lat:lng /
+    // #udlob=id deep-link-mønster, appens egen frontend allerede
+    // understøtter (se handleHash() i dansk-overloeb-kort.html), så et
+    // klik på notifikationen åbner PRÆCIS det pågældende sted — badested
+    // eller udløbspunkt — i stedet for bare forsiden, hvor brugeren selv
+    // skulle lede det frem igen.
+    const primaryHit = hits[0];
+    // RETTET (bruger-ønske 2026-08-12): hits indeholder nu KUN badested-
+    // hits (se filhovedet ovenfor) — #udlob=id-grenen er derfor fjernet,
+    // den kunne aldrig længere rammes.
+    const notifyUrl = (primaryHit.lat != null && primaryHit.lng != null) ? `/#badevand=${primaryHit.lat}:${primaryHit.lng}` : '/';
+
+    const payload = JSON.stringify({
+      title: `⚠ Overløbsvarsling: ${hits[0].name}${hits.length > 1 ? ` +${hits.length - 1}` : ''}`,
+      body: hits.map(h =>
+        `${h.name} · ${((h.risk || 0)*100).toFixed(0)}% risiko${h.isForecast ? ' (prognose)' : ''}`
+      ).join('\n'),
+      tag: 'overloeb-varsling',
+      url: notifyUrl,
+    });
+
+    // NYT: sættes i kø i stedet for at sende her direkte — selve
+    // netværkskaldet (og den tilhørende notifiedState-opdatering, som KUN
+    // må ske ved en FAKTISK lykkedes afsendelse, ikke blot en beslutning om
+    // at sende) sker nu i flushPushQueue() nedenfor. hitStamps bærer
+    // ALLE viste steder videre (ikke kun det udløsende), samme begrundelse
+    // som den tidligere inline-opdatering havde. INSERT er allerede
+    // holdbart gemt — ingen separat persistPushQueue()-fil-skrivning
+    // nødvendig længere (se filhovedet).
+    inserts.push(query(`
+      INSERT INTO push_send_queue (endpoint, type, payload, hit_stamps, enqueued_at)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [endpoint, PUSH_SEND_TYPES.RISIKOVARSEL, payload, JSON.stringify(hits.map(h => ({ key: h.key, risk: h.risk }))), now]));
+    queued++;
+  }
+
+  await Promise.all(inserts);
+
+  // RETTET: loggede tidligere kun ved faktisk afsendelse/fejl — men "0
+  // sendt" er nu et FORVENTET, normalt udfald (deduplikering), ikke kun et
+  // tegn på at ingenting var galt. Log altid, uanset udfald, så et roligt
+  // 15-minutters-tjek kan skelnes fra "kørte aldrig" og fra "sendte reelt
+  // ingenting fordi alt allerede var varslet for nyligt".
+  console.info(`Push: ${queued} varsel(er) sat i kø, ${skippedDuplicate} deduplikeret (allerede varslet for nyligt)`);
+  return queued;
+}
+
+// Bekvemmeligheds-wrapper: sætter i kø OG AFVENTER selve den samtidige
+// afsendelse er færdig, før den returnerer. Bruges KUN af de manuelle
+// test-endpoints nedenfor, hvor et menneske forventer at se det reelle
+// udfald med det samme. Den automatiske, periodiske sti
+// (evaluatePushNotifications() længere nede) kalder i stedet
+// enqueuePushNotifications() direkte og AFVENTER IKKE flushPushQueue() —
+// se pushSendQueue's filhoved for hvorfor.
+async function sendPushNotifications(warnPoints, pointRisks, bypassDedup = false) {
+  await enqueuePushNotifications(warnPoints, pointRisks, bypassDedup);
+  await flushPushQueue();
+}
+
+// Manual trigger endpoint (for testing)
+app.post('/api/push/send', async (req, res) => {
+  // Accept a warnPoints array directly for testing
+  const { warnPoints } = req.body || {};
+  if (!Array.isArray(warnPoints)) return res.status(400).json({ error: 'warnPoints array required' });
+  // bypassDedup=true: dette ER en manuel test — skal altid rent faktisk
+  // sende, uafhængigt af om en reel notifikation for samme sted allerede
+  // gik ud for nyligt (se NOTIFY_ESCALATION_DELTA i sendPushNotifications()).
+  await sendPushNotifications(warnPoints, null, true);
+  res.json({ ok: true, subscribers: await getPushSubscriptionCount() });
+});
+
+// NYT: manuel udløsning af den FULDE, autonome evaluering (vejr-opslag +
+// risikoberegning + tærskel-filter + afsendelse) — i modsætning til
+// /api/push/send ovenfor, som kræver at warnPoints allerede er kendt.
+// Bruges til at teste hele kæden med det samme, uden at vente på et reelt
+// vejrudsving eller den periodiske 6-timers cyklus.
+//
+// NYT (?test=1): sænker MIDLERTIDIGT tærsklen til et minimalt niveau —
+// KUN for dette ene kald — så selv et forsvindende lille, men reelt,
+// vejrsignal udløser et fund. Formålet er at bekræfte at find-og-send-
+// kæden virker korrekt, når der rent faktisk ER noget at finde, uden at
+// skulle vente på et ægte kraftigt regnvejr. Den periodiske,
+// AUTOMATISKE evaluering (se de tre warmCache()-kædede kaldssteder
+// ovenfor) kalder ALDRIG med dette flag — jeres rigtige brugere kan
+// derfor ikke modtage et varsel udløst af denne sænkede tærskel.
+app.post('/api/push/evaluate-now', async (req, res) => {
+  try {
+    const testMode = req.query.test === '1';
+    const testThresholds = testMode ? { minRisk: 0.001 } : undefined;
+    await evaluatePushNotifications(testThresholds);
+    res.json({
+      ok: true,
+      testMode,
+      thresholds: testThresholds || { minRisk: 0.35 },
+      diagnostics: _latestDiagnostics,
+      subscribers: await getPushSubscriptionCount(),
+      warnPointsFound: _latestWarnPoints.length,
+      warnPoints: _latestWarnPoints,
+      weatherCacheCells: weatherCache.size,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── CMEMS Baltic Current Data ────────────────────────────────────────────────
+// Dataset: cmems_mod_bal_phy_cur_anfc_2.5km_PT1H-i
+// Variables: uo (eastward m/s), vo (northward m/s)
+// Auth: CMEMS_USERNAME + CMEMS_PASSWORD (Fly.io secrets)
+// Cache: 6 hours — currents change slowly relative to our use case
+//
+// Access strategy: delegeret til Python via den officielle Copernicus Marine
+// Toolbox (`copernicusmarine`-pakken, se fetch_currents.py). Den tidligere
+// version parsede OPeNDAP/THREDDS ASCII-output manuelt med regex, hvilket var
+// skrøbeligt overfor selv små formatændringer på THREDDS-serveren. Toolbox'en
+// håndterer autentificering, dataset-opslag og subsetting korrekt og er den
+// anbefalede adgangsvej til CMEMS-data.
+// Falls back to null gracefully — app works without currents data.
+
+const { execFile } = require('child_process');
+
+// RETTET: var sat til 6 timer, men appens egen UI-tekst (se
+// "Strømdata (CMEMS) ... opdateres hver time" i dansk-overloeb-kort.html)
+// lover brugerne HVER TIME — en reel, målelig uoverensstemmelse mellem det
+// lovede og det faktiske, ikke blot en cache, der "føltes" forældet.
+// Ingen dokumenteret grund (fx rate-limit hos Copernicus Marine) blev
+// fundet for det oprindelige 6-timers-valg. Sat til at matche det, appen
+// selv hævder.
+const CURRENTS_TTL       = 1 * 3600 * 1000;
+const PYTHON_SCRIPT      = path.join(__dirname, 'fetch_currents.py');
+const PYTHON_BIN         = process.env.PYTHON_BIN || 'python3';
+const PYTHON_TIMEOUT     = 180 * 1000; // CMEMS-opslag over Fly's netværk kan tage 100+ sek
+// DATA_DIR (Volume-mount) er defineret øverst i filen — genbruges her til
+// samme strøm-cache-fil.
+const CURRENTS_CACHE_FILE = path.join(DATA_DIR, 'currents-cache.json');
+
+let currentsCache          = { ts: 0, grid: null, error: null };
+let currentsRefreshInFlight = false;
+let currentsRefreshPromise  = null;
+
+// ── Disk-persistens ───────────────────────────────────────────────────────
+// Fly.io autostopper maskinen ved inaktivitet og genstarter den ved næste
+// request. Uden persistens ville HVER genstart tvinge den første bruger til
+// at vente 100+ sekunder på et koldt CMEMS-opslag. Ved at gemme sidste
+// vellykkede resultat på disk (samme VM-filsystem, overlever autostop/start —
+// men ikke en fuld ny deploy) kan vi indlæse det øjeblikkeligt ved opstart
+// og opdatere i baggrunden i stedet.
+function loadPersistedCurrents() {
+  try {
+    const raw    = fs.readFileSync(CURRENTS_CACHE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.ts && Array.isArray(parsed.points) && parsed.points.length) {
+      currentsCache = { ts: parsed.ts, grid: buildCurrentGrid(parsed.points), error: null };
+      const ageMin = Math.round((Date.now() - parsed.ts) / 60000);
+      console.log(`CMEMS currents: indlæst ${parsed.points.length} punkter fra disk-cache (alder: ${ageMin} min)`);
+    }
+  } catch (e) {
+    // Helt normalt ved allerførste deploy — ingen disk-cache endnu
+  }
+}
+
+function persistCurrentsToDisk(points, ts) {
+  fs.writeFile(CURRENTS_CACHE_FILE, JSON.stringify({ ts, points }), (err) => {
+    if (err) console.warn('Kunne ikke skrive strøm-cache til disk:', err.message);
+  });
+}
+
+// Kør fetch_currents.py og parse JSON på stdout
+//
+// To CPU-hensyn, vigtige på Fly's delte vCPU'er:
+// 1. `nice -n 19` sænker processens OS-skemalægningsprioritet til minimum,
+//    så den kun bruger CPU-tid Node ikke selv har brug for i øjeblikket —
+//    uden dette konkurrerer den tunge xarray/numpy-regning direkte med
+//    Node's event loop om processortid, og HELE appen (ikke kun strøm-
+//    endpointet) bliver mærkbart langsom, mens scriptet kører.
+// 2. *_NUM_THREADS=1 forhindrer numpy/BLAS i selv at sprede beregninger over
+//    flere tråde — på en maskine med få (delte) vCPU'er skaber det kun
+//    kontekst-skift-overhead i stedet for reel fremskyndelse.
+const PYTHON_ENV = {
+  ...process.env,
+  OMP_NUM_THREADS: '1',
+  OPENBLAS_NUM_THREADS: '1',
+  MKL_NUM_THREADS: '1',
+  NUMEXPR_NUM_THREADS: '1',
+};
+
+function runPythonFetch() {
+  return new Promise((resolve, reject) => {
+    execFile(
+      'nice',
+      ['-n', '19', PYTHON_BIN, PYTHON_SCRIPT],
+      { timeout: PYTHON_TIMEOUT, maxBuffer: 32 * 1024 * 1024, env: PYTHON_ENV },
+      (err, stdout, stderr) => {
+        if (stderr && stderr.trim()) {
+          console.warn('fetch_currents.py stderr:', stderr.trim().slice(0, 500));
+        }
+        // Scriptet outputter altid gyldig JSON på stdout, også ved fejl
+        // ({"error": "..."}), så vi forsøger at parse uanset exit code.
+        let parsed;
+        try {
+          parsed = JSON.parse((stdout || '').trim());
+        } catch (parseErr) {
+          return reject(new Error(
+            err ? `python fejlede: ${err.message}` : `ugyldigt output: ${parseErr.message}`
+          ));
+        }
+        if (parsed.error) return reject(new Error(parsed.error));
+        resolve(parsed);
+      }
+    );
+  });
+}
+
+// RETTET (KRITISK — se badevand-risk.js:190-203 for den oprindelige
+// hændelse): getCurrentAtServer() faldt for ethvert reelt badested tilbage
+// til et LINEÆRT SCAN over alle ~1.500 CMEMS-strømpunkter, fordi dens
+// "hurtige" nøgle (afrundet til nærmeste 0,5°) næsten aldrig matchede et
+// faktisk punkts koordinat (som ikke ligger 0,5°-justeret) — kaldt op til
+// hundredtusindvis af gange pr. badevand-risk-beregning, nok til at en enkelt
+// cyklus observeret i produktion tog 93,8 sek (mod normalt ~10 sek), og
+// blokerede Node's event loop imens. buildCurrentGrid() bygger nu ET rigtigt
+// spatialt bucket-index (0,5°-celler) ved siden af selve punkt-Map'en (kun
+// bevaret for .size, se currentsCache.grid-brug andre steder), så et opslag
+// kun skal tjekke nabocellerne omkring punktet — O(1) i praksis, ikke O(n).
+const CURRENT_BUCKET_SIZE = 0.5;
+function buildCurrentGrid(points) {
+  const grid = new Map();
+  const buckets = new Map();
+  for (const p of points) {
+    const speed = Math.hypot(p.uo, p.vo);
+    const dir   = (Math.atan2(p.uo, p.vo) * 180 / Math.PI + 360) % 360; // 0=N,90=E
+    const entry = { lat: p.lat, lng: p.lng, uo: p.uo, vo: p.vo, speed, dir, temp: p.temp ?? null };
+    grid.set(`${p.lat.toFixed(2)}:${p.lng.toFixed(2)}`, entry);
+    const bKey = `${Math.floor(p.lat / CURRENT_BUCKET_SIZE)}:${Math.floor(p.lng / CURRENT_BUCKET_SIZE)}`;
+    let arr = buckets.get(bKey);
+    if (!arr) { arr = []; buckets.set(bKey, arr); }
+    arr.push(entry);
+  }
+  grid.buckets = buckets;
+  return grid;
+}
+
+// NYT: server-side port af klientens getCurrentAt() — identisk logik,
+// genbruger samme currentsCache.grid-struktur direkte (se
+// buildCurrentGrid() ovenfor, allerede fælles mellem klient og server).
+// Bruges af evaluatePushNotifications() til algeberegningens CMEMS-
+// temperaturopslag — se risk-model.js's computeAlgaeRisk() filhoved for
+// hvorfor dette først nu blev flyttet server-side.
+function getCurrentAtServer(lat, lng, grid) {
+  if (!grid || grid.size === 0 || !grid.buckets) return null;
+  const bLat = Math.floor(lat / CURRENT_BUCKET_SIZE);
+  const bLng = Math.floor(lng / CURRENT_BUCKET_SIZE);
+  let minDist = Infinity, nearest = null;
+  // Udvider søgeringen bucket-ring for bucket-ring i stedet for at scanne
+  // ALLE punkter — ring 4 (× 0,5°) dækker rigeligt den accepterede
+  // 1,5°-grænse nedenfor, med god margin til CMEMS' ~10 km punktafstand.
+  for (let ring = 0; ring <= 4; ring++) {
+    for (let dLat = -ring; dLat <= ring; dLat++) {
+      for (let dLng = -ring; dLng <= ring; dLng++) {
+        if (Math.max(Math.abs(dLat), Math.abs(dLng)) !== ring) continue; // kun ringens rand — det indre er allerede tjekket i tidligere iterationer
+        const arr = grid.buckets.get(`${bLat + dLat}:${bLng + dLng}`);
+        if (!arr) continue;
+        for (const v of arr) {
+          const d = Math.hypot(v.lat - lat, v.lng - lng);
+          if (d < minDist) { minDist = d; nearest = v; }
+        }
+      }
+    }
+    if (minDist < 0.3) break;
+  }
+  return minDist < 1.5 ? nearest : null;
+}
+
+// Selve netværkskaldet — altid asynkront, opdaterer cache + disk ved succes,
+// beholder eksisterende (forældede) cache ved fejl i stedet for at nulstille.
+async function refreshCurrentsNow() {
+  try {
+    const result = await runPythonFetch();
+    if (!result.points || !result.points.length) throw new Error('Ingen strømpunkter modtaget');
+
+    const ts = Date.now();
+    currentsCache = { ts, grid: buildCurrentGrid(result.points), error: null };
+    persistCurrentsToDisk(result.points, ts);
+    console.log(`CMEMS currents: ${result.points.length} punkter hentet via Python (${result.ts})`);
+  } catch (e) {
+    console.warn('CMEMS currents fetch failed:', e.message);
+    if (currentsCache.grid) {
+      console.warn('Beholder forældet strøm-cache pga. fejlet opdatering');
+    } else {
+      currentsCache = { ts: Date.now(), grid: null, error: e.message };
+    }
+  }
+  return currentsCache.grid;
+}
+
+function startCurrentsRefresh() {
+  currentsRefreshInFlight = true;
+  currentsRefreshPromise = refreshCurrentsNow().finally(() => {
+    currentsRefreshInFlight = false;
+    currentsRefreshPromise = null;
+  });
+  return currentsRefreshPromise;
+}
+
+function triggerBackgroundRefresh() {
+  if (currentsRefreshInFlight) return;
+  startCurrentsRefresh();
+}
+
+// Stale-while-revalidate: frisk cache → returnér med det samme.
+// Forældet men til stede (fx indlæst fra disk efter genstart) → returnér
+// med det samme OG trigger en baggrunds-opdatering, uden at blokere kalderen.
+// Ingen cache overhovedet (kun ved allerførste kolde deploy) → vent synkront.
+async function fetchCMEMSCurrents() {
+  const isFresh = currentsCache.grid && (Date.now() - currentsCache.ts < CURRENTS_TTL);
+  if (isFresh) return currentsCache.grid;
+
+  if (currentsCache.grid) {
+    triggerBackgroundRefresh();
+    return currentsCache.grid;
+  }
+
+  // Ingen cache overhovedet — flere samtidige kald (fx det planlagte
+  // opvarmningskald og en rigtig brugerforespørgsel, der rammer inden for
+  // samme sekund ved kold opstart) skal dele ÉN igangværende hentning i
+  // stedet for hver at starte deres egen Python-proces. Genbruger samme
+  // in-flight-lås som triggerBackgroundRefresh().
+  if (currentsRefreshInFlight) return currentsRefreshPromise;
+  return startCurrentsRefresh();
+}
+
+// Indlæs evt. tidligere gemte strømdata synkront ved opstart, før noget andet
+loadPersistedCurrents();
+
+// Warm currents on startup, then keep self-correcting based on ACTUAL
+// cache age — ikke en fast timer.
+// RETTET: brugte tidligere setInterval(fn, CURRENTS_TTL) — men den slags
+// interval tæller fra det tidspunkt SERVERPROCESSEN starter, ikke fra
+// hvornår data sidst faktisk blev hentet med succes. Enhver genstart
+// (deploy, Fly-genstart, OOM) nulstillede timeren til at tælle forfra,
+// mens den PERSISTEREDE cache beholdt sit gamle, ægte tidsstempel — gabet
+// mellem "sidste succesfulde hentning" og "næste forsøg" kunne derfor
+// blive LÆNGERE end selve TTL'en, præcis som observeret (86 min alder på
+// en nominel 60-min TTL). Tjekker nu hvert minut om cachen REELT er
+// forældet (baseret på currentsCache.ts, ikke på hvor længe processen har
+// kørt) — selv-korrigerende uanset hvor mange genstarter der sker
+// undervejs.
+setTimeout(() => fetchCMEMSCurrents(), 30000);
+setInterval(() => {
+  if (Date.now() - currentsCache.ts > CURRENTS_TTL) fetchCMEMSCurrents();
+}, 60 * 1000);
+
+// ── GET /api/currents — serve current vector grid ────────────────────────────
+app.get('/api/currents', async (req, res) => {
+  const grid = await fetchCMEMSCurrents();
+  if (!grid) {
+    return res.status(503).json({
+      error: currentsCache.error || 'No current data',
+      fallback: true
+    });
+  }
+  const out = {};
+  for (const [key, val] of grid) out[key] = val;
+  const ageMinutes = Math.round((Date.now() - currentsCache.ts) / 60000);
+  res.set('Cache-Control', 'public, max-age=21600');
+  // RETTET: brugte tidligere et HÅRDKODET tal (360 minutter = 6 timer) her,
+  // fuldstændig UAFHÆNGIGT af CURRENTS_TTL-konstanten ovenfor. Da
+  // CURRENTS_TTL blev rettet fra 6t til 1t tidligere, blev denne anden,
+  // adskilte reference overset — den refererede slet ikke til konstanten,
+  // kun et løsrevet tal. Serveren blev derfor ved med at kalde 3 timer
+  // gammel data "ikke forældet", uanset den rettede TTL. Bruger nu
+  // konstanten direkte, så der kun er ét sted at holde synkroniseret
+  // fremover.
+  res.json({ ts: currentsCache.ts, ageMinutes, stale: (Date.now() - currentsCache.ts) > CURRENTS_TTL, points: out });
+});
+
+// ── GET /api/debug additions ──────────────────────────────────────────────────
+
+app.get('/api/debug', (req, res) => {
+  const all   = [...weatherCache.entries()];
+  const now   = Date.now();
+  const warm  = all.filter(([, e]) => now - e.ts < WEATHER_TTL_MS);
+  const stale = all.filter(([, e]) => now - e.ts >= WEATHER_TTL_MS);
+  const sample = warm.slice(0, 5).map(([k, e]) => ({
+    key:          k,
+    antecedentMM: e.data?.antecedentMM ?? null,
+    todayMM:      e.data?.todayMM      ?? null,
+    forecastMM:   e.data?.forecastMM   ?? null,
+    hourlyObsLen: e.data?.hourlyObs?.length ?? 0,
+    ageSeconds:   Math.round((now - e.ts) / 1000),
+  }));
+  res.json({
+    timestamp:      new Date().toISOString(),
+    GRID_DEG,
+    WEATHER_TTL_MS,
+    warmRunning,
+    cacheTotal:     all.length,
+    warmCells:      warm.length,
+    staleCells:     stale.length,
+    apiCallsTotal:  apiCallCount,
+    cacheHitsTotal: cacheHitCount,
+    buildGridSize:  buildDenmarkGrid().length,
+    pulsGridSize:   (_pulsGrid || buildPulsGrid()).length,
+    lastErrors:     fetchErrors,
+    currents: {
+      loaded:  !!currentsCache.grid,
+      points:  currentsCache.grid?.size ?? 0,
+      ageMin:  currentsCache.ts ? Math.round((now - currentsCache.ts) / 60000) : null,
+      error:   currentsCache.error ?? null,
+    },
+    sample,
+  });
+});
+
+// ── Health / cache stats ────────────────────────────────────────────────────
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    weatherCacheCells: weatherCache.size,
+    openMeteoCalls: apiCallCount,
+    cacheHits: cacheHitCount,
+    hitRate: apiCallCount + cacheHitCount > 0
+      ? (cacheHitCount / (apiCallCount + cacheHitCount) * 100).toFixed(1) + '%'
+      : 'n/a',
+    ttlHours: WEATHER_TTL_MS / 3600000,
+  });
+});
+
+// KRITISK RETTET (fundet 10. august 2026, under en robots.txt-forespørgsel):
+// express.static(STATIC_DIR, ...) nedenfor serverede TIDLIGERE bogstaveligt
+// enhver fil i STATIC_DIR (= __dirname, containerens fulde /app) uden nogen
+// begrænsning — bekræftet direkte i produktion: GET /server.js, /db.js,
+// /badested-observations.js, /app-metrics.js, /risk-model.js,
+// /badevand-risk.js, /water-classification.js, /package.json OG
+// /node_modules/express/package.json gav alle HTTP 200. Al server-side
+// kildekode og hele npm-afhængighedstræet var dermed offentligt
+// downloadbart. Ingen hardkodede hemmeligheder blev fundet ved gennemgang
+// (VAPID-nøgler, OBSERVATION_IP_SALT, CMEMS-login — alle læses fra
+// process.env/Fly secrets, aldrig fra kildekoden), men eksponeret rate-
+// limit-logik (MAX_VURDERINGER_PER_IP_PER_DAY m.fl.), den præcise IP-hash-
+// metode (HMAC-SHA256) og DB-forespørgselsstruktur er stadig unødvendig
+// rekognoscering for en angriber, og generel god praksis er ALDRIG at
+// eksponere server-side kildekode.
+//
+// Klienten henter, bekræftet ved gennemgang af dansk-overloeb-kort.html/
+// stats.html/manifest.json, KUN .json/.geojson (data) og .png/.ico
+// (ikoner) via denne generiske "alt andet"-rute — intet lokalt .js hentes
+// nogensinde via <script src> eller fetch() (kun eksterne CDN-scripts,
+// Leaflet). HTML-siderne og service workeren har hver deres egen,
+// eksplicitte route OVENFOR (afvikles derfor allerede FØR dette filter
+// nås). Fail-closed ALLOWLIST (ikke en denylist) af filtyper, håndhævet
+// FØR selve express.static() kaldes.
+//
+// RETTET (bruger-præcisering, samme samtale): indhold (siderne, data-
+// filerne) skal fortsat frit kunne crawles/indekseres af Google m.fl. —
+// KUN kildekoden skal blokeres.
+//
+// RETTET IGEN (fundet ved EGEN efterfølgende produktionsverifikation, FØR
+// den forrige udgave af denne kommentar reelt var bekræftet sand — se
+// dens forkerte "Verificeret: ...node_modules/* giver nu 404"-påstand,
+// som ALDRIG blev testet mod en kørende server): en ren udvidelses-
+// allowliste er UTILSTRÆKKELIG alene, fordi package.json/package-lock.json
+// (roden) og HVER ENESTE package.json i hele node_modules/-træet selv har
+// endelsen .json — nøjagtig samme endelse som de tilsigtede datafiler
+// (puls-data.json m.fl.). GET /package.json og GET /node_modules/express/
+// package.json gav derfor STADIG 200 efter den første rettelse, bekræftet
+// direkte i produktion. Løsning: en STI-baseret spærring (node_modules/-
+// præfiks + eksakte filnavne) tjekkes NU FØRST, før selve endelses-
+// allowlisten — de to lag dækker hver sin svaghed (endelse alene kan ikke
+// skelne to .json-filer fra hinanden efter FORMÅL, kun en eksplicit sti-
+// regel kan). '.txt' er bevidst IKKE i endelses-allowlisten — den ville
+// af samme grund uforvarende have åbnet requirements.txt; robots.txt
+// serveres i stedet via sin egen eksplicitte route (se den, samme mønster
+// som /overloeb-sw.js).
+const BLOCKED_STATIC_PATH_PATTERNS = [
+  /^\/node_modules\//i,
+  /^\/package(-lock)?\.json$/i,
+  /^\/requirements\.txt$/i,
+];
+const PUBLIC_STATIC_EXTENSIONS = new Set(['.json', '.geojson', '.png', '.ico']);
+app.use((req, res, next) => {
+  const blocked = BLOCKED_STATIC_PATH_PATTERNS.some(re => re.test(req.path))
+    || !PUBLIC_STATIC_EXTENSIONS.has(path.extname(req.path).toLowerCase());
+  if (blocked) {
+    // NYT: X-Robots-Tag på selve 404'en er reelt overflødigt (en 404 har
+    // intet indhold at indeksere), men koster intet og gør hensigten
+    // eksplicit/maskinlæsbar for enhver bot der alligevel forsøger — samme
+    // "bekræft med en header, stol ikke kun på statuskoden"-princip som
+    // robots.txt's tilsvarende Disallow-linjer nedenfor.
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    return res.status(404).end();
+  }
+  next();
+});
+
+// Serve any other static assets (varsel page if split out, etc.)
+// RETTET (bruger-ønske: hurtig levering): 5 minutter var urimeligt kort for
+// de facto statiske filer, der reelt havner her — PWA-ikonerne
+// (icons/*.png, kun nogle få KB hver, men hentet ved HVER app-opstart på
+// en installeret PWA) og manifest.json, som begge kun ændrer sig ved en
+// bevidst, sjælden opdatering, ikke løbende. 1 dag er en rimelig,
+// mærkbart bedre standard for denne generiske "alt andet"-rute, uden at
+// være så aggressiv som VP3-filernes 7 dage eller PULS' 14 dage, som
+// begge har en kendt, langt sjældnere opdateringsrytme.
+app.use(express.static(STATIC_DIR, { maxAge: '1d' }));
+
+// ── Periodic cache cleanup ──────────────────────────────────────────────────
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, val] of weatherCache) {
+    if (now - val.ts > WEATHER_TTL_MS * 2) weatherCache.delete(key);
+  }
+  // NYT: beskærer push_send_log til 8 dages historik — se app-metrics.js's
+  // filhoved for hvorfor (kun 24t/7d-vinduerne har brug for rå rækker,
+  // lifetime-totalen holdes separat i push_send_totals, upåvirket).
+  // .catch(): funktionen logger allerede selv internt ved fejl, dette er
+  // blot en sikkerhed mod en ubehandlet promise-rejection (setInterval-
+  // callbacken herover er ikke async).
+  appMetrics.pruneOldPushSendLog().catch(() => {});
+}, 3600 * 1000);
+
+// ── Periodisk engagement-job: stille heartbeat-push + ugentlig badested-digest
+// Kører hver 12. time ("et par gange dagligt", bruger-ønske) — dækker de to
+// formål der begge kræver at kunne nå push-abonnenter UDEN at de selv har
+// åbnet appen: (1) bekræfte installationen stadig lever (stille — se
+// overloeb-sw.js's 'heartbeat'-gren, INGEN synlig notifikation), (2) sende
+// badested-abonnenters ugentlige status hvis mindst 7 dage er gået siden
+// sidste (samme notifiedState-dedup-mønster som overløbsvarslernes
+// escalation-tjek i enqueuePushNotifications(), blot en ny nøgle-namespace
+// 'weekly:', ingen ny lagerstruktur nødvendig).
+const ENGAGEMENT_JOB_INTERVAL_MS = 12 * 3600 * 1000;
+const WEEKLY_DIGEST_MIN_GAP_MS   = 7  * 24 * 3600 * 1000;
+
+async function runPeriodicEngagementJob() {
+  if (!VAPID_PUBLIC_KEY) return;
+  const now = Date.now();
+  const coordIndex = getBadevandCoordIndex();
+  let heartbeats = 0, digests = 0;
+  const inserts = [];
+
+  // NYT (Postgres-migrering): ÉT batch-opslag af ALLE abonnementer (se
+  // getAllPushSubscriptions() ovenfor) OG ét samlet opslag for ALLE
+  // badesteders seneste 7 dage, i stedet for ét opslag PR. badevandGroup
+  // PR. abonnement (541 abonnementer × op til flere grupper hver — ville
+  // have været tusindvis af sekventielle netværks-rundture under
+  // Postgres, hvor det under SQLite var gratis lokale kald). Se
+  // app-metrics.js's getAllWeeklyBadevandHistory().
+  const [subs, allWeeklyHistory] = await Promise.all([
+    getAllPushSubscriptions(),
+    appMetrics.getAllWeeklyBadevandHistory(),
+  ]);
+  if (subs.length === 0) return;
+
+  for (const entry of subs) {
+    const { endpoint, notifiedState } = entry;
+
+    // (1) Stille heartbeat — kun hvis vi kender installId (ældre
+    // abonnementer fra før denne funktion fandtes mangler det; de dækkes
+    // stadig af klientens egne forgrunds-heartbeats, blot ikke via push).
+    if (entry.installId) {
+      inserts.push(query(`
+        INSERT INTO push_send_queue (endpoint, type, payload, hit_stamps, enqueued_at)
+        VALUES ($1, $2, $3, '[]'::jsonb, $4)
+      `, [endpoint, PUSH_SEND_TYPES.HEARTBEAT, JSON.stringify({ type: 'heartbeat', installId: entry.installId, platform: entry.platform }), now]));
+      heartbeats++;
+    }
+
+    // (2) Ugentlig badested-digest — én pr. favoriseret badested, hvis
+    // mindst 7 dage siden sidste (eller aldrig sendt før).
+    for (const group of (entry.badevandGroups || [])) {
+      if (group.lat == null || group.lng == null) continue;
+      const badestedId = coordIndex.get(`${group.lat.toFixed(4)}:${group.lng.toFixed(4)}`);
+      if (badestedId == null) continue;
+
+      const stampKey = `weekly:${badestedId}`;
+      const prev = notifiedState[stampKey];
+      if (prev && now - prev.ts < WEEKLY_DIGEST_MIN_GAP_MS) continue;
+
+      const history = allWeeklyHistory.get(badestedId) || [];
+      const msg = appMetrics.buildWeeklyDigestMessage(group.name || 'Dit badested', history);
+      if (!msg) continue; // for lidt historik endnu, eller ingen reel data hele ugen — spring stille over
+
+      inserts.push(query(`
+        INSERT INTO push_send_queue (endpoint, type, payload, hit_stamps, enqueued_at)
+        VALUES ($1, $2, $3, $4, $5)
+      `, [
+        endpoint, PUSH_SEND_TYPES.UGENTLIG_DIGEST,
+        JSON.stringify({ title: msg.title, body: msg.body, tag: `weekly-${badestedId}`, url: `/#badevand=${group.lat}:${group.lng}` }),
+        // NYT: 'risk' er ubrugt for en digest, men hitStamps-formatet
+        // (fælles med overløbsvarslerne) kræver feltet — se
+        // flushPushQueue(), som SKRIVER notifiedState[stampKey] her, men
+        // KUN ved faktisk lykkedes afsendelse, ikke blot ved kø-tilmelding.
+        JSON.stringify([{ key: stampKey, risk: 0 }]),
+        now,
+      ]));
+      digests++;
+    }
+  }
+
+  if (heartbeats > 0 || digests > 0) {
+    await Promise.all(inserts);
+    console.info(`Engagement-job: ${heartbeats} heartbeat-push, ${digests} ugentlig digest sat i kø`);
+    flushPushQueue().catch(e => console.warn('flushPushQueue (engagement-job) fejl:', e.message));
+  }
+}
+setInterval(() => runPeriodicEngagementJob().catch(e => console.warn('runPeriodicEngagementJob fejl:', e.message)), ENGAGEMENT_JOB_INTERVAL_MS);
+
+// ── Dagligt statistik-øjebliksbillede (bruger-ønske 2026-08-10) ─────────────
+// Til /stats' udviklingsgrafer (installationer/abonnenter/vurderinger/
+// risikovarsel-push over tid) — indsamler PRÆCIS de samme totaler
+// GET /api/stats allerede beregner LIVE (se dens handler nedenfor) og
+// gemmer dem som ét øjebliksbillede pr. dato via
+// appMetrics.recordDailyStatsSnapshot() (se dens filhoved for hvorfor
+// UPSERT, ikke ren INSERT, er bevidst — flere kørsler samme dag er
+// FORVENTEDE, ikke en fejl).
+async function runDailyStatsSnapshotJob() {
+  const [installStats, pushSubscriptionCount, vurderingStats, pushSendStats] = await Promise.all([
+    appMetrics.getInstallStats(),
+    getPushSubscriptionCount(),
+    badestedObs.getVurderingStats(),
+    appMetrics.getPushSendStats(),
+  ]);
+  // NYT: kun risikovarsel-typen tælles her — "# Webpush for risikovarsler"
+  // var eksplicit efterspurgt, ikke summen af alle push-typer (som
+  // allerede vises separat på /stats via pushSends.totals).
+  const riskPushTotal = pushSendStats.byType.find(r => r.type === PUSH_SEND_TYPES.RISIKOVARSEL)?.total ?? 0;
+  await appMetrics.recordDailyStatsSnapshot({
+    activeInstalls:     installStats.activeTotal,
+    pushSubscriptions:  pushSubscriptionCount,
+    vurderingerTotal:   vurderingStats.total,
+    riskPushTotal,
+  });
+}
+const DAILY_STATS_SNAPSHOT_INTERVAL_MS = 24 * 3600 * 1000;
+
+// NYT (Postgres-migrering): afventer at BEGGE moduler har oprettet deres
+// skema, FØR serveren begynder at modtage trafik — en request der rammer
+// fx POST /api/badested-observation før CREATE TABLE er kørt færdig ville
+// ellers fejle med en forvirrende "relation does not exist"-fejl i stedet
+// for blot at vente de få hundrede ms det tager. Alt ANDET boot-arbejde
+// ovenfor (rute-registrering, setInterval-opsætning, den forsinkede
+// warmCache()-opstart) kræver ikke databasen og kører uændret synkront —
+// kun selve lytte-starten er gated.
+Promise.all([appMetrics.ready, badestedObs.ready, schema])
+  .then(() => {
+    app.listen(PORT, HOST, () => {
+      console.log(`Overløbsrisiko server kører på http://${HOST}:${PORT}`);
+      console.log(`  Vejr-proxy: /api/weather?lat=55.7&lng=12.5`);
+      console.log(`  Bulk:       POST /api/weather/bulk { cells: [...] }`);
+      console.log(`  Status:     /api/health`);
+    });
+    // NYT: kørt HER (ikke en løs setTimeout som warmCache() ovenfor bruger)
+    // — denne funktion, i modsætning til warmCache(), læser DIREKTE fra
+    // daily_stats_snapshot/app_installs/badested_vurderinger, og skal derfor
+    // GARANTERET have skemaet klar, ikke blot "sandsynligvis nok tid gået".
+    // Kørt straks (ikke først om 24 timer) så en frisk deploy ikke lader
+    // /stats' grafer mangle dagens punkt i op til et helt døgn.
+    runDailyStatsSnapshotJob().catch(e => console.warn('runDailyStatsSnapshotJob (opstart) fejl:', e.message));
+    setInterval(() => runDailyStatsSnapshotJob().catch(e => console.warn('runDailyStatsSnapshotJob fejl:', e.message)), DAILY_STATS_SNAPSHOT_INTERVAL_MS);
+  })
+  .catch(e => {
+    console.error('Kunne ikke klargøre Postgres-skema ved opstart — serveren starter IKKE:', e.message);
+    process.exit(1);
+  });

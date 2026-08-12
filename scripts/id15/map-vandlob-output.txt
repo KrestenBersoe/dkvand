@@ -1,0 +1,16 @@
+Indlæser id15-polygons.json...
+  3355 oplande indlæst (0.4s)
+Indlæser ../../vp3_vandlob.geojson...
+  6679 vandløbslinjer
+    0/6679 (0.0s)
+    1000/6679 (0.1s)
+    2000/6679 (0.3s)
+    3000/6679 (0.4s)
+    4000/6679 (0.6s)
+    5000/6679 (0.7s)
+    6000/6679 (0.9s)
+
+Matchet: 6679/6679
+  Begge ender udenfor alle oplande: 0
+  Kun én ende matchet: 383
+Skrevet vandlob-to-id15.json (1.6s total)

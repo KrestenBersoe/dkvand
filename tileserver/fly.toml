@@ -1,0 +1,50 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# tileserver/fly.toml — separat Fly.io-app til den selv-hostede kortserver
+#
+# Deployes UAFHÆNGIGT af hoved-appen (dkvand):
+#   cd tileserver
+#   fly launch --name dkvand-tiles --no-deploy   # første gang kun
+#   fly deploy -a dkvand-tiles
+#
+# App-navnet herunder ("dkvand-tiles") bestemmer domænet
+# (dkvand-tiles.fly.dev) — matcher TILE_SERVER_URL i dansk-overloeb-kort.html.
+# Ændrer I navnet, SKAL den URL opdateres tilsvarende.
+# ═══════════════════════════════════════════════════════════════════════════
+app = "dkvand-tiles"
+primary_region = "arn"  # samme region som hoved-appen (Stockholm) — hold dem geografisk tætte
+
+[build]
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # RETTET: auto_stop_machines = "stop" + min_machines_running = 0 betød
+  # maskinen kunne skalere HELT ned til nul ved inaktivitet — den næste
+  # besøgende ville derfor ramme en "kold start" (hel maskine skal boote,
+  # 373+ MB fliser skal indlæses, TileServer GL skal starte), under
+  # hvilken flise-anmodninger kunne time out eller returnere ufuldstændigt.
+  # min_machines_running = 1 holder mindst én maskine varm permanent —
+  # koster lidt mere løbende, men fjerner kold-start-relateret langsomhed/
+  # ufuldstændighed helt.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+# RETTET: hævet fra 1024 til 2048 MB. Server-side rendering af vektor→
+# raster (MapLibre GL Native) er hukommelseskrævende, og observerede
+# symptomer (langsom + ofte ufuldstændig levering under belastning) passer
+# med hukommelsespres ved flere samtidige renderinger — særligt nu hvor
+# fonte og fuld stil er tilkoblet, hvilket øger renderings-kompleksiteten
+# yderligere.
+[[vm]]
+  # RETTET: hævet fra 1 til 2 (2026-07-25) — målt direkte via SSH:
+  # load average 2,4 på en maskine med kun 1 vCPU (nproc=1), samtidig med at
+  # fliser timede helt ud. Server-side vektor→raster-rendering (MapLibre GL
+  # Native) er CPU-tung PR. flise, og en helt almindelig kortvisning beder
+  # om 20-40+ fliser næsten samtidig ved panorering/zoom — 1 delt vCPU kan
+  # kun rendere én ad gangen, resten køer og risikerer at time ud. 2 vCPU'er
+  # tillader reel parallel rendering pr. maskine.
+  cpu_kind = "shared"
+  cpus = 2
+  memory_mb = 2048

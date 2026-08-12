@@ -1,0 +1,30 @@
+# Dependencies — reinstallable via package.json/package-lock.json
+node_modules/
+
+# Genererede tile-cachefiler — store binære/rå datasæt, ikke kildekode
+# (scripts/tiles: ~4,0 GB, tileserver/data: ~1,3 GB). Regenereres af
+# tileserver-opsætningen, hører ikke til i versionsstyring.
+scripts/tiles/
+tileserver/data/
+
+# Automatiske puls-data-backups (skrevet af update-puls.js/opdaterings-
+# scripts ved hver kørsel, tidsstemplet i filnavnet) — ikke kildedata.
+puls-data.bak-*.json
+
+# Lokale miljøvariabler/hemmeligheder (DATABASE_URL, VAPID-nøgler m.fl. —
+# sættes via `fly secrets`, ikke committet).
+.env
+.env.*
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Claude Code lokal permissions-/settings-fil — IKKE til versionsstyring:
+# permission-allowlisten kan indeholde fulde kommandotekster verbatim,
+# inklusive evt. hemmeligheder skrevet inline i tidligere godkendte
+# kommandoer (fx "export TOKEN=...", "KEY=... python3 ..."). Opdaget
+# 2026-08-12: indeholdt et Cloudflare API-token og R2-adgangsnøgler i
+# klartekst — fjernet fra det første commit, roter disse hvis de er brugt
+# til noget reelt.
+.claude/settings.local.json

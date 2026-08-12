@@ -1,0 +1,257 @@
+{
+  "generatedAt": "2026-07-30T20:59:39.311Z",
+  "scope": {
+    "inScope": "Ja/nej-klassifikation: opstod ≥1 overløbshændelse i udløbets eget PULS-rapporteringsår, givet nedbørssignal — på udløbs-år-niveau, IKKE hændelses-/tidsvindue-niveau.",
+    "outOfScope": [
+      "volumenkalibrering (kræver forsyningsselskabernes SRO-data, separat opgave)",
+      "forureningsattribution til badevandskvalitet",
+      "algemodel"
+    ]
+  },
+  "methodologyNote": {
+    "whyNotEventLevel": "PULS indeholder ingen tidsstemplede enkelthændelser (bekræftet af update-puls.js's feltudtræk og eksplicit dokumenteret i compute-puls-udloeb-taerskler.js/PULS-TAERSKLER-RAPPORT.md), kun ét årligt hændelsestal pr. udløb. Oprindelig opgaveformulerings antagelse om ~4.683/~22% udløb med tidsstemplet sensordata holder derfor ikke — se dataset.correctionNote nedenfor.",
+    "labelDefinition": "POSITIV=qualityCode0 (udløbet selv rapporterede ≥1 hændelse i eget latestDischargeYear). NEGATIV=qualityCode1 (\"verificeret nul\", PULS bekræfter eksplicit 0 hændelser/0 volumen). qualityCode2 (estimeret fra volumen) udelukket fra facit — cirkulært at validere imputerede tal mod sig selv.",
+    "dp02Reuse": "Genbruger collapsePeaks()/sliceYear() fra scripts/compute-puls-udloeb-taerskler.js UÆNDRET (5t kollaps på den τ=3-dages-henfaldede akkumulerede serie) — samme konvention som allerede besluttet, ikke redefineret.",
+    "sigmoidMidpointNote": "risk-model.js's computeIntensityFactor(precipMM, thresholdMm) afleder sigmoidens midtpunkt OG hældning direkte og udelukkende af thresholdMm (scale=threshold/5) — der findes intet uafhængigt \"sigmoid-midtpunkt\"-frihedsgrad i den eksisterende kode, adskilt fra selve tærsklen. Denne kalibrering fitter derfor ÉT reelt frihedsgrad for tærskel/midtpunkt (matematisk identiske i nuværende kode), ikke to separate parametre.",
+    "multiplierCircularityNote": "Den nuværende ×3-multiplikator indgår i pOverflow = overflowProbBase * intensityFactor * 3, hvor overflowProbBase = min(eventsYear/DK_RAINY_DAYS_YEAR, 1) — afledt DIREKTE af eventsYear, altså selve det felt der udgør facit her. At bruge overflowProbBase i en klassifikator, der forudsiger OM et udløb havde hændelser, ville være cirkulært (for qualityCode1-udløb er overflowProbBase pr. definition 0, hvilket giver triviel 100% klassifikation). Denne kalibrering udelader derfor overflowProbBase og fitter multiplikatoren direkte på intensityFactor()*multiplier>=1-grænsen (se decisionRule i parameterfilen) — IKKE direkte substituerbar for ×3 i den eksisterende pOverflow-formel uden yderligere vurdering.",
+    "identifiabilityNote": "Med decisionCutoff fast på 1 er (thresholdMm, multiplier) IKKE uafhængigt identificerbare for selve ja/nej-klassifikationen — da computeIntensityFactor() er monoton i precipMM, svarer ethvert (thresholdMm, multiplier)-par til præcis én effektiv nedbørs-mm-grænse (fittedParams.effectivePeakCutoffMm). Mange par giver identisk klassifikationsadfærd, så grid-søgningen kan lande vilkårligt langs denne \"ækvivalens-ryg\" (se f.eks. at multiplier ofte rammer selve gittergrænsen). Den effektive mm-grænse er den reelt tolkbare, veltilpassede størrelse her — de to enkeltparametre (thresholdMm/multiplier) bør IKKE tolkes hver for sig som selvstændigt validerede, kun deres kombinerede effekt. En uafhængig multiplikator-vurdering kræver den KONTINUERLIGE risikoscore holdt op mod faktisk alvorlighed/volumen (uden for scope her, se scope.outOfScope).",
+    "spatialSplitMethod": "Alle udløb i samme 0,25°-nedbørsgittercelle (samme celle som Open-Meteo-caching allerede bruger) tildeles samme train/test-partition via en deterministisk strengehash af cellenøglen — forhindrer at nærliggende udløb i samme kloaksystem/vejrcelle lækker information mellem train og test."
+  },
+  "dataset": {
+    "totalPulsOutlets": 21600,
+    "qualityCodeBreakdown": {
+      "q0_realAnnualCount": 3106,
+      "q1_verifiedZero": 6912,
+      "q2_imputedFromVolume_excludedFromLabels": 10816,
+      "q3_noData_outOfScope": 766
+    },
+    "labeledCandidatePool": 10018,
+    "labeledCandidatePoolShare": "46.4%",
+    "outletsActuallyUsedAfterQualityFilter": 9957,
+    "outletsExcludedForCoverageGaps": 61,
+    "coverageGapShareOfLabeledPool": "0.6%",
+    "exclusionReasons": {
+      "rapporteringsaar_uden_for_nedboersvindue": 43,
+      "ingen_nedboersdata_for_celle": 18
+    },
+    "correctionNote": "Opgavebeskrivelsens antagelse om \"~4.683 udløb / ~22%\" med tidsstemplet sensordata holder IKKE (se methodologyNote.whyNotEventLevel). Faktisk andel med reelt/verificeret årligt facit (qualityCode 0+1) er 46.4% (10018 af 21600), hvoraf 9957 (99.4%) reelt kunne matches til fuld, sammenhængende nedbørsdækning i det aktuelle datavindue (2023-01-01 – 2026-07-15). Resultatet generaliseres IKKE til de resterende udløb uden reelt/verificeret facit (qualityCode 2+3, 53.6%).",
+    "empiricalThresholdContext": "Til reference: de eksisterende PER-UDLØB empirisk udledte tærskler (puls-udloeb-taerskler.json, gruppe 1) spænder ca. 13-67mm, median ~27mm — markant højere end den nuværende globale 5mm-standardværdi i risk-model.js. Denne kalibrerings globale fit bør ses i lyset af den spredning, ikke som en enkelt \"sand\" værdi for alle udløb."
+  },
+  "spatialSplit": {
+    "method": "Gittercelle-baseret (se methodologyNote.spatialSplitMethod), IKKE tidsbaseret, IKKE tilfældig på tværs af enkeltudløb.",
+    "targetTestShare": "~20%",
+    "actualTestShare": "26.9%"
+  },
+  "perSewerType": {
+    "combined_sewer_overflow": {
+      "fittedParams": {
+        "thresholdMm": 60,
+        "multiplier": 6,
+        "decisionCutoff": 1,
+        "effectivePeakCutoffMm": 41.6,
+        "neverTriggersPositive": false
+      },
+      "trainSetSize": 2568,
+      "testSetSize": 781,
+      "trainClassBalance": {
+        "positive": 1769,
+        "negative": 799
+      },
+      "testClassBalance": {
+        "positive": 543,
+        "negative": 238
+      },
+      "trainBalancedAccuracy": 0.5525,
+      "test": {
+        "precision": 0.751,
+        "recall": 0.6722,
+        "specificity": 0.4916,
+        "f1": 0.7094,
+        "balancedAccuracy": 0.5819,
+        "auc": 0.6102,
+        "confusionMatrix": {
+          "tp": 365,
+          "fp": 121,
+          "tn": 117,
+          "fn": 178
+        }
+      },
+      "confidenceIntervals95": {
+        "precision": {
+          "lo": 0.7109,
+          "hi": 0.7899,
+          "n": 1000
+        },
+        "recall": {
+          "lo": 0.6309,
+          "hi": 0.708,
+          "n": 1000
+        },
+        "auc": {
+          "lo": 0.5684,
+          "hi": 0.6508,
+          "n": 1000
+        }
+      }
+    },
+    "separate_stormwater": {
+      "fittedParams": {
+        "thresholdMm": 2,
+        "multiplier": 0.5,
+        "decisionCutoff": 1,
+        "effectivePeakCutoffMm": null,
+        "neverTriggersPositive": true
+      },
+      "trainSetSize": 4475,
+      "testSetSize": 1859,
+      "trainClassBalance": {
+        "positive": 673,
+        "negative": 3802
+      },
+      "testClassBalance": {
+        "positive": 67,
+        "negative": 1792
+      },
+      "trainBalancedAccuracy": 0.5,
+      "test": {
+        "precision": null,
+        "recall": 0,
+        "specificity": 1,
+        "f1": null,
+        "balancedAccuracy": 0.5,
+        "auc": 0.3516,
+        "confusionMatrix": {
+          "tp": 0,
+          "fp": 0,
+          "tn": 1792,
+          "fn": 67
+        }
+      },
+      "confidenceIntervals95": {
+        "precision": null,
+        "recall": {
+          "lo": 0,
+          "hi": 0,
+          "n": 1000
+        },
+        "auc": {
+          "lo": 0.2844,
+          "hi": 0.4263,
+          "n": 1000
+        }
+      }
+    },
+    "andet_or_unknown": {
+      "fittedParams": {
+        "thresholdMm": 70,
+        "multiplier": 6,
+        "decisionCutoff": 1,
+        "effectivePeakCutoffMm": 48.54,
+        "neverTriggersPositive": false
+      },
+      "trainSetSize": 232,
+      "testSetSize": 42,
+      "trainClassBalance": {
+        "positive": 36,
+        "negative": 196
+      },
+      "testClassBalance": {
+        "positive": 18,
+        "negative": 24
+      },
+      "trainBalancedAccuracy": 0.6468,
+      "test": {
+        "precision": 0.7143,
+        "recall": 0.5556,
+        "specificity": 0.8333,
+        "f1": 0.625,
+        "balancedAccuracy": 0.6944,
+        "auc": 0.6713,
+        "confusionMatrix": {
+          "tp": 10,
+          "fp": 4,
+          "tn": 20,
+          "fn": 8
+        }
+      },
+      "confidenceIntervals95": {
+        "precision": {
+          "lo": 0.4444,
+          "hi": 0.9412,
+          "n": 1000
+        },
+        "recall": {
+          "lo": 0.3182,
+          "hi": 0.7778,
+          "n": 1000
+        },
+        "auc": {
+          "lo": 0.4776,
+          "hi": 0.833,
+          "n": 1000
+        }
+      }
+    },
+    "all_combined": {
+      "fittedParams": {
+        "thresholdMm": 40,
+        "multiplier": 3,
+        "decisionCutoff": 1,
+        "effectivePeakCutoffMm": 40,
+        "neverTriggersPositive": false
+      },
+      "trainSetSize": 7275,
+      "testSetSize": 2682,
+      "trainClassBalance": {
+        "positive": 2478,
+        "negative": 4797
+      },
+      "testClassBalance": {
+        "positive": 628,
+        "negative": 2054
+      },
+      "trainBalancedAccuracy": 0.5153,
+      "test": {
+        "precision": 0.2382,
+        "recall": 0.629,
+        "specificity": 0.3851,
+        "f1": 0.3456,
+        "balancedAccuracy": 0.507,
+        "auc": 0.542,
+        "confusionMatrix": {
+          "tp": 395,
+          "fp": 1263,
+          "tn": 791,
+          "fn": 233
+        }
+      },
+      "confidenceIntervals95": {
+        "precision": {
+          "lo": 0.2174,
+          "hi": 0.2583,
+          "n": 1000
+        },
+        "recall": {
+          "lo": 0.5919,
+          "hi": 0.6641,
+          "n": 1000
+        },
+        "auc": {
+          "lo": 0.5157,
+          "hi": 0.5677,
+          "n": 1000
+        }
+      }
+    }
+  },
+  "explicitLimitations": [
+    "Volumen er IKKE valideret i denne kørsel — kun ja/nej-hændelse (opstod ≥1 overløb i rapporteringsåret). Volumenkalibrering kræver forsyningsselskabernes SRO-data og er en separat opgave (se scope.outOfScope).",
+    "Resultatet dækker KUN udløb med reelt rapporteret/verificeret PULS-facit (qualityCode 0+1) — 46.4% af det samlede udløbsantal. Generaliseres IKKE ubegrundet til de resterende 53.6% (qualityCode 2 estimeret fra volumen, qualityCode 3 ingen data).",
+    "Års-opløsning, ikke hændelses-opløsning — PULS har ingen daterede enkelthændelser. Precision/recall/AUC måler \"forudsagde modellen mindst ét kvalificerende regnpeak i det år udløbet selv rapporterede sit facit for\", ikke tidspræcis hændelsesdetektion.",
+    "Multiplikator-parameteren er fittet UDEN overflowProbBase (se methodologyNote.multiplierCircularityNote) — kræver yderligere vurdering før direkte substitution i produktionsformlen.",
+    "thresholdMm og multiplier er IKKE uafhængigt identificerbare i denne ja/nej-klassifikation (se methodologyNote.identifiabilityNote) — kun deres kombinerede effekt (fittedParams.effectivePeakCutoffMm) er en pålideligt tilpasset, tolkbar størrelse.",
+    "\"Sigmoid-midtpunkt\" er ikke en selvstændig frihedsgrad i den nuværende kode — identisk med tærsklen (se methodologyNote.sigmoidMidpointNote).",
+    "Kloaktype-split er baseret på PULS' Type-fritekstfelt (SewerStructure-koderne er udokumenterede, samme begrænsning som PULS-TAERSKLER-RAPPORT.md pkt. 3).",
+    "separate_stormwater-gruppens fittede parametre er IKKE relevante for den bakterielle/virale badevandsrisiko i produktion — badevand-risk.js nulstiller allerede riskScore/viralScore for disse udløb (isWastewater===false), uafhængigt af tærskel/multiplikator. Vist her for fuldstændighed/sammenligning, ikke som produktionskandidat."
+  ]
+}

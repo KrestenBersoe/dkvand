@@ -1,0 +1,42 @@
+{
+  "generatedAt": "2026-07-30T20:59:39.311Z",
+  "sourceScript": "scripts/calibrate-overflow-model.js",
+  "decisionRule": "predictedPositive = computeIntensityFactor(peakMaxMm, thresholdMm) * multiplier >= decisionCutoff, hvor peakMaxMm er den højeste DP02-kollapsede (5t), τ=3-dages-henfaldede nedbørs-peak i udløbets eget rapporteringsår (latestDischargeYear). computeIntensityFactor() er risk-model.js' UÆNDREDE funktion.",
+  "currentProductionDefaults": {
+    "thresholdMm": 5,
+    "multiplier": 3,
+    "note": "De nuværende hardkodede standardværdier i risk-model.js (computeIntensityFactor() fallback=5mm, ×3 i computeRisk()/computeViralRisk()) — IKKE ændret af dette script."
+  },
+  "perSewerGroup": {
+    "combined_sewer_overflow": {
+      "thresholdMm": 60,
+      "multiplier": 6,
+      "decisionCutoff": 1,
+      "effectivePeakCutoffMm": 41.6,
+      "neverTriggersPositive": false
+    },
+    "separate_stormwater": {
+      "thresholdMm": 2,
+      "multiplier": 0.5,
+      "decisionCutoff": 1,
+      "effectivePeakCutoffMm": null,
+      "neverTriggersPositive": true
+    },
+    "andet_or_unknown": {
+      "thresholdMm": 70,
+      "multiplier": 6,
+      "decisionCutoff": 1,
+      "effectivePeakCutoffMm": 48.54,
+      "neverTriggersPositive": false
+    },
+    "all_combined": {
+      "thresholdMm": 40,
+      "multiplier": 3,
+      "decisionCutoff": 1,
+      "effectivePeakCutoffMm": 40,
+      "neverTriggersPositive": false
+    }
+  },
+  "productionApplicability": "Kun combined_sewer_overflow-gruppens parametre er kandidat til direkte brug i risk-model.js' bakterielle/virale model — separate_stormwater-udløb (SE/SF) har allerede riskScore/viralScore=null i badevand-risk.js' isWastewater-filter, uafhængigt af tærskel/multiplikator.",
+  "note": "IKKE sat i produktion automatisk — se overflow-model-calibration-report-*.json for evalueringsgrundlag før evt. ibrugtagning i risk-model.js. Multiplikatoren er fittet UDEN overflowProbBase (se rapportens methodologyNote.multiplierCircularityNote) — vurdér samspillet med overflowProbBase, før den erstatter den nuværende ×3 i computeRisk()/computeViralRisk()."
+}

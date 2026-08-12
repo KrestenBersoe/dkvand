@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Safe-area diagnostik</title>
+<link rel="manifest" href="manifest.json">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Badevandsvarsel">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, sans-serif;
+    background: linear-gradient(to bottom, #ff3b30 0px, #ff3b30 var(--safe-top, 0px), #0d6e8c var(--safe-top, 0px));
+    min-height: 100vh;
+    color: #fff;
+  }
+  #content {
+    padding: 1.2rem;
+    padding-top: max(1.2rem, env(safe-area-inset-top));
+  }
+  .row { background: rgba(255,255,255,.15); border-radius: 8px; padding: .8rem 1rem; margin-bottom: .7rem; font-size: .95rem; line-height: 1.5; }
+  .big { font-size: 1.4rem; font-weight: 700; margin-bottom: .3rem; }
+  .label { font-size: .7rem; opacity: .75; text-transform: uppercase; letter-spacing: .05em; }
+  #topmarker {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: env(safe-area-inset-top, 0px);
+    background: repeating-linear-gradient(45deg, #ff3b30, #ff3b30 10px, #ffcc00 10px, #ffcc00 20px);
+    z-index: 9999;
+  }
+</style>
+</head>
+<body>
+  <!-- Det stribede rød/gule felt herunder VISER den faktiske
+       safe-area-inset-top som en fysisk højde — er der intet stribet felt
+       synligt øverst, måler iOS en værdi på 0px i denne kontekst. -->
+  <div id="topmarker"></div>
+
+  <div id="content">
+    <div class="row">
+      <div class="label">env(safe-area-inset-top)</div>
+      <div class="big" id="val-top">—</div>
+    </div>
+    <div class="row">
+      <div class="label">env(safe-area-inset-bottom)</div>
+      <div class="big" id="val-bottom">—</div>
+    </div>
+    <div class="row">
+      <div class="label">Kører som ("display-mode")</div>
+      <div class="big" id="val-mode">—</div>
+    </div>
+    <div class="row">
+      <div class="label">navigator.standalone (iOS-specifik)</div>
+      <div class="big" id="val-standalone">—</div>
+    </div>
+    <div class="row">
+      <div class="label">User-Agent</div>
+      <div style="font-size:.7rem; word-break:break-all;" id="val-ua">—</div>
+    </div>
+    <div class="row" style="background:rgba(0,0,0,.25)">
+      Det stribede rød/gule felt allerøverst på skærmen viser den faktiske
+      safe-area-inset-top som en fysisk højde. Er det usynligt (0 i højden),
+      måler iOS ingen safe-area i denne sammenhæng.
+    </div>
+  </div>
+
+<script>
+// Læs de faktiske beregnede CSS-værdier direkte, i stedet for kun at antage
+// hvad env() burde give — dette er selve pointen med denne diagnostikside.
+const probe = document.createElement('div');
+probe.style.cssText = 'position:fixed;top:0;left:-9999px;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);';
+document.body.appendChild(probe);
+const cs = getComputedStyle(probe);
+document.getElementById('val-top').textContent    = cs.paddingTop;
+document.getElementById('val-bottom').textContent = cs.paddingBottom;
+document.documentElement.style.setProperty('--safe-top', cs.paddingTop);
+
+document.getElementById('val-mode').textContent =
+  window.matchMedia('(display-mode: standalone)').matches ? 'standalone (installeret app)' : 'browser (almindelig fane)';
+document.getElementById('val-standalone').textContent =
+  (window.navigator.standalone === true) ? 'true' : (window.navigator.standalone === false ? 'false' : 'ikke tilgængelig (ikke iOS Safari)');
+document.getElementById('val-ua').textContent = navigator.userAgent;
+</script>
+</body>
+</html>

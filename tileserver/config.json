@@ -1,0 +1,27 @@
+{
+  "options": {
+    "paths": {
+      "root": "/data",
+      "styles": "styles",
+      "mbtiles": "data",
+      "fonts": "fonts"
+    },
+    "serveAllStyles": false,
+    "serveAllFonts": true
+  },
+  "data": {
+    "denmark": {
+      "mbtiles": "denmark.mbtiles"
+    }
+  },
+  "styles": {
+    "basic": {
+      "style": "basic.json",
+      "serve_rendered": true,
+      "serve_data": true,
+      "tilejson": {
+        "bounds": [7.5, 54.4, 15.5, 58.0]
+      }
+    }
+  }
+}
