@@ -1673,4 +1673,4 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
   return { lakes, kystvande, badevand };
 }
 
-module.exports = { computeBadevandRiskCascade };
+module.exports = { computeBadevandRiskCascade, haversineM };

@@ -964,6 +964,31 @@ function getBadevandCoordIndex() {
   return _badevandCoordIndex;
 }
 
+// NYT (bruger-ønske): modsat retning af ovenstående — bathingwat-ID -> egne,
+// server-kendte koordinater. Bruges af POST /api/badested-observation til at
+// afgøre om en indsender er fysisk ved DET badested, der vurderes (se
+// badested-observations.js's MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED) —
+// badestedets koordinat hentes HERFRA, aldrig fra klienten, så kun brugerens
+// EGEN GPS-position er et klient-leveret tal i den sammenligning.
+let _badevandIdCoordIndex = null;
+function getBadevandIdCoordIndex() {
+  if (_badevandIdCoordIndex) return _badevandIdCoordIndex;
+  _badevandIdCoordIndex = new Map();
+  try {
+    const raw  = fs.readFileSync(path.join(STATIC_DIR, 'vp3_badevand.geojson'), 'utf8');
+    const data = JSON.parse(raw);
+    for (const f of data.features || []) {
+      const coords = f.geometry?.coordinates;
+      const id = f.properties?.bathingwat ?? f.properties?.ov_id ?? f.properties?.id ?? null;
+      if (!coords || id == null) continue;
+      _badevandIdCoordIndex.set(String(id), { lat: coords[1], lng: coords[0] });
+    }
+  } catch (e) {
+    console.warn('getBadevandIdCoordIndex fejlede:', e.message);
+  }
+  return _badevandIdCoordIndex;
+}
+
 // Kører EFTER hver warmCache()-opdatering (se de tre kaldssteder nedenfor) —
 // ALDRIG på en selvstændig timer, for at undgå at evaluere på forældet vejr,
 // og for at undgå gentagne/overflødige kørsler mellem reelle datafriskninger.
@@ -1376,6 +1401,34 @@ function getClientIp(req) {
   return req.headers['fly-client-ip'] || req.socket.remoteAddress || 'ukendt';
 }
 
+// Samme afstand som klientens EGEN, uafhængige "vis prompten proaktivt"-tjek
+// (OBSERVATION_PROXIMITY_METERS i dansk-overloeb-kort.html) — de to bruges
+// til forskellige ting (dér: UX-trigger, her: hvilken rate limit-grænse der
+// gælder, se badested-observations.js), men samme fysiske betydning af
+// "fysisk ved badestedet", så samme værdi. HOLD I SYNC hvis den nogensinde
+// ændres et af de to steder.
+const NEAR_BADESTED_METERS = 300;
+
+// NYT (bruger-ønske): afgør om indsenderen fysisk er ved badestedet, ud fra
+// GPS-koordinater klienten selv sender (userLat/userLng i req.body) —
+// badestedets EGNE koordinater slås op server-side (getBadevandIdCoordIndex),
+// aldrig klient-leverede, så kun brugerens egen position er et klient-tal i
+// sammenligningen. Et blødt tillidssignal (se badested-observations.js's
+// filhoved for MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED) — en klient,
+// der taler direkte til API'et uden om selve GPS'en, kan i princippet
+// forfalske userLat/userLng, ligesom rate limitingens IP-baggrund i forvejen
+// kan omgås med en anden IP. Fejler stille (returnerer false) ved
+// manglende/ugyldige koordinater eller ukendt badested-id.
+function isNearBadested(badestedId, rawLat, rawLng) {
+  const userLat = parseFloat(rawLat);
+  const userLng = parseFloat(rawLng);
+  if (!Number.isFinite(userLat) || !Number.isFinite(userLng)) return false;
+  if (userLat < -90 || userLat > 90 || userLng < -180 || userLng > 180) return false;
+  const coords = getBadevandIdCoordIndex().get(String(badestedId));
+  if (!coords) return false;
+  return badevandRisk.haversineM(userLat, userLng, coords.lat, coords.lng) <= NEAR_BADESTED_METERS;
+}
+
 app.post('/api/badested-observation', (req, res) => {
   // NYT: multer kaldes MANUELT her (i stedet for som deklarativ middleware)
   // for at kunne fange dens egne fejl (fx LIMIT_FILE_SIZE, hvis fotoet
@@ -1388,7 +1441,7 @@ app.post('/api/badested-observation', (req, res) => {
       return res.status(400).json({ error: 'Kunne ikke behandle foto-upload (for stort, eller ugyldigt format).' });
     }
     try {
-      const { badestedId, algaeLevel } = req.body || {};
+      const { badestedId, algaeLevel, userLat, userLng } = req.body || {};
       // NYT: klienten sender flere valgte statustyper som ÉN vurdering, se
       // badested-observations.js's recordVurdering() — JSON-kodet i ét
       // formfelt (fremfor gentagne 'observationTypes[]'-felter) for at
@@ -1406,6 +1459,7 @@ app.post('/api/badested-observation', (req, res) => {
         algaeLevel: algaeLevel || null,
         photoBuffer: req.file ? req.file.buffer : null,
         rawIp: getClientIp(req),
+        isNearBadested: isNearBadested(badestedId, userLat, userLng),
       });
       // NYT (bruger-ønske): dagens ALLERFØRSTE vurdering af et badested
       // (se _insertVurderingTxn()'s isFirstToday, badested-observations.js)
@@ -1428,7 +1482,7 @@ app.post('/api/badested-observation', (req, res) => {
         // _insertVurderingTxn() i badested-observations.js).
         console.warn(`badested-observation: rate-limited (${e.message}), ip-hash=${badestedObs.hashIp(getClientIp(req)).slice(0, 12)}…, badested=${req.body?.badestedId}`);
         const msg = e.message === 'rate-limited-max-per-day'
-          ? `Du har allerede indsendt ${badestedObs.MAX_VURDERINGER_PER_IP_PER_DAY} vurderinger i dag — prøv igen i morgen.`
+          ? `Du har allerede indsendt ${e.limit || badestedObs.MAX_VURDERINGER_PER_IP_PER_DAY} vurderinger i dag — prøv igen i morgen.`
           : 'Du kan kun vurdere ét badested pr. dag, og har allerede vurderet et andet badested i dag.';
         return res.status(429).json({ error: msg });
       }

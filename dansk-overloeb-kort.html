@@ -2394,7 +2394,7 @@
         <p>Indberetning sker via "⭐ Badestedsvurdering"-knappen i badevands-panelet — enten manuelt, eller ved at acceptere en prompt, der vises automatisk, når GPS bekræfter, at man fysisk befinder sig ved badestedet. Én vurdering kan indeholde <strong>flere valgte statustyper på én gang</strong>: "Ser fint ud", "Alger set", "Uklart vand" og "Affald" vælges som afkrydsning, ikke som fire uafhængige ét-tryks-knapper — man markerer alt det, der passer, og indsender det samlet med én "Indsend vurdering"-knap.</p>
         <p>Vælges <strong>"Alger set"</strong>, vises et krav om at angive mængden af alger ("Ingen"/"Få"/"Mange") direkte i samme formular — vurderingen kan ikke indsendes, før niveauet er valgt. Muligheden for at vedhæfte et foto til algeobservationen findes stadig i koden, men er pt. skjult i brugerfladen. Efter en indsendelse vises en tydelig bekræftelse om, at vurderingen er modtaget og offentliggjort på badestedets side med det samme.</p>
         <p>Det altid synlige "Badestedsvurdering"-panel på selve badevandssiden opsummerer de seneste indberetninger grafisk for de fire statustyper, med et samlet, henfaldsvægtet "X rapporter i dag"-tal i selve indsendelsesprompten — nyere indberetninger vejer mest (henfaldstid ét døgn), ældre toner gradvist ud uden at forsvinde brat. Al vægtning beregnes server-side; klienten viser udelukkende de færdige tal.</p>
-        <div class="doc-callout"><strong>Maks. 2 vurderinger pr. bruger pr. dag, og kun for ét badested ad gangen.</strong> Alle vurderinger inden for samme døgn skal gælde samme badested — vil man vurdere et andet badested, må man vente til den følgende dag. Grænsen håndhæves server-side pr. IP-adresse og er bevidst ikke synlig i selve brugerfladen (for ikke at gøre det nemmere for automatiseret spam at kalibrere sig efter den).</div>
+        <div class="doc-callout"><strong>Maks. 5 vurderinger pr. bruger pr. dag (50, hvis GPS bekræfter du fysisk er ved badestedet), og kun for ét badested ad gangen.</strong> Alle vurderinger inden for samme døgn skal gælde samme badested — vil man vurdere et andet badested, må man vente til den følgende dag. Grænsen håndhæves server-side pr. IP-adresse og er bevidst ikke synlig i selve brugerfladen (for ikke at gøre det nemmere for automatiseret spam at kalibrere sig efter den).</div>
         <div class="doc-callout"><strong>Borgerobservationer påvirker aldrig den officielle risikovurdering.</strong> De behandles som et helt separat, mærket lag — samme princip som algerisiko allerede er adskilt fra sikkerhedsvurderingen (se Badevandsvurdering ovenfor) — og fødes aldrig ind i risikoberegningen. De er et supplerende, øjebliksbilledebaseret signal fra folk, der faktisk er eller for nylig var ved vandet, ikke en kalibreret eller valideret datakilde.</div>
       </section>
 
@@ -9082,6 +9082,20 @@ async function submitVurdering() {
     body.append('badestedId', badestedId);
     body.append('observationTypes', JSON.stringify(selectedTypes));
     if (_bvObsSelectedTypes.has('alger_set')) body.append('algaeLevel', _bvObsAlgaeLevel);
+    // NYT (bruger-ønske): sidst kendte brugerposition (samme mønster som
+    // loadVarselData()'s uLat/uLng — globale variable fra locateUser(), med
+    // sessionStorage-fallback fra en tidligere session) sendes med, så
+    // serveren (server.js's isNearBadested()) kan hæve dagens grænse for
+    // indsendere, der reelt er fysisk ved badestedet — se
+    // badested-observations.js's MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED.
+    // Udelades stille, hvis ingen position kendes (fx GPS afvist) — den
+    // almindelige (lavere) grænse gælder da bare, ingen fejl for brugeren.
+    const uLat = (typeof hjemUserLat === 'number') ? hjemUserLat : parseFloat(sessionStorage.getItem('userLat') || '');
+    const uLng = (typeof hjemUserLng === 'number') ? hjemUserLng : parseFloat(sessionStorage.getItem('userLng') || '');
+    if (isFinite(uLat) && isFinite(uLng)) {
+      body.append('userLat', uLat);
+      body.append('userLng', uLng);
+    }
     // NB: intet foto-felt tilføjes her — tilføj-foto er skjult i UI'en (se
     // #algae-obs-overlay's filhoved-kommentar), men serveren understøtter
     // det fortsat uændret, hvis feltet en dag genaktiveres.

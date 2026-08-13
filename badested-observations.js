@@ -69,10 +69,25 @@ const OBSERVATION_LOOKBACK_HOURS = OBSERVATION_TAU_HOURS * 8;
 // Rate limiting — server-side, ikke til at omgå fra klienten. Én "vurdering"
 // er ÉN indsendelse (uanset hvor mange statustyper der er valgt samtidig i
 // den, se recordVurdering()) — ikke én række i databasen.
-const MAX_VURDERINGER_PER_IP_PER_DAY = 2;  // maks. 2 vurderinger pr. IP pr. dag (rullende 24t)
+const MAX_VURDERINGER_PER_IP_PER_DAY = 5;  // maks. 5 vurderinger pr. IP pr. dag (rullende 24t)
+// RETTET (bruger-rapporteret): den tidligere grænse på 2 var for stram til
+// reel brug (en bruger, der besøger et badested flere gange samme dag —
+// morgen/eftermiddag — ramte den rutinemæssigt). Hævet til 5.
+//
+// Højere grænse for indsendelser hvor server.js (via GPS-koordinater sendt
+// af klienten, sammenholdt med badestedets EGNE, server-kendte koordinater —
+// se server.js's beregning af isNearBadested) har bekræftet at brugeren
+// fysisk befinder sig ved DET badested, der vurderes. Dette er et blødt
+// signal, ikke en kryptografisk garanti (klienten kan i princippet sende
+// falske koordinater direkte til API'et, uden om selve GPS'en) — men det
+// hæver bar­ren for automatiseret misbrug betydeligt, uden at genere en ægte
+// bruger, der reelt står ved badestedet og indsender flere observationer
+// hen over en dag (fx morgen/middag/aften).
+const MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED = 50;
 // Alle vurderinger inden for samme rullende døgn skal gælde SAMME badested —
-// ikke en ren "spred sine 2 vurderinger over 2 forskellige badesteder"-regel.
-// Håndhæves i _insertVurderingTxn() nedenfor.
+// ikke en ren "spred sine vurderinger over flere forskellige badesteder"-regel.
+// Håndhæves i _insertVurderingTxn() nedenfor, uafhængigt af hvilken af de to
+// grænser ovenfor der er i spil.
 
 // Foto-validering.
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;  // 5 MB — rigeligt til et komprimeret mobilfoto, uden at kunne fylde volumen hurtigt op
@@ -212,7 +227,7 @@ function savePhoto(buffer) {
 // FORSKELLIGE IP'er er helt upåvirkede af hinandens lock (hashtext()
 // spreder nøglerne, kollision mellem to forskellige IP'er er astronomisk
 // usandsynlig og selv da kun et ydelses-, ikke korrekthedsproblem).
-async function insertVurderingTxn(badestedId, entries, ipHash, now) {
+async function insertVurderingTxn(badestedId, entries, ipHash, now, maxPerDay) {
   const client = await getClient();
   try {
     await client.query('BEGIN');
@@ -224,9 +239,10 @@ async function insertVurderingTxn(badestedId, entries, ipHash, now) {
       [ipHash, since]
     );
 
-    if (todaysVurderinger.length >= MAX_VURDERINGER_PER_IP_PER_DAY) {
+    if (todaysVurderinger.length >= maxPerDay) {
       const err = new Error('rate-limited-max-per-day');
       err.code = 'RATE_LIMITED';
+      err.limit = maxPerDay;
       throw err;
     }
     if (todaysVurderinger.length > 0 && !todaysVurderinger.some(r => r.badested_id === badestedId)) {
@@ -294,8 +310,11 @@ async function insertVurderingTxn(badestedId, entries, ipHash, now) {
  * @param {string|null} p.algaeLevel     — én af ALGAE_LEVELS, PÅKRÆVET hvis 'alger_set' er blandt observationTypes, ellers skal den være null
  * @param {Buffer|null} p.photoBuffer    — valgfrit foto, kun gyldigt sammen med 'alger_set' (UI'en skjuler pt. denne mulighed)
  * @param {string} p.rawIp               — klientens rå IP (hashes her, gemmes ALDRIG i klartekst)
+ * @param {boolean} [p.isNearBadested]   — beregnet af server.js ud fra klientens GPS-koordinater sammenholdt
+ *   med badestedets EGNE, server-kendte koordinater — se MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED ovenfor.
+ *   Denne funktion stoler blindt på værdien (den rummer selv ingen geo-data); et blødt tillidssignal, ikke en garanti.
  */
-async function recordVurdering({ badestedId, observationTypes, algaeLevel, photoBuffer, rawIp }) {
+async function recordVurdering({ badestedId, observationTypes, algaeLevel, photoBuffer, rawIp, isNearBadested }) {
   if (typeof badestedId !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(badestedId)) {
     const err = new Error('Ugyldigt badested-id'); err.code = 'VALIDATION'; throw err;
   }
@@ -331,7 +350,8 @@ async function recordVurdering({ badestedId, observationTypes, algaeLevel, photo
     algaeLevel: t === 'alger_set' ? algaeLevel : null,
     photoPath:  t === 'alger_set' ? photoPath  : null,
   }));
-  const { vurderingId, isFirstToday } = await insertVurderingTxn(badestedId, entries, hashIp(rawIp), now);
+  const maxPerDay = isNearBadested ? MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED : MAX_VURDERINGER_PER_IP_PER_DAY;
+  const { vurderingId, isFirstToday } = await insertVurderingTxn(badestedId, entries, hashIp(rawIp), now, maxPerDay);
   return { createdAt: now, vurderingId, isFirstToday };
 }
 
@@ -454,6 +474,10 @@ module.exports = {
   // fejlbesked ved rate limiting (se dens .code==='RATE_LIMITED'-gren) i
   // stedet for den tidligere bevidst vage besked — selve tallet defineres
   // fortsat kun ÉT sted (her), så beskeden aldrig kan komme ud af sync med
-  // den faktisk håndhævede grænse.
+  // den faktisk håndhævede grænse. (Den faktisk anvendte grænse for en given
+  // afvisning ligger også på selve fejlobjektet, .limit — se
+  // insertVurderingTxn() — server.js behøver derfor ikke selv regne ud
+  // hvilken af de to grænser der blev ramt.)
   MAX_VURDERINGER_PER_IP_PER_DAY,
+  MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED,
 };
