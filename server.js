@@ -448,7 +448,15 @@ app.get('/badested/:slug', (req, res) => {
     title, description,
     canonicalPath: `/badested/${req.params.slug}`,
     ogImagePath: `/og/badested/${req.params.slug}`,
-    jsonLd: seoPages.buildJsonLd({ name: info.navn, lat: info.lat, lng: info.lng, addressLocality: kommune }),
+    jsonLd: seoPages.buildJsonLd({
+      name: info.navn, lat: info.lat, lng: info.lng, addressLocality: kommune, description,
+      dataset: {
+        name: `Badevandsrisiko og modelestimater for ${info.navn}`,
+        description: 'Modelbaserede estimater for forureningsrisiko baseret på overløbsfrekvens, observeret og prognosticeret nedbør samt patogenoverlevelse.',
+        temporalCoverage: new Date(badevandRiskCache.ts || Date.now()).toISOString(),
+        variableMeasured: ['Forureningsrisiko per udløbspunkt', 'Overløbsfrekvens', 'Prognosticeret nedbør'],
+      },
+    }),
   });
   const ssrContent = seoPages.buildSsrContent({
     navn: info.navn, kommune, riskText: text,
@@ -489,7 +497,15 @@ app.get('/soe/:slug', (req, res) => {
     title, description,
     canonicalPath: `/soe/${req.params.slug}`,
     ogImagePath: `/og/soe/${req.params.slug}`,
-    jsonLd: seoPages.buildJsonLd({ name: info.navn, lat: info.lat, lng: info.lng, addressLocality: kommune }),
+    jsonLd: seoPages.buildJsonLd({
+      name: info.navn, lat: info.lat, lng: info.lng, addressLocality: kommune, description,
+      dataset: {
+        name: `Badevandsrisiko og modelestimater for ${info.navn}`,
+        description: 'Modelbaserede estimater for forureningsrisiko baseret på overløbsfrekvens, observeret og prognosticeret nedbør samt patogenoverlevelse.',
+        temporalCoverage: new Date(badevandRiskCache.ts || Date.now()).toISOString(),
+        variableMeasured: ['Forureningsrisiko per udløbspunkt', 'Overløbsfrekvens', 'Prognosticeret nedbør'],
+      },
+    }),
   });
   const ssrContent = seoPages.buildSsrContent({
     navn: info.navn, kommune, riskText: text,
@@ -541,8 +557,8 @@ app.get('/udloeb/:id', (req, res) => {
 // hverken må stå her eller disallowes i robots.txt (noindex alene, via
 // meta-taggen ovenfor, er den korrekte mekanisme).
 const _sitemapXml = seoPages.buildSitemapXml([
-  ...[...badestedSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/badested/${slug}`, priority: '0.8' })),
-  ...[...soeSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/soe/${slug}`, priority: '0.5' })),
+  ...[...badestedSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/badested/${slug}` })),
+  ...[...soeSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/soe/${slug}` })),
 ]);
 app.get('/sitemap.xml', (req, res) => {
   res.set('Cache-Control', 'public, max-age=86400');

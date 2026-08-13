@@ -169,14 +169,36 @@ function injectBodyContent(html, bodyHtml) {
   return html.replace('<body>', `<body>${bodyHtml}`);
 }
 
-function buildJsonLd({ name, lat, lng, addressLocality }) {
-  return {
+/**
+ * `dataset`, hvis givet, tilføjes som subjectOf: Dataset — de modelberegnede
+ * risikoestimater ER et selvstændigt datasæt om stedet (Place), ikke
+ * egenskaber ved selve stedet. `dataset.temporalCoverage` skal være
+ * badevandRiskCache.ts (samme tidsstempel som "Sidst opdateret" i
+ * #ssr-content, se buildSsrContent()) — IKKE Date.now() ved render-
+ * tidspunktet, som ville stemple hver eneste request som "lige nu", selvom
+ * dataene reelt kun opdateres hvert 15. minut (se server.js's
+ * WEATHER_CHECK_INTERVAL_MS).
+ */
+function buildJsonLd({ name, lat, lng, addressLocality, description, dataset }) {
+  const place = {
     '@context': 'https://schema.org',
     '@type': 'Place',
     name,
+    ...(description ? { description } : {}),
     ...(addressLocality ? { address: { '@type': 'PostalAddress', addressLocality } } : {}),
     ...(lat != null && lng != null ? { geo: { '@type': 'GeoCoordinates', latitude: lat, longitude: lng } } : {}),
   };
+  if (dataset) {
+    place.subjectOf = {
+      '@type': 'Dataset',
+      name: dataset.name,
+      ...(dataset.description ? { description: dataset.description } : {}),
+      ...(dataset.temporalCoverage ? { temporalCoverage: dataset.temporalCoverage } : {}),
+      provider: { '@type': 'Organization', name: 'Danmarks Vandmiljø', url: SITE_URL },
+      ...(dataset.variableMeasured ? { variableMeasured: dataset.variableMeasured } : {}),
+    };
+  }
+  return place;
 }
 
 /** Let, håndrullet SVG-badge til og:image — se planens begrundelse for hvorfor SVG (ikke PNG) i første omgang. */
@@ -218,10 +240,11 @@ function buildSitelinksHtml(badestedSlugToInfo, soeSlugToInfo) {
   return `<nav id="seo-sitelinks" aria-hidden="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap">${badestedLinks}${soeLinks}</nav>`;
 }
 
+// FJERNET (bruger-ønske): priority (og changefreq/lastmod, der aldrig var
+// med) er droppet — Google ignorerer priority-attributten helt, den fyldte
+// kun op i et sitemap med ~2.000 URL'er.
 function buildSitemapXml(urls) {
-  const items = urls.map(({ loc, priority }) =>
-    `  <url><loc>${escHtml(loc)}</loc><priority>${priority}</priority></url>`
-  ).join('\n');
+  const items = urls.map(({ loc }) => `  <url><loc>${escHtml(loc)}</loc></url>`).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${items}\n</urlset>`;
 }
 
