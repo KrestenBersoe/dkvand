@@ -5829,6 +5829,28 @@ function confirmReasonDetailText(reason) {
   return 'Ingen kendte spildevandsudledninger i nærheden.'; // fallback for ukendt/manglende reason
 }
 
+// NYT (bruger-ønske — datakonfidens): "hvor meget kan man stole på DETTE
+// badesteds bact/viral-tal lige nu" — en SEPARAT, klart mærket dimension
+// fra selve risikotallet, ALDRIG en del af risikoberegningen selv. Tier'en
+// (dataConfidence) beregnes UDELUKKENDE server-side (badevand-risk.js's
+// deriveDataConfidence()) — denne konstant er kun visnings-tekst/-farve,
+// og HOLDES I SYNC med seo-pages.js's CONFIDENCE_META (samme fire tiers,
+// samme begrundelse).
+const CONFIDENCE_META = {
+  'hoej':       { label: 'Høj',        color: '#2d7d4f', text: 'Bekræftet eller direkte strømmålt kilde tæt på badestedet.' },
+  'middel':     { label: 'Middel',     color: '#d4a020', text: 'Baseret på en modelantagelse om spredningshastighed/afstand, ikke en direkte strømmåling.' },
+  'lav':        { label: 'Lav',        color: '#c84b1f', text: 'Baseret på en usikker strømretning eller en kilde langt fra badestedet.' },
+  'ingen-data': { label: 'Ingen data', color: '#5a6b78', text: 'Intet grundlag for en aktuel vurdering lige nu.' },
+};
+// Returnerer '' (ikke null) ved ukendt/fraværende tier (fx server-utilgaengelig,
+// eller en cache fra før dette felt fandtes) — kaldested kan altid bruge
+// resultatet direkte i en skabelon uden selv at tjekke for null.
+function confidenceBadgeHtml(tier) {
+  const meta = CONFIDENCE_META[tier];
+  if (!meta) return '';
+  return `<div style="font-size:.72rem;color:${meta.color};padding:.3rem 0 .5rem 0;margin-bottom:.4rem;border-bottom:1px solid #e5e5e5">Datakonfidens: <strong>${meta.label}</strong> — ${escHtml(meta.text)}</div>`;
+}
+
 function colorKystvandByRisk() {
   // RETTET (fuldt omskrevet — FJERNER lokal fallback bevidst, efter
   // eksplicit ønske): brugte tidligere sin egen komplette, lokale
@@ -6218,7 +6240,7 @@ function computeBadevandRisk(lat, lng, badevandId) {
     // panelet. Uden den var der ingen måde at se, at et højt push-varsel
     // og en lav "nu"-score kan være samtidigt sande (forecast er
     // fremadskuende, bact/viral er nuet) — se showBadevandPanel().
-    return { bact: sp.bact, viral: sp.viral, algae: sp.algae, forecast: sp.forecast, source: sp.source, outlets: sp.outlets || [] };
+    return { bact: sp.bact, viral: sp.viral, algae: sp.algae, forecast: sp.forecast, source: sp.source, outlets: sp.outlets || [], dataConfidence: sp.dataConfidence ?? null };
   }
   // RETTET (KRITISK — se brugerrapport 2026-07-25, DKBW1031/Skanderborg Sø
   // Camping): denne funktion tjekkede kun 'nedstroms-bekraeftet' som en
@@ -6240,7 +6262,7 @@ function computeBadevandRisk(lat, lng, badevandId) {
     // confirmReason) — kun 'id15-empty' er faktisk ID15-terrænsporing af
     // et SØ-opland. confirmReason lader colorBadevandByRisk()/
     // showBadevandPanel() vise en tekst, der matcher den faktiske årsag.
-    return { bact: null, viral: null, algae: null, source: 'ingen-bekraeftet', confirmReason: sp.confirmReason || null, outlets: [], geomMatchNoData: null };
+    return { bact: null, viral: null, algae: null, source: 'ingen-bekraeftet', confirmReason: sp.confirmReason || null, outlets: [], geomMatchNoData: null, dataConfidence: sp.dataConfidence ?? null };
   }
   // NYT: 'nedstroms-bekraeftet' — tredje, POSITIV kategori (se
   // badevand-risk.js's allDownstreamKyst): kystvandet HAR kendte udløb, men
@@ -6249,13 +6271,13 @@ function computeBadevandRisk(lat, lng, badevandId) {
   // "ingen-bekraeftet" (source:'ingen-bekraeftet', grøn, kun søer/ID15-
   // opland uden udløb) — denne er kystvandenes strømdrevne modstykke.
   if (sp.source === 'nedstroms-bekraeftet') {
-    return { bact: null, viral: null, algae: null, source: 'nedstroms-bekraeftet', outlets: [], geomMatchNoData: null, allDownstreamMatch: sp.allDownstreamMatch || null };
+    return { bact: null, viral: null, algae: null, source: 'nedstroms-bekraeftet', outlets: [], geomMatchNoData: null, allDownstreamMatch: sp.allDownstreamMatch || null, dataConfidence: sp.dataConfidence ?? null };
   }
   // NYT: serveren sender nu selv skelnen mellem "vandområde matchet, men
   // ingen data" og "intet match overhovedet" (se badevand-risk.js's
   // allLakeGeoms/allKystvandGeoms + noDataMatch) — ingen lokal
   // geometri-genberegning nødvendig for at bevare denne besked.
-  return { bact: null, viral: null, algae: null, source: 'ingen', outlets: [], geomMatchNoData: sp.noDataMatch || null };
+  return { bact: null, viral: null, algae: null, source: 'ingen', outlets: [], geomMatchNoData: sp.noDataMatch || null, dataConfidence: sp.dataConfidence ?? null };
 }
 
 function colorBadevandByRisk() {
@@ -9565,6 +9587,12 @@ async function showBadevandPanel(feature, skipUrlPush) {
   const outDiv = document.getElementById('bv-outlets');
   if (outDiv) {
     const listOutlets = _risk.outlets || [];
+    // NYT (bruger-ønske — datakonfidens): forankret her, ikke i risikobjælkerne
+    // ovenfor, fordi denne dimension specifikt handler om tilliden til
+    // OPSTRØMS-udledningskilderne — samme emne som resten af dette kort
+    // allerede dækker. '' (tom streng) ved manglende tier (fx server-
+    // utilgaengelig, hvor der intet grundlag er at vurdere tillid ud fra).
+    const confBadge = confidenceBadgeHtml(_risk.dataConfidence);
     if (_risk.source === 'server-utilgaengelig') {
       // NYT: distinkt fra "ingen bekræftet forbindelse" — det ved vi
       // faktisk ikke noget om lige nu, fordi serveren ikke svarede/data
@@ -9578,7 +9606,7 @@ async function showBadevandPanel(feature, skipUrlPush) {
       // afgøres.
       if (_risk.geomMatchNoData) {
         const { type, navn } = _risk.geomMatchNoData;
-        outDiv.innerHTML = `<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Lokationen ligger inden for ${escHtml(type)}en <strong>${escHtml(navn)}</strong>, men den har ikke selv nogen beregnet risikodata — sandsynligvis et navnematch-problem i den bagvedliggende model, ikke et geometri-problem med selve badestedet.</div>`;
+        outDiv.innerHTML = confBadge + `<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Lokationen ligger inden for ${escHtml(type)}en <strong>${escHtml(navn)}</strong>, men den har ikke selv nogen beregnet risikodata — sandsynligvis et navnematch-problem i den bagvedliggende model, ikke et geometri-problem med selve badestedet.</div>`;
       } else {
         // RETTET (bruger-ønske 2026-07-25): viste tidligere en grå/neutral
         // "ingen data"-besked her — men al udløbs-matching (RBU/PULS/ID15)
@@ -9590,7 +9618,7 @@ async function showBadevandPanel(feature, skipUrlPush) {
         // formulering: dette er IKKE en aktiv ID15-terrænsporings-
         // verifikation (se 'ingen-bekraeftet'), blot fravær af data at
         // undersøge i første omgang.
-        outDiv.innerHTML = '<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ Ingen registrerede udløb, som udleder til denne lokation.</div>';
+        outDiv.innerHTML = confBadge + '<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ Ingen registrerede udløb, som udleder til denne lokation.</div>';
       }
     } else if (_risk.source === 'ingen-bekraeftet') {
       // NYT: tredje, adskilt kategori — se badevand-risk.js's
@@ -9603,7 +9631,7 @@ async function showBadevandPanel(feature, skipUrlPush) {
       // Ågerup/Vollerup Badebro/Svenstrup Overdrev/Saltbæk Badebro er alle
       // kystvande, ikke søer). Grøn/positiv formulering, adskilt fra både
       // den grå "ingen data"-besked og en almindelig lav-risiko-måling.
-      outDiv.innerHTML = `<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ ${escHtml(confirmReasonDetailText(_risk.confirmReason))}</div>`;
+      outDiv.innerHTML = confBadge + `<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ ${escHtml(confirmReasonDetailText(_risk.confirmReason))}</div>`;
     } else if (_risk.source === 'nedstroms-bekraeftet') {
       // NYT: fjerde kategori — se badevand-risk.js's allDownstreamKyst og
       // colorBadevandByRisk()'s tilsvarende rettelse. Kystvandet HAR kendte
@@ -9613,15 +9641,15 @@ async function showBadevandPanel(feature, skipUrlPush) {
       // ovenfor (som er en permanent geometrisk kendsgerning), kan denne
       // konklusion ændre sig med strømretningen.
       const navn = _risk.allDownstreamMatch?.navn;
-      outDiv.innerHTML = `<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ Kendte udløb${navn ? ` i ${escHtml(navn)}` : ''} er lige nu strømbekræftet nedstrøms af badestedet (CMEMS-strømdata) — ingen aktuel forureningskilde peger hertil. Kan ændre sig med strømretningen.</div>`;
+      outDiv.innerHTML = confBadge + `<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ Kendte udløb${navn ? ` i ${escHtml(navn)}` : ''} er lige nu strømbekræftet nedstrøms af badestedet (CMEMS-strømdata) — ingen aktuel forureningskilde peger hertil. Kan ændre sig med strømretningen.</div>`;
     } else if (listOutlets.length === 0) {
-      outDiv.innerHTML = '<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Bekræftet vandområde fundet, men ingen individuelle udløb kunne matches</div>';
+      outDiv.innerHTML = confBadge + '<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Bekræftet vandområde fundet, men ingen individuelle udløb kunne matches</div>';
     } else {
       const sourceLabel = _risk.source === 'soe' ? 'Opstrøms-matchede udløb (ID15 + rejsetid)' :
                            _risk.source === 'kystvand' ? 'Opstrøms-matchede udløb (kystvand)' :
                            _risk.source === 'vandlob' ? 'Opstrøms-matchede udløb (vandløb, sikker retning)' :
                            'Opstrøms-matchede udløb (vandløb, usikker retning)';
-      outDiv.innerHTML = `<div style="font-size:.72rem;color:#5a6b78;padding:0 0 .4rem 0">${escHtml(sourceLabel)}</div>` +
+      outDiv.innerHTML = confBadge + `<div style="font-size:.72rem;color:#5a6b78;padding:0 0 .4rem 0">${escHtml(sourceLabel)}</div>` +
         [...listOutlets].sort((a, b) => (b.riskScore || 0) - (a.riskScore || 0)).slice(0, 15).map(pt => {
         const risk  = pt.riskScore || 0;
         const color = risk >= 0.6 ? '#c84b1f' : risk >= 0.2 ? '#d4a020' : '#2d7d4f';

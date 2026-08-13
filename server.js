@@ -440,6 +440,11 @@ app.get('/badested/:slug', (req, res) => {
   }
   const entry = badevandByIdCache.get(info.id);
   const { text } = seoPages.describeBadestedRisk(entry);
+  // NYT (bruger-ønske — datakonfidens): entry.dataConfidence er sat af
+  // badevand-risk.js's deriveDataConfidence() for hvert badested — se dens
+  // filhoved. null hvis entry mangler (kold cache) eller feltet endnu ikke
+  // findes (ældre cache-snapshot fra før dette blev tilføjet).
+  const confidence = seoPages.describeDataConfidence(entry?.dataConfidence);
   const kommune = info.kommune ? info.kommune.replace(/\s*kommune\s*$/i, '').trim() : null;
   const title = `${info.navn} badevand – aktuel risiko | Dit Badevand`;
   const description = `${info.navn}${kommune ? ' i ' + kommune : ''}: ${text}`;
@@ -452,7 +457,8 @@ app.get('/badested/:slug', (req, res) => {
       name: info.navn, lat: info.lat, lng: info.lng, addressLocality: kommune, description,
       dataset: {
         name: `Badevandsrisiko og modelestimater for ${info.navn}`,
-        description: 'Modelbaserede estimater for forureningsrisiko baseret på overløbsfrekvens, observeret og prognosticeret nedbør samt patogenoverlevelse.',
+        description: 'Modelbaserede estimater for forureningsrisiko baseret på overløbsfrekvens, observeret og prognosticeret nedbør samt patogenoverlevelse.'
+          + (confidence ? ` ${confidence.text}.` : ''),
         temporalCoverage: new Date(badevandRiskCache.ts || Date.now()).toISOString(),
         variableMeasured: ['Forureningsrisiko per udløbspunkt', 'Overløbsfrekvens', 'Prognosticeret nedbør'],
       },
@@ -462,6 +468,7 @@ app.get('/badested/:slug', (req, res) => {
     navn: info.navn, kommune, riskText: text,
     updatedAt: new Date(badevandRiskCache.ts || Date.now()).toLocaleString('da-DK'),
     outlets: entry?.outlets || [],
+    confidenceText: confidence?.text || null,
   });
   // RETTET (bruger-rapporteret 2026-08-10 — /badested/:slug-siden viste
   // permanent kun det statiske SSR-indhold, aldrig den rigtige app): denne

@@ -30,6 +30,22 @@ function riskInfo(risk) {
   return              { label: 'Lav risiko',       color: '#2d7d4f', pct: Math.round(risk * 100) };
 }
 
+// Datakonfidens — HOLDES I SYNC med klientens CONFIDENCE_META (dansk-
+// overloeb-kort.html) og badevand-risk.js's deriveDataConfidence(), som er
+// den ENESTE kilde, der reelt afgør tier'en — dette er kun visnings-tekst.
+const CONFIDENCE_META = {
+  'hoej':       { label: 'Høj',        text: 'Bekræftet eller direkte strømmålt kilde tæt på badestedet.' },
+  'middel':     { label: 'Middel',     text: 'Baseret på en modelantagelse om spredningshastighed/afstand, ikke en direkte strømmåling.' },
+  'lav':        { label: 'Lav',        text: 'Baseret på en usikker strømretning eller en kilde langt fra badestedet.' },
+  'ingen-data': { label: 'Ingen data', text: 'Intet grundlag for en aktuel vurdering lige nu.' },
+};
+/** Returnerer null hvis tier er ukendt/fraværende (fx sø-siderne, som endnu ikke har et dataConfidence-felt, se describeSoeRisk()). */
+function describeDataConfidence(tier) {
+  const meta = CONFIDENCE_META[tier];
+  if (!meta) return null;
+  return { tier, label: meta.label, text: `Datakonfidens: ${meta.label} — ${meta.text}` };
+}
+
 // Samme tekst som klientens confirmReasonTooltipText() — se dansk-overloeb-
 // kort.html for hvorfor de tre grunde er reelt forskellige bekræftelser.
 function confirmReasonText(reason) {
@@ -132,7 +148,7 @@ function injectRobotsOnly(html, canonicalPath) {
  * den eksisterende, JS-vedligeholdte #badevand-panel-DOM. Klienten skjuler
  * denne blok, når det rigtige panel åbnes (se dansk-overloeb-kort.html).
  */
-function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets }) {
+function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets, confidenceText }) {
   // NYT (ustabil-id-rettelse — se server.js's loadPulsPointsFull()):
   // bruger outfallId (stabil GUID) i stedet for o.id (rækkeindekset) til
   // selve linket — dette er server-renderet, crawlbart HTML, indekseret af
@@ -155,6 +171,7 @@ function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets }) {
 <div id="ssr-content" style="max-width:640px;margin:0 auto;padding:2rem 1.2rem;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1a2733">
   <h1>${escHtml(navn)}${kommune ? ` — ${escHtml(kommune)}` : ''}</h1>
   <p>${escHtml(riskText)}</p>
+  ${confidenceText ? `<p style="color:#5a6b78;font-size:.85rem">${escHtml(confidenceText)}</p>` : ''}
   <p style="color:#5a6b78;font-size:.85rem">Sidst opdateret: ${escHtml(updatedAt)}</p>
   ${outletLinks ? `<h2>Udløb der påvirker dette sted</h2><ul>${outletLinks}</ul>` : ''}
 </div>`;
@@ -253,6 +270,7 @@ module.exports = {
   riskInfo,
   describeBadestedRisk,
   describeSoeRisk,
+  describeDataConfidence,
   injectHead,
   injectRobotsOnly,
   buildSsrContent,

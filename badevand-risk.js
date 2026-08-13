@@ -1383,6 +1383,61 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
     return { bact, viral, algae: kyst.algae, forecast: kyst.forecast, source: 'kystvand', outlets: annotated.slice(0, 20) };
   }
 
+  // ── Datakonfidens — "hvor meget kan man stole på DETTE badesteds bact/
+  // viral-tal lige nu", en SEPARAT, klart mærket dimension fra selve
+  // risikotallet (samme adskillelsesprincip som algescore, se filhovedets
+  // HÅRDE GRÆNSE-advarsel: må aldrig ændre selve risikoen). Afledt
+  // UDELUKKENDE af signaler cascaden allerede har beregnet for dette
+  // badested (source, dominerende udløbs upstream-status/afstand) — INGEN
+  // nyt dataopslag.
+  //
+  // Fire diskrete tiers, bevidst IKKE en opfundet numerisk procent — en
+  // tal-værdi ville give falsk præcision oven på antagelser, filen selv
+  // gentagne gange mærker [ANTAGELSE, IKKE MÅLT] (se ASSUMED_*_VELOCITY_
+  // M_PER_S ovenfor).
+  //
+  // "Tæt på" defineres som en ANDEL af KYSTVAND_TEXTMATCH_MAX_DIST_M/
+  // SOE_NAVNEMATCH_MAX_DIST_M (den afstand der allerede afgør om et udløb
+  // overhovedet medtages) — bevidst IKKE en ny, selvstændig afstands-
+  // konstant, for ikke at opfinde endnu et uvalideret tal ved siden af de
+  // eksisterende.
+  const NEAR_OUTLET_FRACTION = 0.3;
+  function deriveDataConfidence(result, allDownstreamKyst) {
+    const source = result?.source ?? (allDownstreamKyst ? 'nedstroms-bekraeftet' : 'ingen');
+    // Positivt bekræftet (strøm- eller ID15-bekræftet ingen aktuel kilde)
+    // — ikke fravær af data, den mest pålidelige kategori der findes.
+    if (source === 'nedstroms-bekraeftet' || source === 'ingen-bekraeftet') return 'hoej';
+    // Intet vandområde/vandløb overhovedet matchet — reel datamangel.
+    if (source === 'ingen') return 'ingen-data';
+    // Udløb/vandområde fundet, men bact OG viral endte alligevel begge
+    // null (fx manglende nedbørsdata for netop dette udløbs gittercelle,
+    // se riskFromBactViral()'s tilsvarende tjek i seo-pages.js) — reelt
+    // samme datamangel-kategori, uanset at et geometrisk match lykkedes.
+    if (result.bact == null && result.viral == null) return 'ingen-data';
+    // Vandløb med usikker strømretning (compute-vandlob-directions.js'
+    // confidence !== 'sikker') — den svageste af de reelle datakilder.
+    if (source === 'vandlob-usikker') return 'lav';
+    // Vandløb med bekræftet retning — ingen per-udløbs afstandsmodel i
+    // denne gren (se toOutlet(), som ikke sætter .dist), så et fast
+    // 'middel' er den ærlige konklusion frem for at foregive præcision.
+    if (source === 'vandlob') return 'middel';
+
+    const dominant = (result.outlets ?? [])[0]; // allerede sorteret efter faktisk bidrag, se buildRelevantOutlets()/annotated.sort()
+    if (!dominant || dominant.dist == null) return 'middel';
+    const nearKm = (KYSTVAND_TEXTMATCH_MAX_DIST_M / 1000) * NEAR_OUTLET_FRACTION;
+    if (source === 'kystvand') {
+      // upstream===true: CMEMS-strømmålt bekræftelse, ikke kun antaget
+      // hastighed — kombineret med kort afstand er dette den bedst
+      // funderede ikke-bekræftede kategori. upstream===null (isotropisk
+      // fallback, ingen strømdata for cellen, eller for tæt til at retning
+      // giver mening) forbliver 'middel' uanset afstand.
+      if (dominant.upstream === true) return dominant.dist <= nearKm ? 'hoej' : 'middel';
+      return 'middel';
+    }
+    // source === 'soe' — søer har slet ingen retningsmodel, kun afstand.
+    return dominant.dist <= nearKm ? 'middel' : 'lav';
+  }
+
   // ── Opstrøms-fremskrivning, del 2 (kræver buildRelevantOutlets()/
   // ASSUMED_LAKE_MIXING_VELOCITY_M_PER_S ovenfor — se lakeEdges' filhoved
   // for den fulde begrundelse/eksempel) ──────────────────────────────────
@@ -1633,6 +1688,9 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
         outlets: result?.outlets ?? [],
         noDataMatch: result || allDownstreamKyst ? null : noDataMatch,
         allDownstreamMatch: allDownstreamKyst ? { type: 'kystvand', navn: allDownstreamKyst.navn } : null,
+        // NYT (bruger-ønske — datakonfidens): se deriveDataConfidence()
+        // ovenfor for den fulde begrundelse. 'hoej'|'middel'|'lav'|'ingen-data'.
+        dataConfidence: deriveDataConfidence(result, allDownstreamKyst),
       });
       // NYT (bruger-ønske 2026-07-25 — "Læsø"-fejlen): saml dette badesteds
       // EGET, allerede afstands-/strømkorrigerede resultat til senere at
