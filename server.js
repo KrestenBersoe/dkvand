@@ -458,7 +458,7 @@ app.get('/badested/:slug', (req, res) => {
       dataset: {
         name: `Badevandsrisiko og modelestimater for ${info.navn}`,
         description: 'Modelbaserede estimater for forureningsrisiko baseret på overløbsfrekvens, observeret og prognosticeret nedbør samt patogenoverlevelse.'
-          + (confidence ? ` ${confidence.text}.` : ''),
+          + (confidence ? ` ${confidence.text}` : ''),
         temporalCoverage: new Date(badevandRiskCache.ts || Date.now()).toISOString(),
         variableMeasured: ['Forureningsrisiko per udløbspunkt', 'Overløbsfrekvens', 'Prognosticeret nedbør'],
       },
