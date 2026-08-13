@@ -84,10 +84,13 @@ const MAX_VURDERINGER_PER_IP_PER_DAY = 5;  // maks. 5 vurderinger pr. IP pr. dag
 // bruger, der reelt står ved badestedet og indsender flere observationer
 // hen over en dag (fx morgen/middag/aften).
 const MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED = 50;
-// Alle vurderinger inden for samme rullende døgn skal gælde SAMME badested —
-// ikke en ren "spred sine vurderinger over flere forskellige badesteder"-regel.
-// Håndhæves i _insertVurderingTxn() nedenfor, uafhængigt af hvilken af de to
-// grænser ovenfor der er i spil.
+// FJERNET (bruger-rapporteret): der var tidligere ÉN yderligere regel her —
+// alle vurderinger inden for samme rullende døgn skulle gælde SAMME badested,
+// ellers blev en anden badested-vurdering afvist selvom antal-loftet ovenfor
+// ikke var nået. Ramte en ægte bruger, der besøgte flere badesteder samme
+// dag (rapporteret som "kan stadig kun lave én vurdering om dagen" — den
+// egentlige årsag var IKKE antal-loftet, men denne regel). Antal-loftet
+// ovenfor er nu ENESTE grænse — se _insertVurderingTxn() nedenfor.
 
 // Foto-validering.
 const MAX_PHOTO_BYTES = 5 * 1024 * 1024;  // 5 MB — rigeligt til et komprimeret mobilfoto, uden at kunne fylde volumen hurtigt op
@@ -243,11 +246,6 @@ async function insertVurderingTxn(badestedId, entries, ipHash, now, maxPerDay) {
       const err = new Error('rate-limited-max-per-day');
       err.code = 'RATE_LIMITED';
       err.limit = maxPerDay;
-      throw err;
-    }
-    if (todaysVurderinger.length > 0 && !todaysVurderinger.some(r => r.badested_id === badestedId)) {
-      const err = new Error('rate-limited-single-badested-per-day');
-      err.code = 'RATE_LIMITED';
       throw err;
     }
 

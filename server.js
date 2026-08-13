@@ -1478,12 +1478,10 @@ app.post('/api/badested-observation', (req, res) => {
         // besked her — begrundelsen var at undgå at lære en spam-bot
         // præcis hvor grænsen går. Omgjort efter eksplicit ønske: en ægte
         // bruger, der rammer grænsen, skal kunne se HVORFOR, ikke bare at
-        // "noget gik galt". e.message skelner de to reelle årsager (se
-        // _insertVurderingTxn() i badested-observations.js).
+        // "noget gik galt". e.limit er den faktisk håndhævede grænse (5,
+        // eller 50 hvis isNearBadested — se badested-observations.js).
         console.warn(`badested-observation: rate-limited (${e.message}), ip-hash=${badestedObs.hashIp(getClientIp(req)).slice(0, 12)}…, badested=${req.body?.badestedId}`);
-        const msg = e.message === 'rate-limited-max-per-day'
-          ? `Du har allerede indsendt ${e.limit || badestedObs.MAX_VURDERINGER_PER_IP_PER_DAY} vurderinger i dag — prøv igen i morgen.`
-          : 'Du kan kun vurdere ét badested pr. dag, og har allerede vurderet et andet badested i dag.';
+        const msg = `Du har allerede indsendt ${e.limit || badestedObs.MAX_VURDERINGER_PER_IP_PER_DAY} vurderinger i dag — prøv igen i morgen.`;
         return res.status(429).json({ error: msg });
       }
       if (e.code === 'VALIDATION') {
