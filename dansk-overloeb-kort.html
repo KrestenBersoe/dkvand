@@ -7371,22 +7371,9 @@ function showLakeLoadPanel(navn, _startTs) {
 
   const sub = lakeSubstanceLoadData ? lakeSubstanceLoadData[navn] : null;
   const mfs = lakeMfsLoadData ? lakeMfsLoadData[navn] : null;
-  // RETTET (bruger-rapporteret 2026-08-10 — Farum Sø/samtlige søer viste
-  // "ingen udledninger"): denne liste over NAVNGIVNE udløb fandtes allerede
-  // server-side (lakesRiskData[navn].outlets, samme felt seo-pages.js's
-  // buildSsrContent() bruger til /soe/:slug-siderne, se dens "Udløb der
-  // påvirker dette sted") — men blev aldrig vist HER, i det panel der reelt
-  // åbnes for brugeren (openSoeFromSsr() kalder denne funktion og skjuler
-  // SSR-indholdet, se hideSsrContent()). MÅ beregnes FØR "ingen data"-tjekket
-  // nedenfor — ellers rammer søer uden matchet sub/mfs (som Farum Sø) det
-  // tidlige return og ser aldrig selve udløbslisten, uanset at den er
-  // tilgængelig. bact/viral-baserede udløb (denne liste) og N/P/COD/BOD-
-  // stofbelastning (sub/mfs) er to UAFHÆNGIGE datakilder — den ene kan
-  // sagtens mangle, mens den anden findes.
-  const soeOutlets = (lakesRiskData?.[navn]?.outlets || []).filter(o => o.lat != null && o.lng != null);
 
-  if (!sub && !mfs && soeOutlets.length === 0) {
-    body.innerHTML = `<div class="dbg-group"><div class="dbg-row"><span style="color:#8a97a3">Ingen udledningsdata for denne sø — enten er der ikke matchet nogen PULS-udløb til dens ID15-opland, eller stofbelastningsfilerne kunne ikke hentes.</span></div></div>`;
+  if (!sub && !mfs) {
+    body.innerHTML = `<div class="dbg-group"><div class="dbg-row"><span style="color:#8a97a3">Ingen stofbelastningsdata for denne sø — filerne kunne ikke hentes.</span></div></div>`;
     return;
   }
 
@@ -7399,37 +7386,13 @@ function showLakeLoadPanel(navn, _startTs) {
   rows.push(confidenceBadgeHtml(lakesRiskData?.[navn]?.dataConfidence));
   rows.push(lakeSiblingNoteHtml(navn, false));
 
-  if (soeOutlets.length > 0) {
-    rows.push(`<div class="dbg-group"><div class="dbg-group-title">Udløb der påvirker denne sø</div>` +
-      [...soeOutlets].sort((a, b) => (b.riskScore || 0) - (a.riskScore || 0)).slice(0, 20).map(pt => {
-        const risk = pt.riskScore || 0;
-        const color = risk >= 0.6 ? '#c84b1f' : risk >= 0.2 ? '#d4a020' : '#2d7d4f';
-        // RETTET (bruger-ønske 2026-08-10): klik viste tidligere kun
-        // udløbets placering på kortet (map.setView), ingen faktisk
-        // information om selve udløbet — brugeren skulle selv finde og
-        // klikke markøren igen. goToPointDeepLink() genbruger SAMME
-        // opslags-/ventelogik som /udloeb/:id-siden.
-        //
-        // RETTET (ustabil-id-fejl, bruger-rapporteret 2026-08-11 —
-        // "F-U9 i Furesø" åbnede stadig et udløb i Odense EFTER første
-        // rettelse): denne liste kommer fra et FRISKT serversvar
-        // (toOutlet(), se badevand-risk.js), mens goToPointDeepLink() slår
-        // op i klientens EGEN, evt. IndexedDB-cachede puls-data.json (op
-        // til 14 dage gammel — se TTL_PULS_MS). pt.id (rækkeindekset) kan
-        // derfor pege på ét udløb i det friske svar og et HELT ANDET i den
-        // forældede lokale kopi. favKeyFor() bruger nu outfallId (stabil
-        // GUID, medbragt af toOutlet()) i stedet, som er identisk i begge.
-        return `<div class="ud-outlet-row" onclick="closeLakeLoadPanel();goToPointDeepLink('${favKeyFor(pt)}')">
-          <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></div>
-          <div style="flex:1;min-width:0">
-            <div class="ud-outlet-name">${escHtml(pt.name)}</div>
-            <div class="ud-outlet-sub">${escHtml(pt.municipality || '—')}</div>
-          </div>
-          <span style="font-size:.78rem;font-weight:700;color:${color}">${Math.round(risk*100)}%</span>
-          <span style="opacity:.35">›</span>
-        </div>`;
-      }).join('') + `</div>`);
-  }
+  // FJERNET (bruger-ønske): den fulde udløbsliste ("Udløb der påvirker
+  // denne sø") stod tidligere her, FØR selve stofbelastnings-afsnittene
+  // nedenfor — men samme liste findes allerede (delvist) på detaljesiden
+  // (seo-pages.js's buildSsrContent() "Udløb der påvirker dette sted" på
+  // /soe/:slug), så den var reelt redundant HER, i et banner der ifølge
+  // sin egen titel handler om stofbelastning (N/P/COD/BOD), ikke om
+  // individuelle udløbs bact/viral-risikoscorer.
 
   if (sub) {
     const cy = sub.concretYear || {}, ny = sub.normalYear || {};
@@ -10277,10 +10240,11 @@ function openSoeFromSsr(navn, _startTs) {
   // RETTET (bruger-rapporteret 2026-08-10, anden runde — "ingen
   // udledningsdata" blev stadig vist, selv efter lakeLoadDataFetched-
   // rettelsen): denne funktion ventede kun på lakeLoadDataFetched
-  // (stofbelastning, statiske filer) — men selve udløbslisten i panelet
-  // (soeOutlets, se showLakeLoadPanel()) kommer fra lakesRiskData, som
-  // udelukkende sættes af loadBadevandRiskData()/loadAll(), en HELT
-  // ADSKILT hentning, aldrig ventet på her. server.js's
+  // (stofbelastning, statiske filer) — men datakonfidens-badgen i panelet
+  // (confidenceBadgeHtml(lakesRiskData?.[navn]?.dataConfidence), se
+  // showLakeLoadPanel()) kommer fra lakesRiskData, som udelukkende sættes
+  // af loadBadevandRiskData()/loadAll(), en HELT ADSKILT hentning, aldrig
+  // ventet på her. server.js's
   // ensureFreshRiskCaches() (se dens filhoved) kan ved en KOLD cache —
   // typisk lige efter en deploy/genstart — tage op til 25 SEKUNDER om at
   // svare på /api/badevand-risk; den gamle 8000ms-grænse gav derfor op
