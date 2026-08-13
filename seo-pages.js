@@ -34,9 +34,9 @@ function riskInfo(risk) {
 // overloeb-kort.html) og badevand-risk.js's deriveDataConfidence(), som er
 // den ENESTE kilde, der reelt afgør tier'en — dette er kun visnings-tekst.
 const CONFIDENCE_META = {
-  'hoej':       { label: 'Høj',        text: 'Bekræftet eller direkte strømmålt kilde tæt på badestedet.' },
+  'hoej':       { label: 'Høj',        text: 'Bekræftet eller direkte strømmålt kilde tæt på lokationen.' },
   'middel':     { label: 'Middel',     text: 'Baseret på en modelantagelse om spredningshastighed/afstand, ikke en direkte strømmåling.' },
-  'lav':        { label: 'Lav',        text: 'Baseret på en usikker strømretning eller en kilde langt fra badestedet.' },
+  'lav':        { label: 'Lav',        text: 'Baseret på en usikker strømretning eller en kilde langt fra lokationen.' },
   'ingen-data': { label: 'Ingen data', text: 'Intet grundlag for en aktuel vurdering lige nu.' },
 };
 /** Returnerer null hvis tier er ukendt/fraværende (fx sø-siderne, som endnu ikke har et dataConfidence-felt, se describeSoeRisk()). */
