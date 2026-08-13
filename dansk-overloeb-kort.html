@@ -7391,6 +7391,12 @@ function showLakeLoadPanel(navn, _startTs) {
   }
 
   const rows = [];
+  // NYT (bruger-ønske — datakonfidens for sø-siderne): lakesRiskData[navn]
+  // kommer uændret fra /api/badevand-risk's lakes{}-objekt (se
+  // badevand-risk.js's deriveLakeDataConfidence() for hvorfor sø-tier'en er
+  // grovere end badestedernes — kun hoej/middel/ingen-data). Samme
+  // confidenceBadgeHtml()-helper som badested-panelets #bv-outlets bruger.
+  rows.push(confidenceBadgeHtml(lakesRiskData?.[navn]?.dataConfidence));
   rows.push(lakeSiblingNoteHtml(navn, false));
 
   if (soeOutlets.length > 0) {

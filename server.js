@@ -496,6 +496,11 @@ app.get('/soe/:slug', (req, res) => {
   }
   const entry = badevandRiskCache.lakes?.[info.navn];
   const { text } = seoPages.describeSoeRisk(entry);
+  // NYT (bruger-ønske — datakonfidens for sø-siderne): entry.dataConfidence
+  // er sat af badevand-risk.js's deriveLakeDataConfidence() for hver sø —
+  // se dens filhoved for hvorfor sø-tier'en er grovere (kun hoej/middel/
+  // ingen-data, ingen 'lav') end badested-udgaven.
+  const confidence = seoPages.describeDataConfidence(entry?.dataConfidence);
   const kommune = info.kommune ? info.kommune.replace(/\s*kommune\s*$/i, '').trim() : null;
   const title = `${info.navn} – søvand risiko | Dit Badevand`;
   const description = `${info.navn}${kommune ? ' i ' + kommune : ''}: ${text}`;
@@ -508,7 +513,8 @@ app.get('/soe/:slug', (req, res) => {
       name: info.navn, lat: info.lat, lng: info.lng, addressLocality: kommune, description,
       dataset: {
         name: `Badevandsrisiko og modelestimater for ${info.navn}`,
-        description: 'Modelbaserede estimater for forureningsrisiko baseret på overløbsfrekvens, observeret og prognosticeret nedbør samt patogenoverlevelse.',
+        description: 'Modelbaserede estimater for forureningsrisiko baseret på overløbsfrekvens, observeret og prognosticeret nedbør samt patogenoverlevelse.'
+          + (confidence ? ` ${confidence.text}` : ''),
         temporalCoverage: new Date(badevandRiskCache.ts || Date.now()).toISOString(),
         variableMeasured: ['Forureningsrisiko per udløbspunkt', 'Overløbsfrekvens', 'Prognosticeret nedbør'],
       },
@@ -518,6 +524,7 @@ app.get('/soe/:slug', (req, res) => {
     navn: info.navn, kommune, riskText: text,
     updatedAt: new Date(badevandRiskCache.ts || Date.now()).toLocaleString('da-DK'),
     outlets: entry?.outlets || [],
+    confidenceText: confidence?.text || null,
   });
   html = seoPages.injectBodyContent(html, ssrContent + seoPages.buildSsrRouteScript({ type: 'soe', navn: info.navn }));
 

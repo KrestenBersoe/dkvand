@@ -1438,6 +1438,25 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
     return dominant.dist <= nearKm ? 'middel' : 'lav';
   }
 
+  // Sø-udgaven — bruges til lakes[navn].dataConfidence (se tildelingen
+  // efter lakeEdges-fremskrivningen nedenfor), til /soe/:slug-siderne.
+  // Søer mangler den positions-specifikke information deriveDataConfidence()
+  // ovenfor bruger: INGEN enkelt fysisk "badested"-punkt findes for en hel
+  // sø (info.lat/info.lng i slug-index.js er blot polygonens bbox-
+  // midtpunkt, ikke en reel lokation), og lakes[navn].outlets har derfor
+  // ALDRIG per-udløbs .dist/.upstream (dem sætter kun
+  // computeIsotropicLakeResult()/-KystvandResult(), kaldt med et KONKRET
+  // badesteds lat/lng). En kunstig "afstand fra bbox-midtpunkt"-tilnærmelse
+  // ville opfinde et fysisk meningsløst tal — denne er derfor bevidst
+  // grovere: kun tre tiers, ingen 'lav', da der intet afstandssignal er at
+  // skelne 'middel' fra 'lav' med på dette niveau.
+  function deriveLakeDataConfidence(lake) {
+    if (lake.confirmedNoOutlet) return 'hoej';
+    if (!lake.outlets || lake.outlets.length === 0) return 'ingen-data';
+    if (lake.bact == null && lake.viral == null) return 'ingen-data';
+    return 'middel';
+  }
+
   // ── Opstrøms-fremskrivning, del 2 (kræver buildRelevantOutlets()/
   // ASSUMED_LAKE_MIXING_VELOCITY_M_PER_S ovenfor — se lakeEdges' filhoved
   // for den fulde begrundelse/eksempel) ──────────────────────────────────
@@ -1547,6 +1566,16 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
       for (const edge of (lakeAdj.get(navn) || [])) propagateEdge(edge, lakes[edge.toKey]);
       for (const edge of (kystvandOutEdges.get(navn) || [])) propagateEdge(edge, kystvande[edge.toKey]);
     }
+  }
+
+  // NYT (bruger-ønske — datakonfidens for sø-siderne): beregnes her,
+  // UBETINGET (uden for lakeEdges.length>0-blokken ovenfor) — skal sættes
+  // for ALLE søer, ikke kun dem med opstrøms sø-forbindelser, og skal ske
+  // EFTER propagateEdge()-fremskrivningen ovenfor, så confirmedNoOutlet/
+  // outlets er de ENDELIGE værdier (propagateEdge kan rydde
+  // confirmedNoOutlet, se dens filhoved).
+  for (const navn of Object.keys(lakes)) {
+    lakes[navn].dataConfidence = deriveLakeDataConfidence(lakes[navn]);
   }
 
   // ── Badevand: punkt-i-polygon (sø → kystvand) → punkt-nær-linje (vandløb) ─
