@@ -85,8 +85,14 @@
      buildCurrentsArrowLayer() ovenfor. Selv-hostet, ikke CDN (samme princip
      som TILE_SERVER_URL nedenfor), da vi patcher motoren (danske temperatur-
      grænser, land-maskering, forstærket synlighed). -->
-<script src="leaflet-canvas-layer.js"></script>
-<script src="windy-currents.js"></script>
+<!-- ?v= er en engangs-cache-bust (se server.js' Cache-Control: no-cache-rettelse
+     for disse to filer) — enhver besøgende, der havde åbnet siden bare ÉN
+     gang tidligere samme dag, sad ellers fast på en dags-gammel, browser-
+     cachet udgave af selve strøm-motoren, uafhængigt af no-cache på HTML'en.
+     Bump versionsnummeret her ved enhver FREMTIDIG ændring af de to filer,
+     der skal nå eksisterende besøgende med det samme. -->
+<script src="leaflet-canvas-layer.js?v=2"></script>
+<script src="windy-currents.js?v=2"></script>
 
 <style>
   /* ── Design tokens ───────────────────────────────────────────────────────── */
@@ -5696,21 +5702,23 @@ function buildCurrentsArrowLayer() {
 //      fart — windy-currents.js har præcis denne mekanik indbygget
 //      (temperatur som 3. gitterbånd, farve afledt af den; bevægelse afledt
 //      af u/v alene), arvet fra selve wind-js-leaflet.
-//   4. INGEN strøm over land — to lag maskering: (a) gitterpunkter uden for
-//      hav/sø sættes til null (applyWaterMaskToVelocityData()), som
-//      windy-currents.js' createWindBuilder helt SPRINGER OVER ved
-//      interpolation; OG (b) selve canvas-elementet klippes præcist til
-//      hav-/sø-polygonernes omrids via en SVG clip-path, genberegnet ved
-//      hver gentegning (updateWaterClipPath()) — (a) reducerer "lækage"
-//      markant, men gitterets ~10 km opløsning kan stadig vise nogle pixel
-//      nær kysten uden (b), som er den geometrisk PRÆCISE garanti.
-//
-//   kun hav og søer — IKKE vandløb (i modsætning til isInDanishWater(), som
-//   også dækker vandløbenes bufferzone). CMEMS' Østersø-model leverer i
-//   praksis kun gyldige punkter over hav (søer er ikke del af den model), så
-//   maskeringen til søer er et fremtidssikret no-op indtil en sø-strøm-
-//   datakilde findes — men koden tjekker begge, så det virker automatisk
-//   den dag data findes.
+//   4. INGEN strøm over land. RETTET (bruger-rapport: "en masse felter
+//      mangler animation") — dækkede TIDLIGERE med to lag: klient-side
+//      punkt-for-punkt maskering (nulstil ethvert gitterpunkt uden for hav/
+//      sø) OG en SVG clip-path på selve canvas'et. Punkt-maskeringen var
+//      for grov: windy-currents.js' interpolate() springer en HEL
+//      gittercelle over hvis blot ÉT af dens fire hjørner er null — ved
+//      Danmarks stærkt takkede kystlinje (mange øer/fjorde/bælter,
+//      gitteropløsning ~10 km) ramte det langt mere åbent vand end
+//      tilsigtet, og gav de rapporterede "huller". Eneste maskering nu er
+//      selve clip-path'en (updateWaterClipPath()) — den er GEOMETRISK
+//      PRÆCIS (klipper til de faktiske polygon-omrids i skærmkoordinater,
+//      ikke gitterpunkter), så den garanterer stadig ingen strøm over
+//      land, uden at skulle ofre gittercellers dækning af åbent vand for
+//      det. CMEMS' egne uo/vo-punkter er i forvejen null over land (se
+//      buildVelocityGridJSON() i server.js) — det er tilstrækkeligt til at
+//      undgå at windy overhovedet FORSØGER at interpolere langt inde over
+//      land, uden vores eget ekstra, grovere lag.
 // ═══════════════════════════════════════════════════════════════════════════
 let showCurrentsVelocity      = false;
 let currentsVelocityLoading   = false;
@@ -5719,68 +5727,13 @@ let currentsCanvasLayer       = null;   // L.CanvasLayer-instans (leaflet-canvas
 let currentsVelocityRawData   = null;   // sidst hentede 3-bånds JSON — genbruges ved hver gentegning
 let currentsTempRangeK        = null;   // { min, max } — se computeVelocityTempRangeK()
 
-// Egen cache, adskilt fra _waterClassCache (som ALLIGEVEL dækker vandløb) —
-// deler dog samme f._bbox-felt på selve GeoJSON-featurene, sat af
-// computeGeometryBbox() første gang en af de to cacher rammer featuren.
-const _seaLakeCache = new Map();
-function isSeaOrLakeWater(lat, lng) {
-  if (!vp3KystvandeRaw?.features && !vp3SoeerRaw?.features) return false; // data ikke indlæst endnu — vis intet frem for forkert
-
-  const key = `${lat.toFixed(3)}:${lng.toFixed(3)}`;
-  if (_seaLakeCache.has(key)) return _seaLakeCache.get(key);
-
-  const inKystvand = vp3KystvandeRaw?.features?.some(f => {
-    if (!f._bbox) f._bbox = computeGeometryBbox(f.geometry);
-    const b = f._bbox;
-    if (lat < b.minLat || lat > b.maxLat || lng < b.minLng || lng > b.maxLng) return false;
-    return pointInGeometry(lat, lng, f.geometry);
-  }) || false;
-
-  let inSoe = false;
-  if (!inKystvand && vp3SoeerRaw?.features) {
-    inSoe = vp3SoeerRaw.features.some(f => {
-      if (!f._bbox) f._bbox = computeGeometryBbox(f.geometry);
-      const b = f._bbox;
-      if (lat < b.minLat || lat > b.maxLat || lng < b.minLng || lng > b.maxLng) return false;
-      return pointInGeometry(lat, lng, f.geometry);
-    });
-  }
-
-  const result = inKystvand || inSoe;
-  _seaLakeCache.set(key, result);
-  return result;
-}
-
-// Sætter u/v (og dermed HELE gitterpunktet, se windy-currents.js'
-// createWindBuilder) til null for ethvert punkt uden for hav/sø — null,
-// ikke 0, fordi windy-currents.js' motor helt SPRINGER OVER interpolation
-// nær et null-punkt i stedet for at tegne en teknisk gyldig, men usynlig,
-// nul-hastigheds-partikel, der stadig kunne "smitte" farve/temperatur ind.
-// Kører kun ÉN gang pr. datahentning (ikke pr. animationsframe).
-function applyWaterMaskToVelocityData(velocityJSON) {
-  const [uBand, vBand] = velocityJSON;
-  const { nx, ny, la1, lo1, dy, dx } = uBand.header;
-  for (let r = 0; r < ny; r++) {
-    const lat = la1 - r * dy;
-    for (let c = 0; c < nx; c++) {
-      const lng = lo1 + c * dx;
-      if (!isSeaOrLakeWater(lat, lng)) {
-        const idx = r * nx + c;
-        uBand.data[idx] = null;
-        vBand.data[idx] = null;
-      }
-    }
-  }
-  return velocityJSON;
-}
-
 // RETTET (bruger-rapport: "alle strømme er røde") — windy-currents.js brugte
 // tidligere en FAST temperaturskala (0-22°C), men medio august ligger ALLE
 // danske vandtemperaturer i den øverste tredjedel af den skala, så farven
 // næsten ikke varierede. Beregner nu det FAKTISKE min/max blandt de punkter,
-// der rent faktisk er vand (u-båndet er null for land/maskerede punkter, se
-// applyWaterMaskToVelocityData ovenfor) — en relativ skala, der altid
-// spænder hele dens farveinterval over det datasæt, der reelt vises.
+// der rent faktisk har CMEMS-data (u-båndet er null hvor CMEMS selv ikke
+// har et punkt, se buildVelocityGridJSON() i server.js) — en relativ skala,
+// der altid spænder hele dens farveinterval over det datasæt, der reelt vises.
 function computeVelocityTempRangeK(velocityJSON) {
   const [uBand, , tBand] = velocityJSON;
   let min = Infinity, max = -Infinity;
@@ -5965,18 +5918,15 @@ function deactivateCurrentsVelocity() {
 }
 
 // RETTET (bruger-rapport: knappen skifter tilstand, men intet vises):
-// isSeaOrLakeWater() returnerer BEVIDST false for ALT, hvis hverken
-// vp3KystvandeRaw eller vp3SoeerRaw er hentet endnu (se dens filhoved,
-// "vis intet frem for forkert") — men loadVP3Layers() henter dem
-// ASYNKRONT fra sideindlæsning (985 sø-polygoner tager mærkbar tid), og
-// intet forhindrede tidligere brugeren i at klikke "Strøm (test)" FØR de
-// var klar. Resultatet var et gitter maskeret til null OVERALT (ingen
-// data at tegne) — og fordi currentsVelocityRawData derefter var ikke-
-// null (blot alt-null indeni), forsøgte toggleCurrentsVelocity() aldrig
-// at hente igen ved efterfølgende til/fra-klik, så fejlen var permanent
-// for resten af sessionen. Venter nu på (mindst ét af) datasættene, med
-// en generøs timeout som sikkerhedsventil, hvis VP3-hentningen fejler
-// helt.
+// updateWaterClipPath() (se dens filhoved) bygger clip-path'en ud fra
+// vp3KystvandeRaw/vp3SoeerRaw — er INGEN af dem hentet endnu, bliver
+// klip-stien TOM (ingen polygon-punkter at tegne), hvilket klipper HELE
+// canvas'et væk (en tom <clipPath> definerer et areal på nul). Men
+// loadVP3Layers() henter dem ASYNKRONT fra sideindlæsning (985 sø-
+// polygoner tager mærkbar tid), og intet forhindrede tidligere brugeren i
+// at klikke "Strøm (test)" FØR de var klar. Venter nu på (mindst ét af)
+// datasættene, med en generøs timeout som sikkerhedsventil, hvis VP3-
+// hentningen fejler helt.
 function waitForWaterPolygons(timeoutMs = 15000) {
   return new Promise(resolve => {
     const start = Date.now();
@@ -6006,8 +5956,7 @@ async function loadCurrentsVelocityLayer() {
     // for temperatur fandt intet, og temp forblev null.
     const res = await fetch('api/currents/velocity', { cache: 'no-store' });
     if (!res.ok) throw new Error(`Server svarede ${res.status}`);
-    const raw = await res.json();
-    currentsVelocityRawData = applyWaterMaskToVelocityData(raw);
+    currentsVelocityRawData = await res.json();
     currentsTempRangeK = computeVelocityTempRangeK(currentsVelocityRawData);
 
     if (!currentsCanvasLayer) {

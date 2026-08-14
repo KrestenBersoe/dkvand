@@ -814,9 +814,19 @@ app.get('/overloeb-sw.js', (req, res) => {
 // udlevering (loades via <script src> i dansk-overloeb-kort.html), så en
 // navngivet undtagelse her er den rigtige løsning, IKKE en generel
 // åbning af .js i allowlisten.
+// RETTET (bruger-rapport, samme dag: "stadig rød"/"gammel skala" efter
+// flere redeploys) — max-age=86400 (1 dag) betød at ENHVER bruger, der
+// havde åbnet siden bare ÉN gang tidligere samme dag, blev ved med at
+// køre en flere-timer-gammel udgave af selve motoren, uafhængigt af hvor
+// mange gange den omkringliggende dansk-overloeb-kort.html (no-cache)
+// blev genindlæst — <script src>-tagget peger jo på PRÆCIS samme URL, så
+// browseren så aldrig grund til at spørge serveren igen. no-cache (samme
+// politik som HTML'en selv) tvinger en (billig, ETag-baseret) revalidering
+// ved hver indlæsning i stedet, mens denne funktion stadig er under aktiv
+// iteration.
 for (const publicJsFile of ['windy-currents.js', 'leaflet-canvas-layer.js']) {
   app.get('/' + publicJsFile, (req, res) => {
-    res.set('Cache-Control', 'public, max-age=86400');
+    res.set('Cache-Control', 'no-cache');
     res.type('application/javascript');
     res.sendFile(path.join(STATIC_DIR, publicJsFile));
   });
