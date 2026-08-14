@@ -5717,6 +5717,7 @@ let currentsVelocityLoading   = false;
 let currentsWindy             = null;   // Windy-instans (windy-currents.js)
 let currentsCanvasLayer       = null;   // L.CanvasLayer-instans (leaflet-canvas-layer.js)
 let currentsVelocityRawData   = null;   // sidst hentede 3-bånds JSON — genbruges ved hver gentegning
+let currentsTempRangeK        = null;   // { min, max } — se computeVelocityTempRangeK()
 
 // Egen cache, adskilt fra _waterClassCache (som ALLIGEVEL dækker vandløb) —
 // deler dog samme f._bbox-felt på selve GeoJSON-featurene, sat af
@@ -5771,6 +5772,26 @@ function applyWaterMaskToVelocityData(velocityJSON) {
     }
   }
   return velocityJSON;
+}
+
+// RETTET (bruger-rapport: "alle strømme er røde") — windy-currents.js brugte
+// tidligere en FAST temperaturskala (0-22°C), men medio august ligger ALLE
+// danske vandtemperaturer i den øverste tredjedel af den skala, så farven
+// næsten ikke varierede. Beregner nu det FAKTISKE min/max blandt de punkter,
+// der rent faktisk er vand (u-båndet er null for land/maskerede punkter, se
+// applyWaterMaskToVelocityData ovenfor) — en relativ skala, der altid
+// spænder hele dens farveinterval over det datasæt, der reelt vises.
+function computeVelocityTempRangeK(velocityJSON) {
+  const [uBand, , tBand] = velocityJSON;
+  let min = Infinity, max = -Infinity;
+  for (let i = 0; i < uBand.data.length; i++) {
+    if (uBand.data[i] === null) continue;
+    const t = tBand.data[i];
+    if (t < min) min = t;
+    if (t > max) max = t;
+  }
+  if (!isFinite(min) || !isFinite(max)) return null; // ingen vandpunkter — lad windy-currents.js' faldback gælde
+  return { min, max };
 }
 
 // ── Permanent mørk hav-/sø-baggrund (bruger-krav: ALTID, ikke kun i test) ──
@@ -5927,7 +5948,14 @@ function activateCurrentsVelocity() {
   if (!map.hasLayer(currentsCanvasLayer)) map.addLayer(currentsCanvasLayer);
   const canvas = currentsCanvasLayer._canvas;
   canvas.style.clipPath = 'url(#currents-water-clip)';
-  currentsWindy = new Windy({ canvas, data: currentsVelocityRawData });
+  currentsWindy = new Windy({
+    canvas,
+    data: currentsVelocityRawData,
+    // Relativ farveskala (se computeVelocityTempRangeK()'s filhoved) —
+    // uden dette falder windy-currents.js tilbage til en fast 0-22°C-skala.
+    minTemp: currentsTempRangeK?.min,
+    maxTemp: currentsTempRangeK?.max,
+  });
   onDrawCurrentsLayer();
 }
 
@@ -5980,6 +6008,7 @@ async function loadCurrentsVelocityLayer() {
     if (!res.ok) throw new Error(`Server svarede ${res.status}`);
     const raw = await res.json();
     currentsVelocityRawData = applyWaterMaskToVelocityData(raw);
+    currentsTempRangeK = computeVelocityTempRangeK(currentsVelocityRawData);
 
     if (!currentsCanvasLayer) {
       currentsCanvasLayer = L.canvasLayer().delegate({ onDrawLayer: onDrawCurrentsLayer });

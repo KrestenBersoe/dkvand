@@ -34,8 +34,15 @@
 var Windy = function (params) {
 
 	const VELOCITY_SCALE = 0.022 * (Math.pow(window.devicePixelRatio,1/3) || 1); // RETTET: 0.005 → 0.022 (bruger-rapport: næsten usynlig)
-	const MIN_TEMPERATURE_K = 273.15;                                            // 0°C  — dansk vintervandtemperatur
-	const MAX_TEMPERATURE_K = 295.15;                                            // 22°C — dansk sommervandtemperatur (varmt hav/sø)
+	// RETTET (bruger-rapport: "alle strømme er røde" — midt-august havde ALLE
+	// danske vandtemperaturer ligget i den øverste tredjedel af en fast 0-22°C-
+	// skala, så farven næsten ikke varierede). Skalaen er nu RELATIV til det
+	// datasæt, der reelt hentes — caller (dansk-overloeb-kort.html) beregner
+	// selv min/max blandt de faktiske (ikke-maskerede) vandpunkter og sender
+	// dem som params.minTemp/params.maxTemp (Kelvin). Disse to konstanter
+	// forbliver kun som FALDBACK, hvis caller ikke angiver dem.
+	const MIN_TEMPERATURE_K_DEFAULT = 273.15; // 0°C
+	const MAX_TEMPERATURE_K_DEFAULT = 295.15; // 22°C
 	const MAX_PARTICLE_AGE = 120;                                                // RETTET: 90 → 120 (længere, mere synlige spor)
 	const PARTICLE_LINE_WIDTH = 3;                                               // RETTET: 1 → 3 (markant tykkere streger)
 	const PARTICLE_MULTIPLIER = 1 / 60;                                          // RETTET: 1/200 → 1/60 (tættere partikelfelt)
@@ -387,7 +394,15 @@ var Windy = function (params) {
 			return result;
 		}
 
-		var colorStyles = windTemperatureColorScale(MIN_TEMPERATURE_K, MAX_TEMPERATURE_K);
+		// RETTET (se filhoved): relativ skala fremfor fast — params.minTemp/
+		// maxTemp kommer fra callerens EGET min/max blandt de faktiske
+		// vandpunkter i det aktuelle datasæt. Værn mod et (næsten) fladt
+		// datasæt (minTemp≈maxTemp) — uden dette ville indexFor() dividere
+		// med ~0 og give NaN, som buckets[NaN] ville crashe på.
+		var scaleMin = (typeof params.minTemp === 'number') ? params.minTemp : MIN_TEMPERATURE_K_DEFAULT;
+		var scaleMax = (typeof params.maxTemp === 'number') ? params.maxTemp : MAX_TEMPERATURE_K_DEFAULT;
+		if (scaleMax - scaleMin < 0.5) { scaleMin -= 0.25; scaleMax += 0.25; }
+		var colorStyles = windTemperatureColorScale(scaleMin, scaleMax);
 		var buckets = colorStyles.map(function () { return []; });
 		var mapArea = ((extent.south - extent.north) * (extent.west - extent.east));
 		var particleCount = Math.round(bounds.width * bounds.height * PARTICLE_MULTIPLIER * Math.pow(mapArea, 0.24));
