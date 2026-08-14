@@ -3653,20 +3653,21 @@ function centerOnMyLocation(btnEl) {
   );
 }
 
-// Light basemap — SDFI/Klimadatastyrelsens officielle Skærmkortet (Klassisk),
-// hentet via Datafordelerens WMS og proxyet gennem vores egen /api/tiles/
-// skaermkort/-route i server.js (se dén for hvorfor: nøglen skal blive
-// server-side, og ruten leverer almindelige XYZ-PNG'er, så resten af denne
-// fil er uændret — kun URL'en herunder skiftede).
+// Light basemap — selv-hostet, kun-Danmark tileserver (se tileserver/-
+// mappen i repoet for hele opsætningen).
 //
-// RETTET/MIGRERET: kortet var tidligere selv-hostede OSM-baserede fliser
-// (se git-historik: tile.openstreetmap.org → CARTO → MapTiler → egen
-// Planetiler/TileServer-GL-pipeline, se scripts/tiles/build-denmark-
-// tiles.sh og tileserver/ hvis den pipeline skal genoplives). Skiftet til
-// Skærmkortet er bevidst: officiel dansk kortlægning (GeoDanmark + Danske
-// Stednavne) fremfor OSM, på bekostning af at genindføre en ekstern
-// afhængighed (Datafordeler-apikey, 2 års udløb, tjenesten er under
-// migrering frem til jan. 2027) — se serverens kommentar for afvejningen.
+// RETTET/MIGRERET: skiftede tidligere gentagne gange leverandør, hver gang
+// det "gratis" niveau blev strammet uden varsel (rå tile.openstreetmap.org
+// → CARTO → MapTiler, se git-historik for de tidligere begrundelser hvis
+// nødvendigt). Mønstret var klart: uautentificerede/kvote-baserede
+// tredjeparts-CDN'er strammes før eller siden. Løsningen her fjerner
+// problemet permanent i stedet for at udskyde det: vi genererer og
+// hoster selv kortfliser for Danmark (+ kystnært farvand), baseret på
+// OpenStreetMap-data (samme kildedata MapTiler i øvrigt selv bruger) via
+// Planetiler + TileServer GL, deployet som en selvstændig Fly.io-service
+// ved siden af denne. Ingen ekstern kvote at løbe tør for, ingen API-nøgle
+// at rotere. Se scripts/tiles/build-denmark-tiles.sh for generering af
+// selve fliserne, og tileserver/ for serverings-opsætningen.
 //
 // RETTET (2026-07-25): peger nu på tiles.ditbadevand.dk i stedet for det
 // rå dkvand-tiles.fly.dev — det rå fly.dev-hostname går UDEN OM
@@ -3676,24 +3677,32 @@ function centerOnMyLocation(btnEl) {
 // for hver eneste flise. tiles.ditbadevand.dk er en Cloudflare-proxied
 // CNAME til samme dkvand-tiles.fly.dev (se fly certs list -a dkvand-tiles
 // for TLS-certifikatet), med en Cache Rule der cacher alt på stien —
-// bekræftet virkende (cf-cache-status: HIT på gentagne opslag). Nu, hvor
-// fliserne kommer fra vores egen /api/tiles/skaermkort-graa/-proxy i stedet
-// for tileserver-Fly-appen, går de allerede gennem samme ditbadevand.dk-
-// origin/Cloudflare-cache uden yderligere opsætning.
+// bekræftet virkende (cf-cache-status: HIT på gentagne opslag).
 //
-// RETTET (bruger-rapport: "kun nogle zoomniveauer er grå") — stilnavnet
-// (-graa) er nu en del af selve stien, ikke kun en LAYERS-parameter inde i
-// server.js. Fliserne caches 7 dage (server.js), og et skift af LAYERS
-// alene ændrer ikke URL'en — Cloudflare/browseren blev ved med at servere
-// allerede-cachede, gamle (klassiske) fliser for ethvert z/x/y besøgt FØR
-// skiftet, mens ubesøgte z/x/y korrekt fik den nye stil. Skift stilnavnet
-// her OG i server.js' route sammen ved enhver FREMTIDIG stilændring, som
-// ?v=-bumpet på windy-currents.js/leaflet-canvas-layer.js ovenfor.
-const TILE_SERVER_URL = '/api/tiles/skaermkort-graa/{z}/{x}/{y}.png';
+// RETTET (2026-08-14/15, bruger-beslutning — reverserer et kort mellemspil):
+// prøvede kortvarigt SDFI/Klimadatastyrelsens Skærmkortet (officiel WMS,
+// proxyet server-side, se git-historik commit a0e4564 hvis den skal
+// genoplives) — reverseret igen samme dag: WMS-tjenesten renderer i faste
+// 256×256-rasterfliser uden hensyn til devicePixelRatio, hvilket så
+// mærkbart uskarpt ud på almindelige (retina/høj-DPI) skærme sammenlignet
+// med det selv-hostede vektor-afledte kort. server.js' /api/tiles/
+// skaermkort-graa-proxy-route og SKAERMKORT_API_KEY-secreten er fjernet
+// igen som en del af denne reversering.
+const TILE_SERVER_URL = 'https://tiles.ditbadevand.dk/styles/basic/{z}/{x}/{y}.png';
 
 L.tileLayer(TILE_SERVER_URL, {
-  attribution: '© <a href="https://datafordeler.dk">SDFI/Klimadatastyrelsen</a>',
-  maxZoom: 19
+  attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19,
+  // RETTET (KRITISK — overbelastede tileserveren): denmark.mbtiles har kun
+  // data til zoom 14 (se metadata: minzoom/maxzoom). Uden maxNativeZoom
+  // bad Leaflet tileserveren om ÆGTE fliser for zoom 15-19 også, hvilket
+  // tvang den (kun 1 delt vCPU) til dyr on-the-fly vektor→raster-rendering
+  // pr. flise (1,4-3 sek. observeret pr. flise i produktionslogs) — nok til
+  // at overbelaste serveren så almindelige fliser på ALLE zoom-niveauer
+  // begyndte at time out. maxNativeZoom får Leaflet til i stedet at
+  // CSS-opskalere den sidste rigtige zoom-14-flise for niveau 15-19,
+  // helt uden server-belastning.
+  maxNativeZoom: 14
 }).addTo(map);
 
 // ── Hjem-kort: separat lille Leaflet-instans for lokal visning ─────────────
@@ -3711,8 +3720,9 @@ function initHjemMap() {
     zoomControl: true,
   });
   L.tileLayer(TILE_SERVER_URL, {
-    attribution: '© <a href="https://datafordeler.dk">SDFI/Klimadatastyrelsen</a>',
-    maxZoom: 19
+    attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+    maxNativeZoom: 14 // se hovedkortets tileLayer ovenfor for hvorfor
   }).addTo(hjemMap);
   hjemNearestLayer = L.layerGroup().addTo(hjemMap);
   return hjemMap;
