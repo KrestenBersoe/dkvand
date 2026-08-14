@@ -68,6 +68,14 @@ COPY oauth-login.js ./
 # "crasher øjeblikkeligt uden denne linje"-fælde som de øvrige lokale
 # moduler i denne fil.
 COPY tenant-badesteder.js ./
+# NYT: Kommunepakke, modul 6 — server.js requirer nu også
+# (require('./badested-overrides'), som selv require'r require('./badested-
+# override-logic')) disse to moduler ved opstart, samme "crasher
+# øjeblikkeligt uden denne linje"-fælde som de øvrige lokale moduler i
+# denne fil. Tilføjet HER (før commit/deploy, ikke efter) — se modul 1's
+# produktionsudfald-kommentar ovenfor for hvorfor dette tjekkes hver gang.
+COPY badested-overrides.js ./
+COPY badested-override-logic.js ./
 # server.js's GET /admin/dashboard, GET /admin/settings/oauth og
 # GET /admin/login læser disse filer direkte via fs.readFileSync(STATIC_DIR,
 # ...) ved hver request (samme mønster som stats.html nedenfor) — mangler

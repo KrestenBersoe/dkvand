@@ -6240,7 +6240,13 @@ function computeBadevandRisk(lat, lng, badevandId) {
     // panelet. Uden den var der ingen måde at se, at et højt push-varsel
     // og en lav "nu"-score kan være samtidigt sande (forecast er
     // fremadskuende, bact/viral er nuet) — se showBadevandPanel().
-    return { bact: sp.bact, viral: sp.viral, algae: sp.algae, forecast: sp.forecast, source: sp.source, outlets: sp.outlets || [], dataConfidence: sp.dataConfidence ?? null };
+    // NYT (Kommunepakke, modul 6): overrideInfo føres videre UÆNDRET, hvis
+    // serveren satte det (badested-overrides.js's patchBadevandEntry()) —
+    // en aktiv overstyring har PR. DEFINITION altid ikke-null bact/viral
+    // (de syntetiske værdier), rammer derfor altid DENNE gren, aldrig de
+    // øvrige nedenfor. undefined for et upatchet badested, ikke null —
+    // showBadevandPanel()'s banner-tjek bruger `if (sp.overrideInfo)`.
+    return { bact: sp.bact, viral: sp.viral, algae: sp.algae, forecast: sp.forecast, source: sp.source, outlets: sp.outlets || [], dataConfidence: sp.dataConfidence ?? null, overrideInfo: sp.overrideInfo };
   }
   // RETTET (KRITISK — se brugerrapport 2026-07-25, DKBW1031/Skanderborg Sø
   // Camping): denne funktion tjekkede kun 'nedstroms-bekraeftet' som en
@@ -6278,6 +6284,51 @@ function computeBadevandRisk(lat, lng, badevandId) {
   // allLakeGeoms/allKystvandGeoms + noDataMatch) — ingen lokal
   // geometri-genberegning nødvendig for at bevare denne besked.
   return { bact: null, viral: null, algae: null, source: 'ingen', outlets: [], geomMatchNoData: sp.noDataMatch || null, dataConfidence: sp.dataConfidence ?? null };
+}
+
+// NYT (Kommunepakke, modul 6): kommune-overstyrings-banner — se
+// badested-overrides.js's filhoved for HELE begrundelsen (bevidst
+// ANDEN, autentificeret mekanisme end borgerobservationer, TYDELIGT
+// offentligt mærket, ALDRIG en usynlig talmanipulation). Kaldt fra
+// showBadevandPanel() med _risk.overrideInfo — ryddet (tomt banner) hvis
+// intet aktivt findes for det åbne badested.
+const OVERRIDE_BUCKET_META = {
+  groen:  { label: 'God badevandskvalitet', bg: '#e8f5ec', border: '#2d7d4f', text: '#1f5c39' },
+  gul:    { label: 'Moderat risiko',         bg: '#fdf3dd', border: '#d4a020', text: '#8a6a14' },
+  roed:   { label: 'Høj risiko',             bg: '#fbe9e4', border: '#c84b1f', text: '#8f3615' },
+  // NYT (bruger-ønske): "LUKKET", IKKE "høj risiko" — en helt anden
+  // besked til borgeren (badning frarådes aktivt vs. badestedet er
+  // fysisk/administrativt lukket), selvom begge bruger samme høj-alarm-
+  // farve på selve kortmarkøren (se badested-overrides.js's
+  // BUCKET_SYNTHETIC_RISK).
+  lukket: { label: 'LUKKET FOR BADNING',     bg: '#3a1410', border: '#c84b1f', text: '#ffe4dc' },
+};
+function renderOverrideBanner(overrideInfo) {
+  const el = document.getElementById('bv-override-banner');
+  if (!el) return;
+  if (!overrideInfo) { el.innerHTML = ''; return; }
+  const meta = OVERRIDE_BUCKET_META[overrideInfo.bucket] || OVERRIDE_BUCKET_META.roed;
+  const expiresStr = overrideInfo.expiresAt
+    ? new Date(overrideInfo.expiresAt).toLocaleString('da-DK', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+    : null;
+  // NYT: logo hentes DIREKTE af borgerens browser (aldrig server-side, se
+  // tenant-admin.js's createTenant()) — onerror skjuler billedet HELT
+  // stille ved en død/manglende URL, i stedet for et ødelagt billede-ikon.
+  const logoHtml = overrideInfo.logoUrl
+    ? `<img src="${escHtml(overrideInfo.logoUrl)}" alt="" style="max-height:32px;max-width:120px;object-fit:contain" onerror="this.style.display='none'">`
+    : '';
+  el.innerHTML = `
+    <div style="background:${meta.bg};border:2px solid ${meta.border};border-radius:10px;padding:.9rem 1rem;margin-bottom:.8rem">
+      <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem">
+        ${logoHtml}
+        <div style="font-weight:800;font-size:.95rem;color:${meta.text};text-transform:uppercase;letter-spacing:.03em">${escHtml(meta.label)}</div>
+      </div>
+      <div style="color:${meta.text};font-size:.88rem;line-height:1.4;margin-bottom:.5rem">${escHtml(overrideInfo.message)}</div>
+      <div style="color:${meta.text};opacity:.75;font-size:.72rem">
+        Sat af ${escHtml(overrideInfo.tenantName || 'kommunen')}${expiresStr ? ` — gælder til ${expiresStr}` : ''}
+      </div>
+    </div>
+  `;
 }
 
 function colorBadevandByRisk() {
@@ -9491,6 +9542,7 @@ async function showBadevandPanel(feature, skipUrlPush) {
   // det reelle ID-felt på badevands-featuresne, ikke 'ov_id'/'id'.
   const _badevandId = feature.properties?.bathingwat ?? feature.properties?.ov_id ?? feature.properties?.id;
   const _risk = computeBadevandRisk(latlng.lat, latlng.lng, _badevandId);
+  renderOverrideBanner(_risk.overrideInfo); // Kommunepakke, modul 6 — se dens filhoved
   // RETTET: ved source === 'ingen' (intet bekræftet sø-/kystvand-match —
   // den rå radius-fallback er fjernet helt efter eksplicit tilbagemelding)
   // faldt bact/viral/algae tidligere til 0 via ?? 0 — men 0% antyder en
@@ -10937,6 +10989,13 @@ document.addEventListener('visibilitychange', () => {
     </button>
   </div>
   <div id="bv-body">
+
+    <!-- NYT (Kommunepakke, modul 6): kommune-overstyrings-banner — vises
+         KUN når en aktiv overstyring findes for det åbne badested (se
+         renderOverrideBanner(), kaldt fra showBadevandPanel()). Placeret
+         ØVERST, FØR selve risikotallene, efter eksplicit bruger-ønske om
+         at overstyringen skal være tydeligt synlig, ikke en diskret note. -->
+    <div id="bv-override-banner"></div>
 
     <!-- Samlet risiko — fremhævet øverst -->
     <div style="background:#fff;border-radius:10px;border:1px solid #dde3e8;padding:.8rem 1rem;text-align:center;margin-bottom:.2rem">

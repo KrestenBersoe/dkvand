@@ -139,18 +139,33 @@ function verifyPayload(cookieValue) {
  * @param {{tenantId: string, authMethod: 'trial'|'oauth'}} p
  * @returns {string} cookieværdi (ikke selve Set-Cookie-headeren)
  */
-function signSession({ tenantId, authMethod }) {
-  return signPayload({ tenantId, authMethod }, SESSION_MAX_AGE_MS);
+// NYT (Kommunepakke, modul 6): `email` er VALGFRI — kun OAuth-sessioner har
+// én (fra ID-token-claimet, se oauth-login.js's handleCallback()), trial-
+// sessioner har ingen. Additiv, bagudkompatibel udvidelse: en EKSISTERENDE
+// session-cookie uden email-feltet forbliver gyldig (verifySession()
+// returnerer blot undefined for feltet, ingen fejl). Bruges af
+// badested-overrides.js til at registrere HVEM (hvilken medarbejder) der
+// satte en given overstyring — et revisionsspor-hensyn, ikke en adgangs-
+// kontrol (selve adgangen styres fortsat udelukkende af tenantId).
+function signSession({ tenantId, authMethod, email }) {
+  return signPayload({ tenantId, authMethod, email }, SESSION_MAX_AGE_MS);
 }
 
 /**
  * @param {string|undefined} cookieValue
- * @returns {{tenantId: string, authMethod: string}|null}
+ * @returns {{tenantId: string, authMethod: string, email?: string}|null}
  */
 function verifySession(cookieValue) {
   const payload = verifyPayload(cookieValue);
   if (!payload || !payload.tenantId || !payload.authMethod) return null;
-  return { tenantId: payload.tenantId, authMethod: payload.authMethod };
+  // RETTET: `email`-nøglen udelades HELT (ikke sat til undefined) når
+  // fraværende — en session-baseret {tenantId,authMethod}-form uden email
+  // er den ORIGINALE, allerede testede kontrakt (tenant-session.test.js),
+  // og assert.deepStrictEqual skelner mellem "nøgle mangler" og "nøgle er
+  // sat til undefined". Denne form bevarer begge dele korrekt.
+  const result = { tenantId: payload.tenantId, authMethod: payload.authMethod };
+  if (payload.email) result.email = payload.email;
+  return result;
 }
 
 // Triviel håndrullet cookie-parsing — ingen ny npm-afhængighed for noget der

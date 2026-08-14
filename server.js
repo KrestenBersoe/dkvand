@@ -37,6 +37,11 @@ const badevandRisk  = require('./badevand-risk');
 // badevandRisk's officielle farve/badge. Egen SQLite-fil på samme Volume,
 // ikke en del af badevandRisk's eget datagrundlag.
 const badestedObs  = require('./badested-observations');
+// NYT (Kommunepakke, modul 6): kommune-overstyring af et badesteds
+// offentlige status — se modulets eget filhoved for den fulde begrundelse,
+// inkl. hvorfor dette IKKE er en undtagelse fra badested-observations.js's
+// HÅRDE GRÆNSE ovenfor.
+const badestedOverrides = require('./badested-overrides');
 // NYT: installations-telemetri (stille heartbeat, aktiv-installationstal pr.
 // platform) + daglig badevands-risikohistorik (grundlag for ugentlig
 // badested-digest) — se modulets eget filhoved for begrundelsen bag
@@ -148,6 +153,7 @@ const PUSH_SEND_TYPES = {
   HEARTBEAT:        'heartbeat',         // stille installations-heartbeat (runPeriodicEngagementJob())
   UGENTLIG_DIGEST:  'ugentlig-digest',   // ugentlig badested-status (runPeriodicEngagementJob())
   NY_VURDERING:     'ny-vurdering',      // dagens første borger-vurdering af et badested (broadcastFirstVurderingOfDay())
+  KOMMUNE_OVERRIDE: 'kommune-override',  // Kommunepakke, modul 6 — kommune-overstyring af et badesteds status (POST /admin/api/override)
 };
 
 // Rå Postgres-række → samme feltnavne (camelCase) som resten af koden
@@ -633,7 +639,11 @@ app.get(oauthLogin.CALLBACK_PATH, async (req, res) => {
     // (ikke tilføjer til) en tidligere sat Set-Cookie-header, et separat
     // clearStateCookie()-kald HER ville derfor blot være blevet overskrevet
     // igen af linjen nedenfor og aldrig reelt sendt til klienten.
-    const sessionCookie = tenantAdmin.signSession({ tenantId, authMethod: 'oauth' });
+    // NYT (Kommunepakke, modul 6): email lægges nu med i sessionen (allerede
+    // valideret/autentificeret af oauth-login.js's handleCallback() ovenfor)
+    // — bruges bl.a. til at registrere HVEM der satte en overstyring, se
+    // badested-overrides.js.
+    const sessionCookie = tenantAdmin.signSession({ tenantId, authMethod: 'oauth', email });
     res.set('Set-Cookie', [oauthLogin.buildClearOauthStateSetCookieHeader(), tenantAdmin.buildSessionSetCookieHeader(sessionCookie)]);
     console.info(`admin/oauth/callback: login lykkedes for ${email.replace(/^(.).*(@.*)$/, '$1***$2')} (tenant=${tenantId})`);
     res.redirect('/admin/dashboard');
@@ -683,6 +693,108 @@ app.get('/admin/api/badested-history', tenantAdmin.requireTenantSession, async (
   } catch (e) {
     console.error('admin/api/badested-history: uventet fejl —', e.message);
     res.status(500).json({ error: 'Kunne ikke hente badevandshistorik lige nu.' });
+  }
+});
+
+// ── Kommunepakke, modul 6 — overstyringsknap ────────────────────────────────
+// Se badested-overrides.js's filhoved for den fulde begrundelse/HÅRD GRÆNSE-
+// afgrænsning. Alle tre ruter er tenant-scoped: en tenant kan UDELUKKENDE
+// overstyre badesteder tenant-badesteder.resolveTenantBadesteder() rapporterer
+// som deres egne (samme ejerskabs-tjek som modul 4's historik).
+app.post('/admin/api/override', tenantAdmin.requireTenantSession, express.json(), async (req, res) => {
+  try {
+    const { badestedId, bucket, message, durationHours } = req.body || {};
+    if (typeof badestedId !== 'string' || !badestedId) {
+      return res.status(400).json({ error: 'badestedId er påkrævet.' });
+    }
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const owned = tenantBadesteder.resolveTenantBadesteder(tenant.name, kommuneKeyToBadesteder);
+    const target = owned.find(b => String(b.id) === String(badestedId));
+    if (!target) {
+      return res.status(403).json({ error: 'Dette badested tilhører ikke jeres kommune.' });
+    }
+
+    let overrideRow;
+    try {
+      overrideRow = await badestedOverrides.createOverride({
+        badestedId, tenantId: req.tenant.tenantId, bucket, message,
+        setBy: req.tenant.email || req.tenant.authMethod, durationHours,
+      });
+    } catch (e) {
+      if (e.code === 'VALIDATION') return res.status(400).json({ error: e.message });
+      throw e;
+    }
+
+    // Patcher den ALLEREDE LIVE cache med det samme — se
+    // applyLiveOverridesToCache()'s egen begrundelse ("under 10 sekunder").
+    await applyLiveOverridesToCache();
+
+    // NYT: udsender webpush til badestedets abonnenter — AWAITER
+    // flushPushQueue() (IKKE fire-and-forget som broadcastFirstVurderingOfDay()
+    // ovenfor) — "under 10 sekunder"-kravet betyder svaret skal kunne
+    // bekræfte reel afsendelse, ikke blot antage den lykkedes.
+    let pushSent = 0;
+    if (VAPID_PUBLIC_KEY) {
+      const matches = await getSubscriptionsForBadested(badestedId);
+      if (matches.length > 0) {
+        const now = Date.now();
+        await Promise.all(matches.map(({ endpoint, group }) => query(`
+          INSERT INTO push_send_queue (endpoint, type, payload, hit_stamps, enqueued_at)
+          VALUES ($1, $2, $3, '[]'::jsonb, $4)
+        `, [
+          endpoint,
+          PUSH_SEND_TYPES.KOMMUNE_OVERRIDE,
+          JSON.stringify({
+            title: `⚠️ ${tenant.name}: ${target.navn}`,
+            body: message,
+            tag: `override-${badestedId}-${overrideRow.id}`,
+            url: (group.lat != null && group.lng != null) ? `/#badevand=${group.lat}:${group.lng}` : '/',
+          }),
+          now,
+        ])));
+        await flushPushQueue();
+        pushSent = matches.length;
+      }
+      console.info(`admin/api/override: ${bucket} sat for ${badestedId} (tenant=${req.tenant.tenantId}), ${pushSent} abonnent(er) varslet`);
+    }
+
+    res.json({ ok: true, expiresAt: overrideRow.expires_at, pushSent });
+  } catch (e) {
+    console.error('admin/api/override POST: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke oprette overstyring lige nu.' });
+  }
+});
+
+app.post('/admin/api/override/:badestedId/clear', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const { badestedId } = req.params;
+    // revokeOverride() tjekker SELV tenant_id i sin WHERE-klausul (se dens
+    // filhoved) — en tenant kan derfor aldrig rydde en anden tenants
+    // overstyring, selv ved en fremtidig fejl i et tidligere ejerskabs-tjek.
+    const revoked = await badestedOverrides.revokeOverride({ badestedId, tenantId: req.tenant.tenantId });
+    if (!revoked) {
+      return res.status(404).json({ error: 'Ingen aktiv overstyring fundet for dette badested.' });
+    }
+    await applyLiveOverridesToCache();
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('admin/api/override/:badestedId/clear POST: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke rydde overstyringen lige nu.' });
+  }
+});
+
+app.get('/admin/api/overrides', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const overrides = await badestedOverrides.listActiveOverridesForTenant(req.tenant.tenantId);
+    res.set('Cache-Control', 'no-store');
+    res.json({ overrides });
+  } catch (e) {
+    console.error('admin/api/overrides GET: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente overstyringer lige nu.' });
   }
 });
 
@@ -759,6 +871,10 @@ app.get('/badested/:slug', (req, res) => {
     updatedAt: new Date(badevandRiskCache.ts || Date.now()).toLocaleString('da-DK'),
     outlets: entry?.outlets || [],
     confidenceText: confidence?.text || null,
+    // Kommunepakke, modul 6 — entry kommer fra badevandByIdCache, som
+    // applyLiveOverridesToCache() allerede har patchet med overrideInfo
+    // (se server.js's cascade-cyklus). Rent gennemstik, ingen ekstra opslag.
+    overrideInfo: entry?.overrideInfo || null,
   });
   // RETTET (bruger-rapporteret 2026-08-10 — /badested/:slug-siden viste
   // permanent kun det statiske SSR-indhold, aldrig den rigtige app): denne
@@ -1348,6 +1464,32 @@ let badevandRiskCache = { ts: 0, lakes: {}, kystvande: {}, badevand: [] };
 // af arrayet, i stedet for at gentage en lineær .find() pr. request.
 // Genopbygges sammen med badevandRiskCache selv, se evaluatePushNotifications().
 let badevandByIdCache = new Map();
+// NYT (Kommunepakke, modul 6): den RÅ, UPATCHEDE badevand-liste fra seneste
+// cascade-kørsel — ADSKILT fra badevandRiskCache.badevand/badevandByIdCache,
+// som ALTID er DENNE + eventuelle aktive overstyringer patchet OVENPÅ (se
+// applyLiveOverridesToCache() nedenfor). Uden denne rå kilde ville en
+// tilbagekaldt overstyring IKKE kunne genskabe de oprindelige bact/viral-tal
+// — badested-overrides.js's patchBadevandEntry() ERSTATTER dem, den husker
+// dem ikke selv, så et andet patch-kald på et ALLEREDE patchet resultat ville
+// (uden en frisk, ren kilde at patche FRA hver gang) fastlåse den syntetiske
+// overstyrings-værdi permanent, selv efter tilbagekaldelse.
+let _rawBadevandCascade = [];
+
+/**
+ * Genanvendes af override-oprettelses-/rydnings-ruterne (se dem nedenfor)
+ * til at patche den LIVE cache SYNKRONT, med det samme — uden at vente på
+ * næste periodiske cyklus (~15 min). "Under 10 sekunder"-kravet er ellers
+ * ikke reelt. Patcher ALTID fra _rawBadevandCascade (den rene kilde),
+ * ALDRIG fra den allerede patchede badevandRiskCache.badevand — se dens
+ * egen kommentar for hvorfor. Rører BEVIDST kun .badevand — ts/lakes/
+ * kystvande forbliver uændrede (en overstyring er IKKE en frisk model-
+ * beregning, at bumpe ts her ville vildledende antyde det).
+ */
+async function applyLiveOverridesToCache() {
+  const patched = await badestedOverrides.applyActiveOverrides(_rawBadevandCascade);
+  badevandRiskCache = { ...badevandRiskCache, badevand: patched };
+  badevandByIdCache = new Map(patched.map(b => [String(b.id), b]));
+}
 
 // NYT: se water-classification.js for fuld begrundelse. Beregnes ÉN GANG
 // her (ikke pr. opdateringscyklus som vejr/risiko — geometrien ændrer sig
@@ -1546,8 +1688,20 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     // Genbruger samme getCurrentAtServer()/currentsCache.grid som
     // algeberegningen allerede bruger til vandtemperatur ovenfor.
     const result = await badevandRisk.computeBadevandRiskCascade(points, riskModel.seasonalTau, riskModel.seasonalTauViral, STATIC_DIR, undefined, (lat, lng) => getCurrentAtServer(lat, lng, currentsCache.grid));
+    // NYT (Kommunepakke, modul 6): _rawBadevandCascade gemmer det UPATCHEDE
+    // resultat — se dens egen filhoveds-kommentar for hvorfor dette SKAL
+    // holdes adskilt fra den patchede udgave (uden en ren kilde at patche
+    // FRA hver gang kan en tilbagekaldt overstyring ikke genskabe de
+    // oprindelige tal). computeBadevandRiskCascade() selv er 100% uændret;
+    // patchningen sker UDENFOR den, FØR alt nedenfor (cache-tildeling OG
+    // den daglige historik-akkumulering) — begge skal reflektere en aktiv
+    // overstyring, ikke kun selve kort-farven, jf. badested-overrides.js's
+    // "Injektionsprincip".
+    _rawBadevandCascade = result.badevand || [];
+    const patchedBadevand = await badestedOverrides.applyActiveOverrides(_rawBadevandCascade);
+    result.badevand = patchedBadevand;
     badevandRiskCache = { ts: Date.now(), ...result };
-    badevandByIdCache = new Map((result.badevand || []).map(b => [String(b.id), b]));
+    badevandByIdCache = new Map(patchedBadevand.map(b => [String(b.id), b]));
     cascadeResult = result; // NYT: genbruges nedenfor af enqueuePushNotifications() til badested-favoritters "nu"-risiko, se dér
     // NYT: akkumulerer dette tjeks bact/viral/algae/forecast pr. badested ind
     // i det persisterede daglige løbende gennemsnit — se app-metrics.js's
@@ -3193,7 +3347,7 @@ const DAILY_STATS_SNAPSHOT_INTERVAL_MS = 24 * 3600 * 1000;
 // ovenfor (rute-registrering, setInterval-opsætning, den forsinkede
 // warmCache()-opstart) kræver ikke databasen og kører uændret synkront —
 // kun selve lytte-starten er gated.
-Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, schema])
+Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, badestedOverrides.ready, schema])
   .then(() => {
     app.listen(PORT, HOST, () => {
       console.log(`Overløbsrisiko server kører på http://${HOST}:${PORT}`);

@@ -94,6 +94,16 @@ test('sign→verify: gyldig session giver tenantId/authMethod tilbage', () => {
   const result = verifySession(cookie);
   assert.deepStrictEqual(result, { tenantId: 'abc-123', authMethod: 'trial' });
 });
+test('sign→verify: trial-session UDEN email har IKKE en email-nøgle overhovedet (ikke email:undefined)', () => {
+  const cookie = signSession({ tenantId: 'abc-123', authMethod: 'trial' });
+  const result = verifySession(cookie);
+  assert.strictEqual('email' in result, false);
+});
+test('sign→verify (Kommunepakke modul 6): OAuth-session MED email bevarer den', () => {
+  const cookie = signSession({ tenantId: 'abc-123', authMethod: 'oauth', email: 'jens@kommune.dk' });
+  const result = verifySession(cookie);
+  assert.deepStrictEqual(result, { tenantId: 'abc-123', authMethod: 'oauth', email: 'jens@kommune.dk' });
+});
 test('verify: manipuleret payload afvises (signaturen matcher ikke længere)', () => {
   const cookie = signSession({ tenantId: 'abc-123', authMethod: 'trial' });
   const [payloadB64, sig] = cookie.split('.');

@@ -58,8 +58,17 @@ const ready = query(`
     trial_expires_at    TIMESTAMPTZ,
     agreement_signed_at TIMESTAMPTZ,
     created_by          TEXT,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    logo_url            TEXT
   );
+  -- RETTET (Kommunepakke, modul 6): logo_url tilføjet EFTER at tenants
+  -- allerede kørte i produktion (modul 1) — CREATE TABLE IF NOT EXISTS
+  -- ovenfor tilføjer ALDRIG en kolonne til en allerede-eksisterende tabel,
+  -- kun ALTER TABLE gør. Selve kolonnedefinitionen i CREATE TABLE-blokken
+  -- ovenfor er derfor kun til gavn for en fuldstændig frisk installation —
+  -- denne linje er den, der reelt opgraderer det allerede kørende skema.
+  -- IF NOT EXISTS gør den trygt idempotent (gentagne opstarter no-op'er).
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS logo_url TEXT;
 
   CREATE TABLE IF NOT EXISTS tenant_oauth_configs (
     tenant_id                UUID PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
@@ -94,17 +103,27 @@ const ready = query(`
 /**
  * @param {{name: string, status?: 'trial'|'active', trialDays?: number|null, createdBy?: string|null}} p
  */
-async function createTenant({ name, status = 'trial', trialDays = null, createdBy = null }) {
+async function createTenant({ name, status = 'trial', trialDays = null, createdBy = null, logoUrl = null }) {
   const now = new Date();
   const trialStartedAt = status === 'trial' ? now : null;
   const trialExpiresAt = status === 'trial' && trialDays != null
     ? new Date(now.getTime() + trialDays * 24 * 3600 * 1000)
     : null;
+  // NYT (Kommunepakke, modul 6): logoUrl er valgfrit, staff-sat ved
+  // oprettelse (samme princip som name selv) — vist i overstyrings-
+  // banneret (badested-overrides.js) hvis/når kommunen bruger overstyrings-
+  // funktionen. Kun let formatvalidering (https://) — hentes DIREKTE af
+  // borgerens browser (<img src>), aldrig server-side, så modul 2's SSRF-
+  // beskyttelse er ikke relevant her (serveren rører aldrig selve billedet).
+  if (logoUrl != null && !/^https:\/\//i.test(logoUrl)) {
+    const err = new Error('logo_url skal starte med https://.');
+    err.code = 'VALIDATION'; throw err;
+  }
   const { rows } = await query(
-    `INSERT INTO tenants (name, status, trial_started_at, trial_expires_at, created_by)
-     VALUES ($1, $2, $3, $4, $5)
-     RETURNING id, name, status, trial_started_at, trial_expires_at, created_at`,
-    [name, status, trialStartedAt, trialExpiresAt, createdBy]
+    `INSERT INTO tenants (name, status, trial_started_at, trial_expires_at, created_by, logo_url)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, name, status, trial_started_at, trial_expires_at, created_at, logo_url`,
+    [name, status, trialStartedAt, trialExpiresAt, createdBy, logoUrl]
   );
   return rows[0];
 }
@@ -155,7 +174,7 @@ async function consumeTrialLogin(rawToken) {
 /** @param {string} tenantId */
 async function getTenant(tenantId) {
   const { rows } = await query(
-    `SELECT id, name, status, trial_started_at, trial_expires_at, agreement_signed_at, created_at
+    `SELECT id, name, status, trial_started_at, trial_expires_at, agreement_signed_at, created_at, logo_url
      FROM tenants WHERE id = $1`,
     [tenantId]
   );

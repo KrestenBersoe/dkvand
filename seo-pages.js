@@ -142,13 +142,48 @@ function injectRobotsOnly(html, canonicalPath) {
   );
 }
 
+// Kommunepakke, modul 6 — SAMME styling/tekst som klientens
+// OVERRIDE_BUCKET_META/renderOverrideBanner() (dansk-overloeb-kort.html),
+// holdt manuelt i sync (ingen fælles modul, samme "duplikeret men bevidst
+// adskilt" begrundelse som riskInfo() ovenfor). Server-renderet HER er
+// afgørende for reel synlighed: en søgemaskine-bruger, der lander direkte
+// på /badested/:slug under en reel lukning, skal se advarslen i det RÅ
+// svar, uden at vente på klient-JS.
+const OVERRIDE_BUCKET_META = {
+  groen:  { label: 'God badevandskvalitet', bg: '#e8f5ec', border: '#2d7d4f', text: '#1f5c39' },
+  gul:    { label: 'Moderat risiko',         bg: '#fdf3dd', border: '#d4a020', text: '#8a6a14' },
+  roed:   { label: 'Høj risiko',             bg: '#fbe9e4', border: '#c84b1f', text: '#8f3615' },
+  lukket: { label: 'LUKKET FOR BADNING',     bg: '#3a1410', border: '#c84b1f', text: '#ffe4dc' },
+};
+function buildOverrideBannerHtml(overrideInfo) {
+  if (!overrideInfo) return '';
+  const meta = OVERRIDE_BUCKET_META[overrideInfo.bucket] || OVERRIDE_BUCKET_META.roed;
+  const expiresStr = overrideInfo.expiresAt
+    ? new Date(overrideInfo.expiresAt).toLocaleString('da-DK', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })
+    : null;
+  const logoHtml = overrideInfo.logoUrl
+    ? `<img src="${escHtml(overrideInfo.logoUrl)}" alt="" style="max-height:32px;max-width:120px;object-fit:contain" onerror="this.style.display='none'">`
+    : '';
+  return `
+  <div style="background:${meta.bg};border:2px solid ${meta.border};border-radius:10px;padding:.9rem 1rem;margin-bottom:1.2rem">
+    <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem">
+      ${logoHtml}
+      <div style="font-weight:800;font-size:.95rem;color:${meta.text};text-transform:uppercase;letter-spacing:.03em">${escHtml(meta.label)}</div>
+    </div>
+    <div style="color:${meta.text};font-size:.88rem;line-height:1.4;margin-bottom:.5rem">${escHtml(overrideInfo.message)}</div>
+    <div style="color:${meta.text};opacity:.75;font-size:.72rem">
+      Sat af ${escHtml(overrideInfo.tenantName || 'kommunen')}${expiresStr ? ` — gælder til ${expiresStr}` : ''}
+    </div>
+  </div>`;
+}
+
 /**
  * Synligt, crawlbart indhold lige efter <body> åbner — se filhoved for
  * hvorfor dette er en SEPARAT blok, ikke et forsøg på at forhåndsudfylde
  * den eksisterende, JS-vedligeholdte #badevand-panel-DOM. Klienten skjuler
  * denne blok, når det rigtige panel åbnes (se dansk-overloeb-kort.html).
  */
-function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets, confidenceText }) {
+function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets, confidenceText, overrideInfo }) {
   // NYT (ustabil-id-rettelse — se server.js's loadPulsPointsFull()):
   // bruger outfallId (stabil GUID) i stedet for o.id (rækkeindekset) til
   // selve linket — dette er server-renderet, crawlbart HTML, indekseret af
@@ -169,6 +204,7 @@ function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets, confiden
   ).join('');
   return `
 <div id="ssr-content" style="max-width:640px;margin:0 auto;padding:2rem 1.2rem;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1a2733">
+  ${buildOverrideBannerHtml(overrideInfo)}
   <h1>${escHtml(navn)}${kommune ? ` — ${escHtml(kommune)}` : ''}</h1>
   <p>${escHtml(riskText)}</p>
   ${confidenceText ? `<p style="color:#5a6b78;font-size:.85rem">${escHtml(confidenceText)}</p>` : ''}

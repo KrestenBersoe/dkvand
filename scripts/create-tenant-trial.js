@@ -11,7 +11,17 @@
 // Brug:
 //   DATABASE_URL=postgresql://... TENANT_CONFIG_ENCRYPTION_KEY=... ADMIN_SESSION_SECRET=... \
 //     node scripts/create-tenant-trial.js --name="Odense Kommune" --days=30 \
-//       --issued-by="Kresten" --note="sendt til jens@odense.dk"
+//       --issued-by="Kresten" --note="sendt til jens@odense.dk" \
+//       --logo-url="https://www.odense.dk/-/media/logo.svg"
+//
+// NYT (Kommunepakke, modul 6): --logo-url er valgfrit — vises i det
+// offentlige overstyrings-banner (badested-overrides.js), hvis/når
+// kommunen bruger overstyringsfunktionen. Samme staff-sat, ikke-selvbetjent
+// princip som --name selv. Kan tilføjes/rettes senere ved at genkøre
+// scripts/create-tenant-trial.js? NEJ — dette script opretter kun NYE
+// tenants; ret et eksisterende logo via en direkte UPDATE i databasen
+// (der findes endnu ingen selvbetjent redigeringsside, se planens
+// "Bevidst uden for scope").
 //
 // Printer den fulde login-URL til konsollen — ingen automatiseret
 // mail-udsendelse. Token'et vises HER, i klartekst, ÉN gang — kun dets
@@ -46,6 +56,7 @@ const NAME       = argValue('name', null);
 const DAYS       = parseInt(argValue('days', '30'), 10);
 const ISSUED_BY  = argValue('issued-by', null);
 const NOTE       = argValue('note', null);
+const LOGO_URL   = argValue('logo-url', null);
 
 (async () => {
   try {
@@ -59,6 +70,7 @@ const NOTE       = argValue('note', null);
       status: 'trial',
       trialDays: DAYS,
       createdBy: ISSUED_BY,
+      logoUrl: LOGO_URL,
     });
     const rawToken = await tenantAdmin.issueTrialLogin({
       tenantId: tenant.id,

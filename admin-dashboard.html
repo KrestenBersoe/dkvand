@@ -65,6 +65,27 @@
     padding: .7rem .9rem; font-size: .84rem; color: var(--warn);
   }
   .hist-empty { color: var(--ink-soft); font-size: .85rem; }
+
+  /* NYT (Kommunepakke, modul 6) — overstyringsknap */
+  .ov-field { margin-bottom: .7rem; }
+  .ov-field label { display: block; font-size: .8rem; color: var(--ink-soft); margin-bottom: .3rem; }
+  .ov-field select, .ov-field textarea, .ov-field input {
+    background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .45rem .6rem; border-radius: 6px; font-size: .85rem; font-family: inherit; width: 100%;
+  }
+  .ov-duration { display: flex; align-items: flex-end; gap: .5rem; }
+  .ov-duration input { width: 5rem; }
+  .ov-duration select { flex: 1; }
+  #ov-form button[type="submit"] { border-color: var(--accent); color: var(--ink); font-weight: 600; }
+  .ov-ok { color: var(--ok); font-size: .84rem; margin-top: .6rem; }
+  #ov-result .err { margin-top: .6rem; }
+  .ov-active-row {
+    background: rgba(212,160,32,.08); border: 1px solid rgba(212,160,32,.3); border-radius: 8px;
+    padding: .7rem .9rem; margin-bottom: .7rem; font-size: .84rem;
+  }
+  .ov-active-msg { color: var(--ink-soft); margin: .3rem 0; }
+  .ov-active-meta { color: var(--ink-soft); font-size: .74rem; margin-bottom: .5rem; }
+  .ov-none { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1rem; }
 </style>
 </head>
 <body>
@@ -130,14 +151,51 @@ function render() {
       <div id="hist-content">Indlæser…</div>
     </div>
 
+    <div class="card">
+      <h2>Overstyring — badevandsstatus</h2>
+      <div id="ov-active"></div>
+      <form id="ov-form" onsubmit="return submitOverride(event)">
+        <div class="ov-field">
+          <label for="ov-badested">Badested</label>
+          <select id="ov-badested" required></select>
+        </div>
+        <div class="ov-field">
+          <label for="ov-bucket">Status, der vises offentligt</label>
+          <select id="ov-bucket" required>
+            <option value="groen">Grøn — god badevandskvalitet</option>
+            <option value="gul">Gul — moderat risiko</option>
+            <option value="roed">Rød — høj risiko</option>
+            <option value="lukket">Lukket for badning</option>
+          </select>
+        </div>
+        <div class="ov-field">
+          <label for="ov-message">Varsel til offentligheden (vises i banner med jeres kommunenavn/logo)</label>
+          <textarea id="ov-message" required maxlength="500" rows="3" placeholder="Fx: Forhøjet bakterieindhold efter kraftig regn — badning frarådes."></textarea>
+        </div>
+        <div class="ov-field ov-duration">
+          <div style="flex:0 0 auto">
+            <label for="ov-duration-value">Udløber om</label>
+            <input type="number" id="ov-duration-value" min="1" step="1" required value="24">
+          </div>
+          <select id="ov-duration-unit">
+            <option value="hours">timer</option>
+            <option value="days" selected>dage</option>
+          </select>
+        </div>
+        <button type="submit">Sæt overstyring — synlig med det samme</button>
+        <div id="ov-result"></div>
+      </form>
+    </div>
+
     <div class="placeholder-note">
-      Myndighedsrapporter, hotspot-analyser og overstyringsknappen bygges i de næste moduler.
+      Myndighedsrapporter og hotspot-analyser bygges i de næste moduler.
     </div>
 
     <button onclick="location.href='/admin/settings/oauth'">⚙️ OAuth-opsætning</button>
     <button onclick="logout()">Log ud</button>
   `;
   loadHistory(currentMonthStr());
+  loadOverrideBadesteder().then(loadActiveOverrides);
 }
 
 /**
@@ -187,6 +245,108 @@ async function loadHistory(month) {
   } catch (e) {
     histEl.innerHTML = '<div class="err">Kunne ikke hente historik — tjek din forbindelse.</div>';
   }
+}
+
+function fmtDateTime(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('da-DK', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+}
+
+// NYT (Kommunepakke, modul 6). ov-badesteder genbruger bevidst samme
+// /admin/api/badested-history-endpoint som historik-kortet ovenfor —
+// month-parameteren er ligegyldig her (vi bruger kun id/slug/navn), men en
+// separat "bare-liste"-rute ville være en ren duplikering af
+// tenantBadesteder.resolveTenantBadesteder()-opslaget, den rute allerede
+// laver. Samme ejerskabs-tjek (server-side, i selve POST /admin/api/override)
+// gælder uanset hvad denne liste indeholder — denne er kun til UI'ens skyld.
+let ovBadesteder = [];
+async function loadOverrideBadesteder() {
+  const sel = document.getElementById('ov-badested');
+  if (!sel) return;
+  try {
+    const resp = await fetch(`/admin/api/badested-history?month=${encodeURIComponent(currentMonthStr())}`, { cache: 'no-store' });
+    const data = await resp.json();
+    ovBadesteder = (resp.ok && data.badesteder) || [];
+    sel.innerHTML = ovBadesteder.length
+      ? ovBadesteder.map(b => `<option value="${escHtml(b.id)}">${escHtml(b.navn)}</option>`).join('')
+      : '<option value="">Ingen badesteder fundet</option>';
+  } catch (e) {
+    sel.innerHTML = '<option value="">Kunne ikke hente badesteder</option>';
+  }
+}
+
+async function submitOverride(e) {
+  e.preventDefault();
+  const resultEl = document.getElementById('ov-result');
+  const badestedId = document.getElementById('ov-badested').value;
+  const bucketSel = document.getElementById('ov-bucket');
+  const bucket = bucketSel.value;
+  const message = document.getElementById('ov-message').value.trim();
+  const durationValue = Number(document.getElementById('ov-duration-value').value);
+  const durationUnit = document.getElementById('ov-duration-unit').value;
+  if (!badestedId || !message || !Number.isFinite(durationValue) || durationValue <= 0) {
+    resultEl.innerHTML = '<div class="err">Udfyld alle felter — varighed skal være et positivt tal.</div>';
+    return false;
+  }
+  const durationHours = durationUnit === 'days' ? durationValue * 24 : durationValue;
+  const bucketLabel = bucketSel.selectedOptions[0].textContent;
+  const navn = (ovBadesteder.find(b => String(b.id) === badestedId) || {}).navn || 'dette badested';
+  if (!confirm(`Sæt "${bucketLabel}" for ${navn}?\n\nDette bliver ØJEBLIKKELIGT synligt for offentligheden (banner + push-varsel), og gælder i ${durationValue} ${durationUnit === 'days' ? 'dage' : 'timer'}.`)) {
+    return false;
+  }
+
+  resultEl.textContent = 'Sender…';
+  try {
+    const resp = await fetch('/admin/api/override', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ badestedId, bucket, message, durationHours }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke oprette overstyring.')}</div>`;
+      return false;
+    }
+    resultEl.innerHTML = `<div class="ov-ok">✓ Sat og synlig med det samme — gælder til ${fmtDateTime(data.expiresAt)}.${data.pushSent ? ` ${data.pushSent} abonnent(er) varslet.` : ''}</div>`;
+    document.getElementById('ov-message').value = '';
+    loadActiveOverrides();
+  } catch (e) {
+    resultEl.innerHTML = '<div class="err">Kunne ikke oprette overstyring — tjek din forbindelse.</div>';
+  }
+  return false;
+}
+
+async function loadActiveOverrides() {
+  const el = document.getElementById('ov-active');
+  if (!el) return;
+  try {
+    const resp = await fetch('/admin/api/overrides', { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok || !data.overrides || data.overrides.length === 0) {
+      el.innerHTML = '<div class="ov-none">Ingen aktive overstyringer lige nu.</div>';
+      return;
+    }
+    el.innerHTML = data.overrides.map(o => {
+      const navn = (ovBadesteder.find(b => String(b.id) === String(o.badested_id)) || {}).navn || o.badested_id;
+      return `
+        <div class="ov-active-row">
+          <div><strong>${escHtml(navn)}</strong> — ${escHtml(o.bucket)}</div>
+          <div class="ov-active-msg">${escHtml(o.message)}</div>
+          <div class="ov-active-meta">Gælder til ${fmtDateTime(o.expires_at)}</div>
+          <button type="button" onclick="clearOverride('${escHtml(o.badested_id)}')">Ryd nu</button>
+        </div>`;
+    }).join('');
+  } catch (e) {
+    el.innerHTML = '';
+  }
+}
+
+async function clearOverride(badestedId) {
+  if (!confirm('Ryd overstyringen nu, før den naturligt udløber? Badestedet vender øjeblikkeligt tilbage til den almindelige, modelberegnede status.')) return;
+  try {
+    const resp = await fetch(`/admin/api/override/${encodeURIComponent(badestedId)}/clear`, { method: 'POST' });
+    if (resp.ok) loadActiveOverrides();
+  } catch (e) { /* ingen synlig fejlhåndtering nødvendig — "Ryd nu" kan blot forsøges igen */ }
 }
 
 async function logout() {
