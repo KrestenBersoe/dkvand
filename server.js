@@ -924,7 +924,21 @@ const SKAERMKORT_API_KEY = process.env.SKAERMKORT_API_KEY || '';
 const SKAERMKORT_WMS_URL = 'https://wms.datafordeler.dk/Dkskaermkort/topo_skaermkort/1.0.0/wms';
 const WEB_MERCATOR_EXTENT = 20037508.342789244; // halv omkreds af Web Mercator-kvadratet, i meter
 
-app.get('/api/tiles/skaermkort/:z/:x/:y.png', (req, res) => {
+// RETTET (bruger-rapport: "kun nogle zoomniveauer er grå, resten er den
+// gamle farverige udgave") — fliserne caches 7 dage (Cache-Control herunder,
+// public: også Cloudflare/browser), men da vi skiftede LAYERS fra
+// dtk_skaermkort til dtk_skaermkort_graa i koden, ændrede vi IKKE selve
+// URL'en (samme /api/tiles/skaermkort/{z}/{x}/{y}.png som før) — hverken
+// Cloudflare eller browseren har nogen måde at vide, at indholdet bag en
+// allerede-cachet URL er skiftet, så ethvert z/x/y allerede besøgt (og
+// dermed cachet) FØR skiftet blev stående med den gamle, klassiske flise i
+// op til 7 dage, mens nye/ubesøgte z/x/y korrekt fik den nye grå udgave —
+// præcis den "nogle zoomniveauer" -asymmetri der blev rapporteret. Rettet
+// ved at lægge stilnavnet ind i selve stien: skifter man LAYERS igen
+// senere, er URL'en per definition en ANDEN, og gamle cachede fliser bliver
+// aldrig forvekslet med nye — samme princip som ?v=2-cache-bust'et på
+// windy-currents.js/leaflet-canvas-layer.js (se dansk-overloeb-kort.html).
+app.get('/api/tiles/skaermkort-graa/:z/:x/:y.png', (req, res) => {
   if (!SKAERMKORT_API_KEY) {
     return res.status(503).send('Skærmkort tile-proxy er ikke konfigureret (SKAERMKORT_API_KEY mangler)');
   }

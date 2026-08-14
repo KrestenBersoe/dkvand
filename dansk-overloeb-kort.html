@@ -3677,10 +3677,19 @@ function centerOnMyLocation(btnEl) {
 // CNAME til samme dkvand-tiles.fly.dev (se fly certs list -a dkvand-tiles
 // for TLS-certifikatet), med en Cache Rule der cacher alt på stien —
 // bekræftet virkende (cf-cache-status: HIT på gentagne opslag). Nu, hvor
-// fliserne kommer fra vores egen /api/tiles/skaermkort/-proxy i stedet for
-// tileserver-Fly-appen, går de allerede gennem samme ditbadevand.dk-
+// fliserne kommer fra vores egen /api/tiles/skaermkort-graa/-proxy i stedet
+// for tileserver-Fly-appen, går de allerede gennem samme ditbadevand.dk-
 // origin/Cloudflare-cache uden yderligere opsætning.
-const TILE_SERVER_URL = '/api/tiles/skaermkort/{z}/{x}/{y}.png';
+//
+// RETTET (bruger-rapport: "kun nogle zoomniveauer er grå") — stilnavnet
+// (-graa) er nu en del af selve stien, ikke kun en LAYERS-parameter inde i
+// server.js. Fliserne caches 7 dage (server.js), og et skift af LAYERS
+// alene ændrer ikke URL'en — Cloudflare/browseren blev ved med at servere
+// allerede-cachede, gamle (klassiske) fliser for ethvert z/x/y besøgt FØR
+// skiftet, mens ubesøgte z/x/y korrekt fik den nye stil. Skift stilnavnet
+// her OG i server.js' route sammen ved enhver FREMTIDIG stilændring, som
+// ?v=-bumpet på windy-currents.js/leaflet-canvas-layer.js ovenfor.
+const TILE_SERVER_URL = '/api/tiles/skaermkort-graa/{z}/{x}/{y}.png';
 
 L.tileLayer(TILE_SERVER_URL, {
   attribution: '© <a href="https://datafordeler.dk">SDFI/Klimadatastyrelsen</a>',
