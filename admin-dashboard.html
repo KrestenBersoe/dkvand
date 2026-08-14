@@ -11,6 +11,13 @@
     --paper: #12202a; --card: #16283355; --ink: #f0ede6; --ink-soft: #9fb0bb;
     --accent: #4fb8d6; --border: rgba(255,255,255,.08);
     --ok: #3fa96a; --warn: #d4a020; --bad: #d1584a;
+    /* RETTET (bruger-rapporteret — dropdown-menuer havde hvid baggrund,
+       der skjulte lyse valgmuligheder): color-scheme fortæller browseren at
+       bruge SIN EGEN mørke UA-styling for native kontroller (select-
+       popup'en, month-pickeren osv.), som ellers ALTID falder tilbage til
+       lys standard uanset vores egne background/color-regler nedenfor —
+       dem arver den lukkede <select>, men IKKE selve options-listen. */
+    color-scheme: dark;
   }
   * { box-sizing: border-box; }
   body {
@@ -36,14 +43,19 @@
   .badge-suspended { background: rgba(209,88,74,.18); color: var(--bad); }
   .placeholder-note {
     background: rgba(79,184,214,.08); border: 1px dashed var(--accent); border-radius: 10px;
-    padding: .9rem 1.1rem; font-size: .82rem; color: var(--ink-soft); margin-top: 1.5rem;
+    padding: .9rem 1.1rem; font-size: .82rem; color: var(--ink-soft);
   }
   button {
     background: transparent; border: 1px solid var(--border); color: var(--ink-soft);
     padding: .5rem 1rem; border-radius: 8px; font-size: .85rem; cursor: pointer;
   }
   button:hover { border-color: var(--accent); color: var(--ink); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button:disabled:hover { border-color: var(--border); color: var(--ink-soft); }
   .err { color: var(--bad); font-size: .9rem; }
+
+  /* NYT (bruger-ønske 2026-08-15) — rapport-knapper (placeholder) */
+  .report-buttons { display: flex; gap: .6rem; flex-wrap: wrap; margin-bottom: .8rem; }
 
   /* NYT (Kommunepakke, modul 4) — badevandshistorik */
   .hist-controls { display: flex; align-items: center; gap: .6rem; margin-bottom: .9rem; }
@@ -72,6 +84,12 @@
   .stat-controls select, .stat-controls input[type="month"] {
     background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
     padding: .35rem .5rem; border-radius: 6px; font-size: .85rem; font-family: inherit;
+  }
+  /* Ekstra, eksplicit fallback ud over :root's color-scheme ovenfor — nogle
+     Chromium-udgaver respekterer stadig kun option-elementets EGEN
+     background/color, ikke color-scheme alene, for selve popup-listen. */
+  .stat-controls select option, .ov-field select option {
+    background: var(--paper); color: var(--ink);
   }
   .stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: .35rem 0; font-size: .86rem; }
   .stat-row + .stat-row { border-top: 1px solid var(--border); }
@@ -231,8 +249,13 @@ function render() {
       </form>
     </div>
 
-    <div class="placeholder-note">
-      Myndighedsrapporter og hotspot-analyser bygges i de næste moduler.
+    <div class="card">
+      <h2>Rapporter</h2>
+      <div class="report-buttons">
+        <button type="button" disabled title="Kommer snart">📄 Myndighedsrapport</button>
+        <button type="button" disabled title="Kommer snart">🗺️ Hotspot-analyse</button>
+      </div>
+      <div class="placeholder-note">Bygges i de næste moduler.</div>
     </div>
 
     <button onclick="location.href='/admin/settings/oauth'">⚙️ OAuth-opsætning</button>
