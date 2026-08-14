@@ -95,14 +95,23 @@
 
 <script>
 // NYT (Kommunepakke, modul 1): server.js's GET /admin/dashboard injicerer
-// tenant-data HER (server-side string-erstatning af %%TENANT_JSON%%, se
-// dens route-handler) — siden er allerede bag requireTenantSession, så
-// dette script kører kun for en gyldig, autoriseret session. Ingen
-// efterfølgende fetch nødvendig for selve tenant-identiteten (i modsætning
-// til stats.html's api/stats-mønster) — men et separat, senere modul der
-// tilføjer RIGTIGT dashboard-indhold (historik/rapporter/analyser) vil
-// naturligt hente det via egne /admin/api/*-ruter, samme mønster som
-// stats.html.
+// tenant-data HER (server-side streng-erstatning af pladsholderen
+// nedenfor, se dens route-handler) — siden er allerede bag
+// requireTenantSession, så dette script kører kun for en gyldig,
+// autoriseret session. Ingen efterfølgende fetch nødvendig for selve
+// tenant-identiteten (i modsætning til stats.html's api/stats-mønster) —
+// men et separat, senere modul der tilføjer RIGTIGT dashboard-indhold
+// (historik/rapporter/analyser) vil naturligt hente det via egne
+// /admin/api/*-ruter, samme mønster som stats.html.
+//
+// RETTET (bruger-rapporteret 2026-08-14 — dashboardet hang permanent på
+// "Indlæser…"): denne kommentar indeholdt TIDLIGERE selve pladsholder-
+// strengen i klartekst. server.js's .replace() erstatter kun FØRSTE
+// forekomst af en streng-søgning (ikke en global/regex-erstatning) — den
+// ramte derfor denne kommentar, ikke linjen nedenfor, som forblev
+// bogstavelig ugyldig JS og crashede HELE scriptet ved parse-tidspunktet.
+// Pladsholderen må derfor ALDRIG optræde i klartekst andetsteds i denne
+// fil end netop ÉN gang, på linjen nedenfor.
 window.__TENANT__ = %%TENANT_JSON%%;
 
 function escHtml(s) {
