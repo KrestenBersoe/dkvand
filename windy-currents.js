@@ -160,20 +160,38 @@ var Windy = function (params) {
 		var fi = Math.floor(i), ci = fi + 1;
 		var fj = Math.floor(j), cj = fj + 1;
 
-		var row;
-		if ((row = grid[fj])) {
-			var g00 = row[fi];
-			var g10 = row[ci];
-			if (isValue(g00) && isValue(g10) && (row = grid[cj])) {
-				var g01 = row[fi];
-				var g11 = row[ci];
-				if (isValue(g01) && isValue(g11)) {
-					// All four points found, so interpolate the value.
-					return builder.interpolate(i - fi, j - fj, g00, g10, g01, g11);
-				}
-			}
+		var rowF = grid[fj];
+		var rowC = grid[cj];
+		if (!rowF || !rowC) return null;
+
+		var g00 = rowF[fi];
+		var g10 = rowF[ci];
+		var g01 = rowC[fi];
+		var g11 = rowC[ci];
+
+		// RETTET (fjorde/smalle bælter manglede næsten al animation, se
+		// dansk-overloeb-kort.html's currents-BRUGERKRAV punkt 4 og
+		// fetch_currents.py's STRIDE-kommentar): krævede TIDLIGERE, at ALLE
+		// FIRE hjørner var gyldige, ellers blev HELE cellen sprunget over —
+		// målt til at ramme ~91-93% af cellerne, der overlapper Isefjord,
+		// selv efter at have halveret gitterafstanden (~10 km → ~5 km),
+		// fordi en smal fjords celler næsten altid har mindst ét hjørne ude
+		// i land/uden-for-CMEMS-masken. Tolererer nu OP TIL ét manglende
+		// hjørne: erstattes med gennemsnittet af de øvrige tre (en rimelig
+		// lokal antagelse — bedre end slet ingen animation) — kræver
+		// stadig MINDST tre ægte datapunkter, så der aldrig interpoleres
+		// ud fra kun ét eller to (evt. diagonale) punkter alene.
+		var corners = [g00, g10, g01, g11];
+		var valid = corners.filter(isValue);
+		if (valid.length < 3) return null;
+
+		if (valid.length < 4) {
+			var avg = [0, 1, 2].map(function (k) {
+				return valid.reduce(function (sum, v) { return sum + v[k]; }, 0) / valid.length;
+			});
+			corners = corners.map(function (v) { return isValue(v) ? v : avg; });
 		}
-		return null;
+		return builder.interpolate(i - fi, j - fj, corners[0], corners[1], corners[2], corners[3]);
 	};
 
 

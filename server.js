@@ -949,7 +949,11 @@ app.get('/api/tiles/skaermkort/:z/:x/:y.png', (req, res) => {
     SERVICE: 'WMS',
     REQUEST: 'GetMap',
     VERSION: '1.3.0',
-    LAYERS: 'dtk_skaermkort',
+    // RETTET (bruger-valg efter sammenligning af klassisk/dæmpet/grå): grå-
+    // varianten holder veje/stednavne læsbare, men fjerner farvekodning af
+    // arealanvendelse (skov/bebyggelse/mark), som virkede for visuelt tungt
+    // oven i appens egne farvekodede lag (badevand-risiko, strøm-animation).
+    LAYERS: 'dtk_skaermkort_graa',
     STYLES: '',
     CRS: 'EPSG:3857',
     BBOX: [minX, minY, maxX, maxY].join(','),
@@ -3269,7 +3273,52 @@ setInterval(() => {
   if (Date.now() - currentsCache.ts > CURRENTS_TTL) fetchCMEMSCurrents();
 }, 60 * 1000);
 
-// ── Strøm-visualisering (TEST) — windy-currents.js grid-format ───────────────
+// Fylder ethvert tomt (null) gitterpunkt med værdierne fra det NÆRMESTE
+// gitterpunkt, der rent faktisk har CMEMS-data — flood-fill/BFS fra alle
+// "kilde"-celler samtidig, ét lag ad gangen udad, over det almindelige
+// 4-forbundne gitter (op/ned/venstre/højre). Multi-source BFS på et
+// regulært, fuldt sammenhængende gitter garanterer at ALLE celler nås, og
+// finder den nærmeste kilde i gittercelle-afstand (rimelig tilnærmelse til
+// geografisk afstand, cellerne er ~ensstore).
+//
+// RETTET (bruger-krav: "strøm-animation skal dække ALT hav", ikke bare mere
+// af det): forsøgte først kun at lempe windy-currents.js' krav om, at alle
+// FIRE gitterhjørner skal have data (se dens interpolate()-kommentar) — men
+// selv efter det og en halveret gitterafstand havde kun ~19% af cellerne
+// omkring Isefjord nok nabodata til overhovedet at blive tegnet, fordi
+// CMEMS' Østersø-model (se DATASET_ID i fetch_currents.py) reelt IKKE HAR
+// data derinde, uanset gitterets opløsning — der er intet at interpolere
+// FRA. Løsningen må derfor ligge her, server-side: erstat "intet data" med
+// "samme strøm som nærmeste sted, vi RENT FAKTISK måler" — geografisk en
+// rimelig antagelse over korte afstande, og altid bedre end slet ingen
+// animation. Sikkert at fylde ALLE tomme celler ubetinget, også dem der er
+// land — klienten klipper allerede canvas'et præcist til de faktiske
+// vandpolygoner (updateWaterClipPath() i dansk-overloeb-kort.html), så et
+// fyldt landpunkt bliver aldrig vist, uanset hvad denne funktion sætter det
+// til.
+function fillNearestNeighbor(uData, vData, tData, nx, ny) {
+  const n = nx * ny;
+  const filled = new Uint8Array(n);
+  const queue = new Int32Array(n);
+  let qHead = 0, qTail = 0;
+  for (let i = 0; i < n; i++) {
+    if (uData[i] !== null) {
+      filled[i] = 1;
+      queue[qTail++] = i;
+    }
+  }
+  if (qTail === 0) return; // ingen kilder overhovedet — intet at fylde fra
+  while (qHead < qTail) {
+    const i = queue[qHead++];
+    const row = (i / nx) | 0, col = i % nx;
+    if (row > 0)      { const j = i - nx; if (!filled[j]) { filled[j] = 1; uData[j] = uData[i]; vData[j] = vData[i]; tData[j] = tData[i]; queue[qTail++] = j; } }
+    if (row < ny - 1) { const j = i + nx; if (!filled[j]) { filled[j] = 1; uData[j] = uData[i]; vData[j] = vData[i]; tData[j] = tData[i]; queue[qTail++] = j; } }
+    if (col > 0)      { const j = i - 1;  if (!filled[j]) { filled[j] = 1; uData[j] = uData[i]; vData[j] = vData[i]; tData[j] = tData[i]; queue[qTail++] = j; } }
+    if (col < nx - 1) { const j = i + 1;  if (!filled[j]) { filled[j] = 1; uData[j] = uData[i]; vData[j] = vData[i]; tData[j] = tData[i]; queue[qTail++] = j; } }
+  }
+}
+
+// ── Strøm-visualisering — windy-currents.js grid-format ──────────────────────
 // Genbruger SAMME currentsCache.grid som /api/currents (og dermed samme CMEMS-
 // hentning/cache/TTL) — kun output-formatet er nyt. windy-currents.js (vendoret
 // kopi af wind-js-leaflet's windy.js, se filhovedet der) forventer et GRIB2-
@@ -3279,9 +3328,8 @@ setInterval(() => {
 // header.parameterNumber === "2,2" (U), "2,3" (V), "0,0" (temperatur, Kelvin).
 // fetch_currents.py's punkter STAMMER fra et regulært lat/lon-gitter (strided
 // xarray-udsnit), men nogle celler mangler (NaN/fill-value droppet der) —
-// disse udfyldes med NaN i u-komponenten (IKKE 0), som windy-currents.js'
-// patchede createWindBuilder.data() genkender som "intet gitterpunkt her" og
-// derfor slet ikke interpolerer/tegner over (se windy-currents.js' filhoved).
+// disse fyldes nu med nærmeste ægte nabopunkts data (fillNearestNeighbor()
+// ovenfor) i stedet for at blive sendt som null/tomme til klienten.
 function buildVelocityGridJSON(grid) {
   const lats = new Set(), lngs = new Set();
   let tempSum = 0, tempCount = 0;
@@ -3320,6 +3368,8 @@ function buildVelocityGridJSON(grid) {
       idx++;
     }
   }
+
+  fillNearestNeighbor(uData, vData, tData, nx, ny);
 
   const header = {
     nx, ny, lo1, la1, lo2, la2, dx, dy,

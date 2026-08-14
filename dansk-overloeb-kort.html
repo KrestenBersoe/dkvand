@@ -79,12 +79,13 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <!-- Leaflet.heat -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
-<!-- Strøm-visualisering (TEST — se buildCurrentsWindyLayer()/toggleCurrentsVelocity()):
-     vendoret windy.js-motor (fra wind-js-leaflet, se windy-currents.js' filhoved) —
-     animeret partikel-lag som alternativ til den statiske pil-visualisering
-     buildCurrentsArrowLayer() ovenfor. Selv-hostet, ikke CDN (samme princip
-     som TILE_SERVER_URL nedenfor), da vi patcher motoren (danske temperatur-
-     grænser, land-maskering, forstærket synlighed). -->
+<!-- Strøm-visualisering (se toggleCurrents()/aktiveringskæden ved windy-
+     currents.js): vendoret windy.js-motor (fra wind-js-leaflet, se windy-
+     currents.js' filhoved) — animeret partikel-lag med retning+fart+
+     temperatur. Erstattede den tidligere statiske pil-visualisering
+     (buildCurrentsArrowLayer(), fjernet). Selv-hostet, ikke CDN (samme
+     princip som TILE_SERVER_URL nedenfor), da vi patcher motoren (danske
+     temperatur-grænser, land-maskering, forstærket synlighed). -->
 <!-- ?v= er en engangs-cache-bust (se server.js' Cache-Control: no-cache-rettelse
      for disse to filer) — enhver besøgende, der havde åbnet siden bare ÉN
      gang tidligere samme dag, sad ellers fast på en dags-gammel, browser-
@@ -922,18 +923,6 @@
   #lag.collapsed #lag-body { display: none; }
 
   /* ═══ Strømpile (punkt 11 + opfølgning) ═══ */
-  /* RETTET: Leaflet sætter automatisk hvid baggrund + kant på divIcon via
-     .leaflet-div-icon — det skjulte reelt vores pile bag en hvid boks.
-     !important nødvendigt for at overtrumfe Leaflets egen indbyggede regel. */
-  .current-arrow-icon {
-    background: transparent !important;
-    border: none !important;
-  }
-  /* Flow-animationen er nu indlejret direkte i hver pils SVG via et SMIL
-     <animate>-element (se buildCurrentsArrowLayer) i stedet for en ekstern
-     CSS-klasse/keyframes — mere robust, uafhængigt af hvordan Leaflet
-     indsætter divIcon-indholdet i DOM'en. */
-
   #legend h4 {
     font-family: var(--mono);
     font-size: .65rem;
@@ -2021,7 +2010,6 @@
       <button class="layer-btn" id="btn-vandlobdir" aria-pressed="false" onclick="toggleVandlobDir()">🧭 Vandløbsretning</button>
       <button class="layer-btn" id="btn-vp3kyst" aria-pressed="false" onclick="toggleVP3Kyst()">🌊 Kystvande</button>
       <button class="layer-btn" id="btn-currents" aria-pressed="false" onclick="toggleCurrents()">〰 Strøm</button>
-      <button class="layer-btn" id="btn-currents-velocity" aria-pressed="false" onclick="toggleCurrentsVelocity()">💫 Strøm (test)</button>
     </div>
     <div class="lag-group">
       <div class="lag-group-title">Risikolag</div>
@@ -2260,7 +2248,7 @@
           <tr><td>🔴 RBU Regn</td><td>VP3's regnbetingede udløbspunkter (RBU-registret) klassificeret som rent regnvand — officielt myndighedsregistrerede udledningssteder, adskilt fra PULS-udløbene. Bygværkstypen (<span class="doc-mono">bgv_type</span>) er enten bekræftet "Separat regnvand" (SE/SF, langt de fleste) eller ukendt/uklassificeret (UR, Bypass, SKYBRUD, "ikke oplyst" — under 0,5% af punkterne) — sidstnævnte grupperes bevidst her frem for i Kloak-laget, for ikke at overklassificere dem som spildevand uden belæg, se Datakvalitet</td><td>Ingen risikofarvning — farve/størrelse/gennemsigtighed gradueres efter zoom-niveau (mere fremtrædende jo tættere man zoomer ind), rent informativt lag der viser hvor RBU-registrerede punkter fysisk ligger</td></tr>
           <tr><td>🟤 RBU Kloak</td><td>VP3's RBU-punkter, hvis bygværkstype (<span class="doc-mono">bgv_type</span>) er et overløbsbygværk og derfor reelt indeholder spildevand (OS/OV/OF/OVI/OSI/OK/OKI)</td><td>Fast brun farve (samme som signaturforklaringens brune prik) ved alle zoomniveauer, kun størrelse/gennemsigtighed gradueres efter zoom — adskilt fra RBU Regn, netop for ikke at forveksle rene regnvandsudløb med udløb, der reelt kan indeholde spildevand</td></tr>
           <tr><td>🏖 Badevandsområder</td><td>EU badevandsovervågningsstationer fra VP3. Klik åbner badevandsside med 7-dages nedbørsgraf, risikooversigt og opstrøms-matchede udløb</td><td>Cirkelmarkør i grøn/amber/rød ud fra bekræftet punkt-i-polygon-/punkt-nær-linje-match (sø → kystvand → vandløb); grå/"ukendt" hvis ingen bekræftet forbindelse — se Badevandsvurdering</td></tr>
-          <tr><td>〰 Strøm</td><td>Retningspile for havstrøm, kun over vandområder (testet mod VP3 kystvand-polygoner)</td><td>Rotation = strømretning; farve/størrelse blå→gul→rød efter hastighed (0–1+ m/s)</td></tr>
+          <tr><td>〰 Strøm</td><td>Animeret partikel-lag for havstrøm (CMEMS Østersø-model), klippet til vandområder (VP3 kystvande-/sø-polygoner)</td><td>Bevægelsesretning/-fart fra strømvektoren; farve efter vandtemperatur (lyseblå=koldt → mørkerød=varmt)</td></tr>
           <tr><td>🧭 Vandløbsretning</td><td>Pile langs vandløbslinjer, der viser udledt strømretning — se Vandløbenes strømretning</td><td>Grøn = sikker retning (>1 m højdeforskel mellem endepunkternes ID15-oplande); grå = usikker (retning vist, men under margen); ingen pil hvis retning ikke kunne afgøres</td></tr>
         </table>
         <p>VP3-lagene indlæses fra statiske GeoJSON-filer ved opstart og farves når risikoberegningen er færdig. Alle lag håndhæves ved hvert vejrdatarefresh — slukket lag forbliver slukket selv ved automatisk opdatering.</p>
@@ -3818,13 +3806,9 @@ let showVP3Bade      = true;   // synlig som standard
 let showVP3RbuRegn   = false;
 let showVP3RbuKloak  = false;
 
-// Strøm-visualisering (punkt 11) — retningspile a la Windy, men statiske
-// (ikke animerede partikler) af hensyn til ydelse på et Leaflet-kort med
-// mange andre samtidige lag. Farve+størrelse kodér hastighed, rotation
-// kodér retning. Vises kun over vandområder (VP3 kystvande-polygoner) —
-// se pointInVP3Water() nedenfor, som bruger de rå GeoJSON-koordinater
-// direkte (ikke Leaflet-specifik) til en simpel ray-casting-test.
-const currentsArrowLayer = L.layerGroup();
+// Strøm-visualisering (punkt 11) — animeret partikel-lag (windy-currents.js,
+// se dens sektion nedenfor), klippet til vandområder via en SVG clip-path
+// (updateWaterClipPath()) bygget fra vp3KystvandeRaw/vp3SoeerRaw.
 let showCurrents  = false;
 let vp3KystvandeRaw = null;   // rå GeoJSON — sat i loadVP3Layers()
 let vp3SoeerRaw     = null;   // rå GeoJSON (polygoner) — søer, hentet med fetch-vp3-water-layers.js
@@ -5229,7 +5213,7 @@ document.querySelectorAll('.layer-btn').forEach(btn => {
   btn.addEventListener('blur', () => { btn.style.outline = 'none'; });
 });
 
-// Sætter alle ti knappers KORREKTE visuelle starttilstand ved opstart —
+// Sætter alle ni knappers KORREKTE visuelle starttilstand ved opstart —
 // HTML'ens aria-pressed-attributter alene styrer intet visuelt længere,
 // så den faktiske farve skal sættes eksplicit her, ikke antages fra CSS.
 setLayerBtnState('btn-vp3bade', true);   // badevandsområder er synlige som standard
@@ -5237,7 +5221,6 @@ setLayerBtnState('btn-vp3rburegn', false);
 setLayerBtnState('btn-vp3rbukloak', false);
 setLayerBtnState('btn-vp3kyst', false);
 setLayerBtnState('btn-currents', false);
-setLayerBtnState('btn-currents-velocity', false);
 setLayerBtnState('btn-pts', false);
 setLayerBtnState('btn-heat', false);
 setLayerBtnState('btn-viral', false);
@@ -5402,7 +5385,6 @@ async function loadCurrents() {
     currentsGrid = new Map(Object.entries(points));
     clearCurrentAtCache();
     currentsTs = currentsResource.ts;
-    if (showCurrents) buildCurrentsArrowLayer();
   }
 }
 
@@ -5597,81 +5579,16 @@ function isInDanishWater(lat, lng) {
   return result;
 }
 
-// Bygger pil-laget, men KUN for punkter inden for det aktuelle synsfelt
-// (map.getBounds()) — ikke hele landet på én gang. RETTET: tidligere blev
-// ALLE punkter i currentsGrid tegnet og animeret samtidig (op til flere
-// hundrede), hvilket gjorde zoom/pan/resize markant tungere, fordi
-// transform-animationer på mange SVG-elementer tvinger gentagne layout-
-// genberegninger. Genopbygges på moveend/zoomend mens laget er aktivt, så
-// der aldrig er flere synlige pile end der reelt er plads til på skærmen.
-function buildCurrentsArrowLayer() {
-  currentsArrowLayer.clearLayers();
-  if (!currentsGrid || !showCurrents) return;
-
-  // Lidt margen uden for synsfeltet, så pile ikke popper ind/ud ved kanten
-  const bounds = map.getBounds().pad(0.15);
-  let idx = 0;
-
-  for (const [key, c] of currentsGrid) {
-    const [lat, lng] = key.split(':').map(Number);
-    if (isNaN(lat) || isNaN(lng)) continue;
-    if (!bounds.contains([lat, lng])) continue;         // kun synsfeltet
-    if (c.speed < 0.02) continue;              // for svag til at være visuelt meningsfuld
-    if (!isInDanishWater(lat, lng)) continue;   // kun på vandet, ikke på land
-
-    const clampedSpeed = Math.min(c.speed, 1);  // m/s, klippet ved 1.0 for farve/størrelse-skala
-    const sizePx  = 20 + clampedSpeed * 26;      // 20–46 px — mere markant end tidligere
-    const opacity = 0.65 + clampedSpeed * 0.35;
-    // Windy-inspireret farveskala: blå (svag) → grøn/gul → rød (kraftig)
-    const hue   = 210 - clampedSpeed * 210;
-    const color = `hsl(${hue}, 90%, 48%)`;
-
-    // "Komet"-effekt: en stiplet hale med bevægelig stroke-dashoffset flyder
-    // hen mod pilehovedet — giver en reel bevægelsesfornemmelse (ikke bare
-    // en opacity-puls) og ligner det flow, man kender fra Windy. Stadig
-    // billigt: stroke-dashoffset-animation er en veloptimeret, udbredt
-    // SVG-teknik, og antallet af pile er allerede begrænset til synsfeltet.
-    // Hurtigere strøm → hurtigere flow. Faseforskudt pr. pil ud fra position,
-    // så det ligner strømmende vand frem for synkron pulsering.
-    const duration = (1.4 - clampedSpeed * 0.85).toFixed(2);
-    const delay    = ((Math.abs(lat * 37 + lng * 53) % 1) * parseFloat(duration)).toFixed(2);
-    const gradId   = `cf-grad-${idx++}`;
-
-    const icon = L.divIcon({
-      className: 'current-arrow-icon',
-      html: `<svg width="${sizePx}" height="${sizePx * 1.5}" viewBox="0 0 24 36"
-              style="transform:rotate(${c.dir}deg);opacity:${opacity.toFixed(2)}">
-              <defs>
-                <linearGradient id="${gradId}" x1="0" y1="1" x2="0" y2="0">
-                  <stop offset="0%" stop-color="${color}" stop-opacity="0"/>
-                  <stop offset="85%" stop-color="${color}" stop-opacity=".9"/>
-                </linearGradient>
-              </defs>
-              <line x1="12" y1="34" x2="12" y2="11" stroke="url(#${gradId})"
-                    stroke-width="3" stroke-linecap="round" stroke-dasharray="5 4">
-                <animate attributeName="stroke-dashoffset" from="18" to="0"
-                         dur="${duration}s" begin="${delay}s" repeatCount="indefinite"/>
-              </line>
-              <path d="M12 0 L18.5 12.5 L12 9 L5.5 12.5 Z" fill="${color}"/>
-            </svg>`,
-      iconSize:   [sizePx, sizePx * 1.5],
-      iconAnchor: [sizePx / 2, sizePx * 0.75],
-    });
-
-    L.marker([lat, lng], { icon, interactive: false, keyboard: false })
-      .addTo(currentsArrowLayer);
-  }
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
-// STRØM-VISUALISERING (TEST) — vendoret windy.js-motor (windy-currents.js,
-// kopi af wind-js-leaflet's windy.js, se filhovedet der) i stedet for
-// leaflet-velocity: animeret partikel-lag med retning+fart (bevægelse) OG
-// temperatur (farve) som alternativ til buildCurrentsArrowLayer() ovenfor.
-// Testes under egen knap ("💫 Strøm (test)") — erstatter IKKE det
-// eksisterende pil-lag, og rører ikke currentsGrid/getCurrentAt(), som
+// STRØM-VISUALISERING — vendoret windy.js-motor (windy-currents.js, kopi af
+// wind-js-leaflet's windy.js, se filhovedet der) i stedet for leaflet-
+// velocity: animeret partikel-lag med retning+fart (bevægelse) OG
+// temperatur (farve). Erstatter det tidligere statiske pil-lag
+// (buildCurrentsArrowLayer(), fjernet 2026-08-14) — samme "〰 Strøm"-knap
+// (btn-currents/toggleCurrents()) som før, kun den underliggende
+// visualisering skiftede. Rører ikke currentsGrid/getCurrentAt(), som
 // risikomodellen afhænger af (se filhovedet ved STRØMDATA-sektionen
-// ovenfor).
+// ovenfor) — det er en helt separat datastrøm/formål.
 //
 // BRUGERKRAV (itereret over flere runder feedback):
 //   1. RETTET (2026-08-14, bruger-beslutning — reverserer et tidligere krav):
@@ -5704,7 +5621,6 @@ function buildCurrentsArrowLayer() {
 //      undgå at windy overhovedet FORSØGER at interpolere langt inde over
 //      land, uden vores eget ekstra, grovere lag.
 // ═══════════════════════════════════════════════════════════════════════════
-let showCurrentsVelocity      = false;
 let currentsVelocityLoading   = false;
 let currentsWindy             = null;   // Windy-instans (windy-currents.js)
 let currentsCanvasLayer       = null;   // L.CanvasLayer-instans (leaflet-canvas-layer.js)
@@ -5806,7 +5722,7 @@ function updateWaterClipPath() {
 // håndtering, se leaflet-canvas-layer.js' getEvents()) — IKKE noget vi selv
 // skal binde ekstra map-events til.
 function onDrawCurrentsLayer() {
-  if (!showCurrentsVelocity || !currentsWindy || !currentsVelocityRawData) return;
+  if (!showCurrents || !currentsWindy || !currentsVelocityRawData) return;
   const bounds = map.getBounds();
   const size = map.getSize();
   currentsWindy.start(
@@ -5839,7 +5755,7 @@ function hasAllVelocityBands(velocityJSON) {
 // det GAMLE canvas) ikke kan genbruges på tværs af til/fra-toggling.
 function activateCurrentsVelocity() {
   if (!hasAllVelocityBands(currentsVelocityRawData)) {
-    console.warn('Strøm (velocity-test): ugyldigt/ufuldstændigt gitter i cache — henter igen.');
+    console.warn('Strøm: ugyldigt/ufuldstændigt gitter i cache — henter igen.');
     currentsVelocityRawData = null;
     loadCurrentsVelocityLayer();
     return;
@@ -5870,7 +5786,7 @@ function deactivateCurrentsVelocity() {
 // canvas'et væk (en tom <clipPath> definerer et areal på nul). Men
 // loadVP3Layers() henter dem ASYNKRONT fra sideindlæsning (985 sø-
 // polygoner tager mærkbar tid), og intet forhindrede tidligere brugeren i
-// at klikke "Strøm (test)" FØR de var klar. Venter nu på (mindst ét af)
+// at klikke "Strøm" FØR de var klar. Venter nu på (mindst ét af)
 // datasættene, med en generøs timeout som sikkerhedsventil, hvis VP3-
 // hentningen fejler helt.
 function waitForWaterPolygons(timeoutMs = 15000) {
@@ -5908,38 +5824,22 @@ async function loadCurrentsVelocityLayer() {
     if (!currentsCanvasLayer) {
       currentsCanvasLayer = L.canvasLayer().delegate({ onDrawLayer: onDrawCurrentsLayer });
     }
-    if (showCurrentsVelocity) activateCurrentsVelocity();
+    if (showCurrents) activateCurrentsVelocity();
   } catch (e) {
-    console.warn('Strøm (velocity-test) fejlede:', e.message);
-    showCurrentsVelocity = false;
-    setLayerBtnState('btn-currents-velocity', false);
+    console.warn('Strøm fejlede:', e.message);
+    showCurrents = false;
+    setLayerBtnState('btn-currents', false);
   } finally {
     currentsVelocityLoading = false;
-  }
-}
-
-function toggleCurrentsVelocity() {
-  showCurrentsVelocity = !showCurrentsVelocity;
-  setLayerBtnState('btn-currents-velocity', showCurrentsVelocity);
-  if (showCurrentsVelocity) {
-    if (currentsVelocityRawData && currentsCanvasLayer) {
-      activateCurrentsVelocity();
-    } else {
-      loadCurrentsVelocityLayer();
-    }
-  } else {
-    deactivateCurrentsVelocity();
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // VANDLØBENES STRØMRETNING — pile på selve vandløbslinjen, farvet efter
 // sikkerhed (grøn = sikker, grå = usikker — se compute-vandlob-directions.js
-// for hvordan sikkerheden afgøres). Følger SAMME visuelle SVG-ikon-mønster
-// som buildCurrentsArrowLayer() ovenfor (statisk pilehoved via L.divIcon,
-// roteret efter beregnet retning) — men uden den animerede "komet-hale",
-// da vandløbsretning er en statisk, sjældent genberegnet egenskab, ikke en
-// levende hastighed.
+// for hvordan sikkerheden afgøres). Statisk SVG-pilehoved via L.divIcon,
+// roteret efter beregnet retning — ingen animation, da vandløbsretning er
+// en statisk, sjældent genberegnet egenskab, ikke en levende hastighed.
 // ═══════════════════════════════════════════════════════════════════════════
 let vp3VandlobDirLayer = null;
 
@@ -6010,31 +5910,24 @@ async function buildVandlobDirectionLayer() {
   syncVP3Layer('vandlobdir');
 }
 
-// Genopbyg pil-laget når kortet flyttes/zoomes, men kun mens laget rent
-// faktisk er synligt, og throttlet til næste animation-frame — undgår at
-// genopbygge flere gange under en enkelt kontinuerlig pan-bevægelse.
-let _currentsRebuildQueued = false;
-function scheduleCurrentsRebuild() {
-  if (!showCurrents || _currentsRebuildQueued) return;
-  _currentsRebuildQueued = true;
-  requestAnimationFrame(() => {
-    _currentsRebuildQueued = false;
-    buildCurrentsArrowLayer();
-  });
-}
-map.on('moveend zoomend', scheduleCurrentsRebuild);
-
+// RETTET (2026-08-14): styrede tidligere det statiske pil-lag
+// (buildCurrentsArrowLayer(), fjernet — se dens genopbygning-på-moveend/
+// zoomend-kommentar, som gjaldt HER). windy-currents.js' eget canvas-lag
+// klarer selv redraw ved pan/zoom via leaflet-canvas-layer.js' interne
+// moveend/resize/zoomanim-håndtering (se onDrawCurrentsLayer's filhoved) —
+// ingen egen map.on-binding nødvendig længere.
 function toggleCurrents() {
   showCurrents = !showCurrents;
   setLayerBtnState('btn-currents', showCurrents);
-  requestAnimationFrame(() => {
-    if (showCurrents) {
-      buildCurrentsArrowLayer();
-      map.addLayer(currentsArrowLayer);
+  if (showCurrents) {
+    if (currentsVelocityRawData && currentsCanvasLayer) {
+      activateCurrentsVelocity();
     } else {
-      map.removeLayer(currentsArrowLayer);
+      loadCurrentsVelocityLayer();
     }
-  });
+  } else {
+    deactivateCurrentsVelocity();
+  }
 }
 
 // Beregn "opstrøms-vægt" — hvor meget påvirker et udløb badevandslokationen
@@ -7073,7 +6966,6 @@ async function _loadVP3LayersImpl() {
   // colorSoeerByRisk()/colorKystvandByRisk() er derfor tilstrækkeligt,
   // uden at afhænge af boot-rækkefølgen for de fire fjernede fetches.
   renderMap();
-  if (showCurrents) buildCurrentsArrowLayer();
 
   // Badevandsområder
   // RETTET: fjernes HER, synkront, UMIDDELBART før den nye udgave oprettes
