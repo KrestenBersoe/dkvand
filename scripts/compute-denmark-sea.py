@@ -20,10 +20,20 @@
 # korrekt tidligere i dag (VP3 kystvande-polygonernes simple UNION, ingen
 # kunstig rektangel, alle koordinater fra ÉN kilde, ens behandlet).
 #
+# RETTET (bruger-rapport: "strøm-animation dækker det meste af Sveriges
+# landmasse") — bbox'en (op til 16.0E/58.5N) rækker ind over sydlige Sverige
+# (Skåne, Øresund-området) og det nordlige Tyskland, men KUN Danmarks eget
+# landpolygon (DAGI) blev trukket fra — svensk/tysk landjord blev derfor
+# aldrig udelukket og fejlagtigt talt som "hav". Henter nu ALSO Natural
+# Earth's 1:10m admin-landegrænser (public domain, intet API-nøgle-behov)
+# og trækker Sverige/Tyskland/Norge fra på samme måde. Kun disse tre — ikke
+# hele verdens 258 lande — for at holde beregningen (og selve fil-
+# hentningen, ~13 MB) let.
+#
 # Brug:
 #   python3 scripts/compute-denmark-sea.py
 #   (kræver denmark_land_simplified.geojson allerede genereret, se
-#   fetch-and-simplify-denmark-land.py)
+#   fetch-and-simplify-denmark-land.py; henter selv nabolandenes grænser)
 #
 # Output: denmark_sea_simplified.geojson (repo-rod)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -31,6 +41,7 @@
 import json
 import sys
 import time
+import urllib.request
 from pathlib import Path
 
 try:
@@ -48,6 +59,21 @@ REPO_ROOT = Path(__file__).parent.parent
 LAT_MIN, LAT_MAX = 53.3, 58.5
 LON_MIN, LON_MAX = 6.5, 16.0
 
+NEIGHBOR_COUNTRIES = {'Sweden', 'Germany', 'Norway'}
+NATURAL_EARTH_URL = 'https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_10m_admin_0_countries.geojson'
+
+
+def fetch_neighbor_land():
+    print(f"Henter nabolandenes grænser (Natural Earth 1:10m, ~13 MB)...")
+    with urllib.request.urlopen(NATURAL_EARTH_URL, timeout=60) as resp:
+        countries = json.load(resp)
+    geoms = [
+        shape(f['geometry']) for f in countries['features']
+        if f['properties'].get('NAME') in NEIGHBOR_COUNTRIES
+    ]
+    print(f"  {len(geoms)} nabolande fundet: {NEIGHBOR_COUNTRIES}")
+    return unary_union(geoms)
+
 
 def main():
     input_path = REPO_ROOT / 'denmark_land_simplified.geojson'
@@ -59,11 +85,14 @@ def main():
         land_geojson = json.load(f)
 
     land_geoms = [shape(f['geometry']) for f in land_geojson['features'] if f.get('geometry')]
-    land_union = unary_union(land_geoms)
-    print(f"  Land indlæst: {land_union.geom_type}")
+    denmark_land = unary_union(land_geoms)
+    print(f"  Danmark indlæst: {denmark_land.geom_type}")
+
+    neighbor_land = fetch_neighbor_land()
+    land_union = unary_union([denmark_land, neighbor_land])
 
     bbox = box(LON_MIN, LAT_MIN, LON_MAX, LAT_MAX)
-    print("Beregner hav = bbox - land (shapely difference)...")
+    print("Beregner hav = bbox - (Danmark + nabolande) (shapely difference)...")
     sea = bbox.difference(land_union)
     print(f"  Hav beregnet: {sea.geom_type}")
 
