@@ -465,6 +465,93 @@ app.post('/admin/logout', (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Kommunepakke, modul 2 — selvbetjent OAuth-konfigurationsflow ───────────
+// Se planens "Vigtig afgrænsning i forhold til brief'ens ordlyd": dette er
+// en INDSTILLINGSSIDE for en allerede-logget-ind (i dag udelukkende via
+// trial) tenant, IKKE et offentligt signup-flow — samme princip som
+// resten af /admin/*.
+app.get('/admin/settings/oauth', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const config = await tenantAdmin.getOauthConfig(req.tenant.tenantId);
+    const html = fs.readFileSync(path.join(STATIC_DIR, 'admin-oauth-setup.html'), 'utf8')
+      .replace('%%OAUTH_CONFIG_JSON%%', JSON.stringify({ config }));
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (e) {
+    console.error('admin/settings/oauth GET: uventet fejl —', e.message);
+    res.status(500).type('text/plain').send('Kunne ikke hente OAuth-opsætning lige nu.');
+  }
+});
+
+// NYT: rute-lokal express.json() — den GLOBALE express.json() (server.js
+// længere nede) sidder EFTER disse /admin/*-ruter, og 1400+ linjers
+// eksisterende ruter mellem de to punkter kan afhænge af den nuværende
+// rækkefølge. En rute-lokal parser her er den korrekte, isolerede løsning
+// (Express' eget understøttede mønster for netop dette), fremfor at flytte
+// den globale middleware og risikere at ændre opførsel for ruter der intet
+// har med Kommunepakken at gøre.
+app.post('/admin/settings/oauth', tenantAdmin.requireTenantSession, express.json(), async (req, res) => {
+  try {
+    const { providerType, clientId, clientSecret, discoveryUrl, allowedEmailDomains: rawDomains } = req.body || {};
+
+    if (!tenantAdmin.isValidProviderType(providerType)) {
+      return res.status(400).json({ error: 'Vælg en gyldig OAuth-udbyder.', field: 'provider' });
+    }
+    if (typeof clientId !== 'string' || clientId.trim().length === 0) {
+      return res.status(400).json({ error: 'Client ID er påkrævet.', field: 'client-id' });
+    }
+    if (typeof discoveryUrl !== 'string' || discoveryUrl.trim().length === 0) {
+      return res.status(400).json({ error: 'Discovery URL er påkrævet.', field: 'discovery-url' });
+    }
+    let allowedEmailDomains;
+    try {
+      allowedEmailDomains = tenantAdmin.normalizeEmailDomains(rawDomains);
+    } catch (e) {
+      return res.status(400).json({ error: e.message, field: 'domains' });
+    }
+
+    // RETTET (bruger-ønske): kun ÉT netværkskald til den bruger-angivne
+    // discovery-URL sker HER, EFTER al format-/felt-validering ovenfor —
+    // undgår at spilde et SSRF-sikkert (men stadig ikke-gratis) DNS-
+    // opslag+HTTPS-kald på indlysende ugyldigt input.
+    const verifyResult = await tenantAdmin.validateDiscoveryUrl(discoveryUrl.trim());
+
+    // Gemmes UANSET om bekræftelsen lykkedes — brugeren skal ikke miste
+    // sit indtastede arbejde pga. en midlertidigt utilgængelig discovery-
+    // URL; verified_at forbliver blot null, og modul 3's OAuth-login vil
+    // (når det findes) naturligt afvise indtil en efterfølgende, lykkedes
+    // gemning sætter den.
+    try {
+      await tenantAdmin.upsertOauthConfig({
+        tenantId: req.tenant.tenantId,
+        providerType,
+        clientId: clientId.trim(),
+        clientSecret: typeof clientSecret === 'string' ? clientSecret : '',
+        discoveryUrl: discoveryUrl.trim(),
+        allowedEmailDomains,
+        verified: verifyResult.ok,
+      });
+    } catch (e) {
+      if (e.code === 'SECRET_REQUIRED') {
+        return res.status(400).json({ error: e.message, field: 'client-secret' });
+      }
+      throw e;
+    }
+
+    const config = await tenantAdmin.getOauthConfig(req.tenant.tenantId);
+    res.json({
+      ok: true,
+      config,
+      verified: verifyResult.ok,
+      verifyReason: verifyResult.ok ? undefined : verifyResult.reason,
+    });
+  } catch (e) {
+    console.error('admin/settings/oauth POST: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke gemme OAuth-opsætning lige nu.' });
+  }
+});
+
 // Service worker: never cache (must update immediately)
 app.get('/overloeb-sw.js', (req, res) => {
   res.set('Cache-Control', 'no-cache');

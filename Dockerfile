@@ -52,11 +52,19 @@ COPY seo-pages.js ./
 # ikke kun den nye Kommunepakke-funktion.
 COPY tenant-admin.js ./
 COPY tenant-session.js ./
-# server.js's GET /admin/dashboard læser denne fil direkte via
-# fs.readFileSync(STATIC_DIR, ...) ved hver request (samme mønster som
-# stats.html nedenfor) — mangler den, fejler ruten med ENOENT, men
-# crasher IKKE hele processen (læsningen sker i en try/catch, se ruten).
+# NYT: Kommunepakke, modul 2 — tenant-admin.js requirer nu også
+# (require('./oauth-config-validation')) dette modul ved opstart, samme
+# "crasher øjeblikkeligt uden denne linje"-fælde som ovenfor. Tilføjet
+# HER (før deploy, ikke efter) efter modul 1's produktionsudfald lærte
+# denne lektie — se planens ⚠️-tjekliste-punkt.
+COPY oauth-config-validation.js ./
+# server.js's GET /admin/dashboard og GET /admin/settings/oauth læser
+# disse filer direkte via fs.readFileSync(STATIC_DIR, ...) ved hver
+# request (samme mønster som stats.html nedenfor) — mangler en af dem,
+# fejler netop DEN rute med ENOENT, men crasher IKKE hele processen
+# (læsningen sker i en try/catch, se ruterne).
 COPY admin-dashboard.html ./
+COPY admin-oauth-setup.html ./
 COPY fetch_currents.py ./
 COPY dansk-overloeb-kort.html ./
 COPY badevand-risk.js ./

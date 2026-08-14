@@ -39,8 +39,12 @@
 
 'use strict';
 const crypto = require('crypto');
+const https  = require('https');
+const dns    = require('dns');
+const { URL } = require('url');
 const { query } = require('./db');
 const tenantSession = require('./tenant-session');
+const oauthValidation = require('./oauth-config-validation');
 
 // ── Database-opsætning — samme mønster som badested-observations.js: egen
 // CREATE TABLE IF NOT EXISTS, eksporteret ready-promise, afventet i
@@ -158,13 +162,219 @@ async function getTenant(tenantId) {
   return rows[0] || null;
 }
 
+// ── OAuth-konfiguration (Kommunepakke, modul 2) ─────────────────────────────
+// Selvbetjent flow: en ALLEREDE logget ind tenant (i dag udelukkende via
+// trial, se filhovedet) gemmer selv deres permanente OAuth/OIDC-udbyder-
+// konfiguration. Bruges endnu ikke til at logge ind noget sted — det er
+// modul 3's dynamiske OAuth-login-middleware.
+
+// SSRF-beskyttelse for et bruger-angivet Discovery URL-felt — se planen
+// (Kommunepakke modul 2)'s "Ny sikkerhedsrisiko"-afsnit for den fulde
+// begrundelse. Fire lag:
+//   1. Kun https:// tilladt.
+//   2. DNS-opslag FØR forbindelse — ALLE resolvede adresser tjekkes mod
+//      oauth-config-validation.js's isPrivateOrDisallowedIp() (en
+//      hostname kan resolve til flere adresser; kun ÉN skal være privat
+//      for at hele forespørgslen afvises — fail closed).
+//   3. Selve forbindelsen PINNES til netop den adresse, der blev valideret
+//      i trin 2 (https.get's `lookup`-option) — Node genresolver ALDRIG
+//      hostname'et selv bagefter. Dette lukker den DNS-rebinding-TOCTOU-
+//      begrænsning en naiv "slå op, så fetch(url)" ellers ville have (to
+//      separate opslag, med et vindue hvor DNS-svaret kunne skifte
+//      mellem dem) — servername/Host-header forbliver STADIG det rigtige
+//      hostname (kun selve TCP-forbindelsens IP-mål er fastlåst), så TLS-
+//      certifikatvalidering og vhost-routing hos udbyderen virker uændret.
+//   4. Kort timeout (5s) + loft på svarstørrelse (100 KB — et ægte OIDC
+//      discovery-dokument er typisk et par KB).
+// Kaster ALDRIG for et forventeligt "kunne ikke bekræfte"-udfald (forkert
+// URL, DNS-fejl, timeout, ugyldigt indhold) — kun {ok:false, reason}, som
+// kaldestedet (server.js's POST-handler) viser direkte til brugeren.
+const DISCOVERY_FETCH_TIMEOUT_MS = 5000;
+const DISCOVERY_MAX_BYTES = 100 * 1024;
+const REQUIRED_DISCOVERY_FIELDS = ['issuer', 'authorization_endpoint', 'token_endpoint', 'jwks_uri'];
+
+/**
+ * @param {string} rawUrl
+ * @returns {Promise<{ok: true}|{ok: false, reason: string}>}
+ */
+async function validateDiscoveryUrl(rawUrl) {
+  let parsed;
+  try { parsed = new URL(rawUrl); }
+  catch (e) { return { ok: false, reason: 'Ugyldig URL.' }; }
+  if (parsed.protocol !== 'https:') {
+    return { ok: false, reason: 'Discovery-URL skal starte med https://.' };
+  }
+
+  let addresses;
+  try {
+    addresses = await dns.promises.lookup(parsed.hostname, { all: true });
+  } catch (e) {
+    return { ok: false, reason: `Kunne ikke slå hostnavnet op: ${e.message}` };
+  }
+  if (!addresses || addresses.length === 0) {
+    return { ok: false, reason: 'Hostnavnet resolverede til ingen adresser.' };
+  }
+  for (const { address } of addresses) {
+    if (oauthValidation.isPrivateOrDisallowedIp(address)) {
+      return { ok: false, reason: "Discovery-URL'en peger på en ikke-tilladt (privat/intern) adresse." };
+    }
+  }
+  // RETTET: pin'er til en IPv4-adresse, hvis en findes, frem for blot
+  // addresses[0] (som ofte er IPv6 først på en dual-stack-resolver) — IPv6-
+  // udgangsforbindelse er langt fra universel på tværs af hostingmiljøer
+  // (bekræftet konkret her: en IPv6-pinnet forbindelse hang pålideligt til
+  // timeout i denne sandbox, specifikt EFTER et forudgående dns.lookup()
+  // af 'localhost' i samme proces — sandsynligvis en libuv/c-ares-særhed,
+  // men uafhængigt af rodårsagen er IPv4 det markant mere pålidelige valg
+  // for et engangs-server-til-server-kald som dette).
+  const ipv4Address = addresses.find(a => a.family === 4);
+  const chosen = ipv4Address || addresses[0];
+  const pinnedAddress = chosen.address;
+  const pinnedFamily = chosen.family;
+
+  return new Promise(resolve => {
+    let settled = false;
+    const settle = (result) => { if (!settled) { settled = true; resolve(result); } };
+
+    const req = https.get(parsed, {
+      timeout: DISCOVERY_FETCH_TIMEOUT_MS,
+      // RETTET: Node's interne agent kalder somme tider lookup() med
+      // opts.all===true (set under afvikling — bekræftet ved direkte test)
+      // og forventer da cb(err, [{address,family}]) — en ARRAY — ikke
+      // enkelt-formen cb(err,address,family). Uden dette gren fejlede
+      // ALLE rigtige HTTPS-kald med den kryptiske "Invalid IP address:
+      // undefined", uafhængigt af om selve pin'ingen/DNS-opslaget var
+      // korrekt — kun opdaget ved at teste mod en ægte offentlig URL,
+      // ikke kun de afviste (privat-IP/forkert protokol) testtilfælde.
+      lookup: (_hostname, opts, cb) => {
+        if (opts && opts.all) return cb(null, [{ address: pinnedAddress, family: pinnedFamily }]);
+        cb(null, pinnedAddress, pinnedFamily);
+      },
+    }, res => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        return settle({ ok: false, reason: `Discovery-URL'en svarede HTTP ${res.statusCode}.` });
+      }
+      let body = '';
+      let bytes = 0;
+      res.on('data', chunk => {
+        bytes += chunk.length;
+        if (bytes > DISCOVERY_MAX_BYTES) {
+          settle({ ok: false, reason: 'Discovery-dokumentet er uventet stort.' });
+          req.destroy();
+          return;
+        }
+        body += chunk;
+      });
+      res.on('end', () => {
+        if (settled) return;
+        let doc;
+        try { doc = JSON.parse(body); }
+        catch (e) { return settle({ ok: false, reason: "Discovery-URL'en returnerede ikke gyldig JSON." }); }
+        const missing = REQUIRED_DISCOVERY_FIELDS.filter(f => typeof doc[f] !== 'string' || !doc[f]);
+        if (missing.length > 0) {
+          return settle({ ok: false, reason: `Discovery-dokumentet mangler felt(er): ${missing.join(', ')}.` });
+        }
+        settle({ ok: true });
+      });
+      res.on('error', e => settle({ ok: false, reason: `Fejl ved læsning af svar: ${e.message}` }));
+    });
+    req.on('timeout', () => { req.destroy(); settle({ ok: false, reason: "Discovery-URL'en svarede ikke inden for tidsgrænsen." }); });
+    req.on('error', e => settle({ ok: false, reason: `Kunne ikke kontakte discovery-URL'en: ${e.message}` }));
+  });
+}
+
+/**
+ * Étrække-pr.-tenant (tenant_id er PRIMARY KEY, se skemaet) — en gemning
+ * overskriver en evt. eksisterende konfiguration MED DET SAMME, ingen
+ * versionering/staging. client_secret krypteres HER (aldrig gemt/logget i
+ * klartekst noget sted).
+ *
+ * `clientSecret` er valgfrit ved OPDATERING (tomt = "behold det allerede
+ * gemte secret uændret" — brugeren skal ikke tvinges til at genindtaste
+ * det, hver gang de blot retter et andet felt, fx et domæne). Håndteres
+ * HER, ikke i server.js's route-handler — den ser ALDRIG det eksisterende
+ * krypterede secret (getOauthConfig() eksponerer det bevidst aldrig, se
+ * dens filhoved), så "bevar-uændret"-stien skal nødvendigvis ligge
+ * server-DB-siden af det skel.
+ * @param {{tenantId: string, providerType: string, clientId: string, clientSecret: string, discoveryUrl: string, allowedEmailDomains: string[], verified: boolean}} p
+ * @throws {Error} med .code === 'SECRET_REQUIRED' hvis clientSecret er tomt OG der ikke findes en eksisterende konfiguration at bevare secret'et fra
+ */
+async function upsertOauthConfig({ tenantId, providerType, clientId, clientSecret, discoveryUrl, allowedEmailDomains, verified }) {
+  const verifiedAt = verified ? new Date() : null;
+
+  if (clientSecret) {
+    const { ciphertext, iv, authTag } = tenantSession.encryptClientSecret(clientSecret);
+    await query(
+      `INSERT INTO tenant_oauth_configs
+         (tenant_id, provider_type, client_id, client_secret_ciphertext, client_secret_iv, client_secret_auth_tag, discovery_url, allowed_email_domains, verified_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+       ON CONFLICT (tenant_id) DO UPDATE SET
+         provider_type = EXCLUDED.provider_type,
+         client_id = EXCLUDED.client_id,
+         client_secret_ciphertext = EXCLUDED.client_secret_ciphertext,
+         client_secret_iv = EXCLUDED.client_secret_iv,
+         client_secret_auth_tag = EXCLUDED.client_secret_auth_tag,
+         discovery_url = EXCLUDED.discovery_url,
+         allowed_email_domains = EXCLUDED.allowed_email_domains,
+         verified_at = EXCLUDED.verified_at,
+         updated_at = now()`,
+      [tenantId, providerType, clientId, ciphertext, iv, authTag, discoveryUrl, allowedEmailDomains, verifiedAt]
+    );
+    return;
+  }
+
+  // Intet nyt secret angivet — kun gyldigt som en OPDATERING af en
+  // allerede eksisterende konfiguration (secret-kolonnerne røres slet
+  // ikke). rowCount===0 betyder ingen eksisterende række at opdatere —
+  // dvs. dette var reelt et FØRSTE-gangs-forsøg uden secret, som er en
+  // brugerfejl, ikke en gyldig "bevar uændret".
+  const { rowCount } = await query(
+    `UPDATE tenant_oauth_configs SET
+       provider_type = $2, client_id = $3, discovery_url = $4,
+       allowed_email_domains = $5, verified_at = $6, updated_at = now()
+     WHERE tenant_id = $1`,
+    [tenantId, providerType, clientId, discoveryUrl, allowedEmailDomains, verifiedAt]
+  );
+  if (rowCount === 0) {
+    const err = new Error('Der er intet gemt Client Secret at bevare — angiv ét ved første opsætning.');
+    err.code = 'SECRET_REQUIRED';
+    throw err;
+  }
+}
+
+/**
+ * SELECT ALDRIG client_secret_*-kolonnerne — secret'et vises ALDRIG tilbage
+ * til klienten, hverken krypteret eller i klartekst. `hasSecret` er blot
+ * "findes der en gemt konfiguration" (en gemt konfiguration har pr.
+ * definition altid et secret, se upsertOauthConfig()).
+ * @param {string} tenantId
+ */
+async function getOauthConfig(tenantId) {
+  const { rows } = await query(
+    `SELECT provider_type, client_id, discovery_url, allowed_email_domains, verified_at, created_at, updated_at
+     FROM tenant_oauth_configs WHERE tenant_id = $1`,
+    [tenantId]
+  );
+  if (!rows[0]) return null;
+  return { ...rows[0], hasSecret: true };
+}
+
 module.exports = {
   ready,
   // re-eksporteret fra tenant-session.js — se filhovedets "Filopdeling"
   ...tenantSession,
+  // re-eksporteret fra oauth-config-validation.js — samme "ét require pr.
+  // feature-modul i server.js"-princip, denne fil requirer den allerede
+  // til intern brug i validateDiscoveryUrl() ovenfor.
+  ...oauthValidation,
   // tenant/trial CRUD
   createTenant,
   issueTrialLogin,
   consumeTrialLogin,
   getTenant,
+  // OAuth-konfiguration (modul 2)
+  validateDiscoveryUrl,
+  upsertOauthConfig,
+  getOauthConfig,
 };

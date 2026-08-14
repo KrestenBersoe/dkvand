@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OAuth-opsætning — Badevandsvarsel</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  /* Samme farvepalet/tema som admin-dashboard.html/stats.html — se dem for begrundelsen. */
+  :root {
+    --paper: #12202a; --card: #16283355; --ink: #f0ede6; --ink-soft: #9fb0bb;
+    --accent: #4fb8d6; --border: rgba(255,255,255,.08);
+    --ok: #3fa96a; --warn: #d4a020; --bad: #d1584a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    background: linear-gradient(180deg, #0d1720, #12202a 40%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
+  .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
+  a { color: var(--accent); }
+  .card {
+    background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.1rem 1.3rem; margin-bottom: 1rem;
+  }
+  .card h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-soft); margin: 0 0 .6rem; font-weight: 600; }
+  label { display: block; font-size: .82rem; color: var(--ink-soft); margin: .9rem 0 .3rem; }
+  label:first-child { margin-top: 0; }
+  input, select, textarea {
+    width: 100%; background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .55rem .7rem; border-radius: 8px; font-size: .9rem; font-family: inherit;
+  }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  textarea { min-height: 4.5rem; resize: vertical; }
+  .hint { font-size: .74rem; color: var(--ink-soft); margin-top: .3rem; }
+  .field-err { font-size: .78rem; color: var(--bad); margin-top: .3rem; display: none; }
+  .field-err.show { display: block; }
+  .badge { display: inline-block; padding: .15rem .5rem; border-radius: 999px; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .badge-ok { background: rgba(63,169,106,.18); color: var(--ok); }
+  .badge-warn { background: rgba(212,160,32,.18); color: var(--warn); }
+  button {
+    background: var(--accent); border: none; color: #0d1720;
+    padding: .6rem 1.2rem; border-radius: 8px; font-size: .9rem; font-weight: 700; cursor: pointer;
+    margin-top: 1.2rem;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  button.secondary {
+    background: transparent; border: 1px solid var(--border); color: var(--ink-soft); font-weight: 400;
+  }
+  button.secondary:hover { border-color: var(--accent); color: var(--ink); }
+  .status-msg { font-size: .85rem; margin-top: 1rem; padding: .7rem .9rem; border-radius: 8px; display: none; }
+  .status-msg.show { display: block; }
+  .status-msg.ok { background: rgba(63,169,106,.12); color: var(--ok); }
+  .status-msg.warn { background: rgba(212,160,32,.12); color: var(--warn); }
+  .status-msg.err { background: rgba(209,88,74,.12); color: var(--bad); }
+  .err { color: var(--bad); font-size: .9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="content">Indlæser…</div>
+</div>
+
+<script>
+// NYT (Kommunepakke, modul 2): server.js's GET /admin/settings/oauth
+// injicerer den EKSISTERENDE (ikke-hemmelige) konfiguration HER, samme
+// %%TOKEN%%-erstatningsmønster som admin-dashboard.html's %%TENANT_JSON%%.
+// client_secret er ALDRIG en del af dette objekt — kun hasSecret (boolean).
+window.__OAUTH_CONFIG__ = %%OAUTH_CONFIG_JSON%%;
+
+const PROVIDER_LABELS = {
+  entra_id:      'Microsoft Entra ID / Azure AD',
+  mitid_erhverv: 'MitID Erhverv',
+  keycloak:      'Keycloak',
+  custom:        'Custom OAuth 2.0 / OpenID Connect',
+};
+
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function render() {
+  const cfg = window.__OAUTH_CONFIG__;
+  const content = document.getElementById('content');
+  if (cfg === null) {
+    content.innerHTML = '<div class="err">Ikke logget ind, eller sessionen er udløbet. <a href="/admin/dashboard">Til dashboard</a></div>';
+    return;
+  }
+
+  const existing = cfg.config; // null hvis intet gemt endnu
+  const verifiedBadge = existing?.verified_at
+    ? '<span class="badge badge-ok">✓ Bekræftet</span>'
+    : existing ? '<span class="badge badge-warn">Ikke bekræftet</span>' : '';
+
+  content.innerHTML = `
+    <h1>⚙️ OAuth-opsætning</h1>
+    <div class="sub">Konfigurer jeres egen login-udbyder for medarbejder-adgang til dashboardet ${verifiedBadge}</div>
+
+    <div class="card">
+      <h2>Udbyder</h2>
+      <label for="f-provider">OAuth 2.0 / OpenID Connect-udbyder</label>
+      <select id="f-provider">
+        ${Object.entries(PROVIDER_LABELS).map(([v, label]) =>
+          `<option value="${v}" ${existing?.provider_type === v ? 'selected' : ''}>${escHtml(label)}</option>`
+        ).join('')}
+      </select>
+
+      <label for="f-client-id">Client ID</label>
+      <input id="f-client-id" type="text" value="${escHtml(existing?.client_id || '')}" autocomplete="off">
+      <div class="field-err" id="err-client-id"></div>
+
+      <label for="f-client-secret">Client Secret</label>
+      <input id="f-client-secret" type="password" placeholder="${existing?.hasSecret ? '•••••••• (allerede konfigureret — udfyld kun for at ændre)' : ''}" autocomplete="off">
+      <div class="hint">Vises aldrig igen efter gemning — kun om der er sat ét.</div>
+      <div class="field-err" id="err-client-secret"></div>
+
+      <label for="f-discovery-url">Discovery URL / Well-Known Endpoint</label>
+      <input id="f-discovery-url" type="text" value="${escHtml(existing?.discovery_url || '')}" placeholder="https://login.eksempel.dk/.well-known/openid-configuration" autocomplete="off">
+      <div class="hint">Skal starte med https:// — bekræftes automatisk ved gemning.</div>
+      <div class="field-err" id="err-discovery-url"></div>
+
+      <label for="f-domains">Tilladte e-maildomæner</label>
+      <textarea id="f-domains" placeholder="kommune.dk">${escHtml((existing?.allowed_email_domains || []).join('\n'))}</textarea>
+      <div class="hint">Ét domæne pr. linje. Kun medarbejdere med en e-mail på disse domæner kan logge ind.</div>
+      <div class="field-err" id="err-domains"></div>
+
+      <div class="status-msg" id="status-msg"></div>
+
+      <button id="submit-btn" onclick="save()">Gem og bekræft</button>
+      <button class="secondary" onclick="location.href='/admin/dashboard'">Tilbage til dashboard</button>
+    </div>
+  `;
+}
+
+async function save() {
+  const btn = document.getElementById('submit-btn');
+  const statusEl = document.getElementById('status-msg');
+  ['client-id', 'client-secret', 'discovery-url', 'domains'].forEach(f => {
+    document.getElementById(`err-${f}`)?.classList.remove('show');
+  });
+  statusEl.classList.remove('show', 'ok', 'warn', 'err');
+  btn.disabled = true;
+  btn.textContent = 'Gemmer og bekræfter…';
+
+  const body = {
+    providerType: document.getElementById('f-provider').value,
+    clientId: document.getElementById('f-client-id').value.trim(),
+    clientSecret: document.getElementById('f-client-secret').value,
+    discoveryUrl: document.getElementById('f-discovery-url').value.trim(),
+    allowedEmailDomains: document.getElementById('f-domains').value,
+  };
+
+  try {
+    const resp = await fetch('/admin/settings/oauth', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (data.field) {
+        const errEl = document.getElementById(`err-${data.field}`);
+        if (errEl) { errEl.textContent = data.error; errEl.classList.add('show'); }
+      }
+      statusEl.textContent = data.error || 'Kunne ikke gemme konfigurationen.';
+      statusEl.classList.add('show', 'err');
+      return;
+    }
+    // NYT: render() herunder bygger HELE #content om (nyt formular-DOM,
+    // inkl. et FRISKT #status-msg-element) — beskeden holdes derfor i en
+    // lokal variabel og sættes EFTER render(), ikke på det gamle,
+    // afkoblede statusEl-element (som ville forsvinde med resten af den
+    // gamle DOM).
+    const message = data.verified
+      ? '✓ Gemt og bekræftet — discovery-dokumentet blev hentet og valideret korrekt.'
+      : `Gemt, men kunne ikke bekræfte discovery-URL'en: ${data.verifyReason || 'ukendt årsag'}. Tjek URL'en og gem igen.`;
+    window.__OAUTH_CONFIG__ = { config: data.config };
+    render();
+    const newStatusEl = document.getElementById('status-msg');
+    newStatusEl.textContent = message;
+    newStatusEl.classList.add('show', data.verified ? 'ok' : 'warn');
+  } catch (e) {
+    statusEl.textContent = 'Kunne ikke sende — tjek din forbindelse.';
+    statusEl.classList.add('show', 'err');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Gem og bekræft';
+  }
+}
+
+render();
+</script>
+</body>
+</html>
