@@ -805,6 +805,23 @@ app.get('/overloeb-sw.js', (req, res) => {
   res.sendFile(path.join(STATIC_DIR, 'overloeb-sw.js'));
 });
 
+// Vendorede (ikke CDN-loadede) strøm-visualiserings-scripts, se
+// windy-currents.js' filhoved — SAMME mønster som overloeb-sw.js ovenfor:
+// egen eksplicitte route, IKKE dækket af PUBLIC_STATIC_EXTENSIONS-
+// allowlisten nedenfor (som bevidst udelukker .js generelt, netop for at
+// undgå at eksponere server-side kildekode fra samme STATIC_DIR-rod — se
+// allowlistens filhoved). Disse to filer ER beregnet til offentlig
+// udlevering (loades via <script src> i dansk-overloeb-kort.html), så en
+// navngivet undtagelse her er den rigtige løsning, IKKE en generel
+// åbning af .js i allowlisten.
+for (const publicJsFile of ['windy-currents.js', 'leaflet-canvas-layer.js']) {
+  app.get('/' + publicJsFile, (req, res) => {
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.type('application/javascript');
+    res.sendFile(path.join(STATIC_DIR, publicJsFile));
+  });
+}
+
 // robots.txt: egen eksplicitte route (samme mønster som ovenfor), IKKE
 // dækket af PUBLIC_STATIC_EXTENSIONS-allowlisten nedenfor — '.txt' er
 // bevidst udeladt derfra, da det ellers også ville have åbnet
@@ -3227,12 +3244,18 @@ app.get('/api/health', (req, res) => {
 //
 // Klienten henter, bekræftet ved gennemgang af dansk-overloeb-kort.html/
 // stats.html/manifest.json, KUN .json/.geojson (data) og .png/.ico
-// (ikoner) via denne generiske "alt andet"-rute — intet lokalt .js hentes
-// nogensinde via <script src> eller fetch() (kun eksterne CDN-scripts,
-// Leaflet). HTML-siderne og service workeren har hver deres egen,
-// eksplicitte route OVENFOR (afvikles derfor allerede FØR dette filter
-// nås). Fail-closed ALLOWLIST (ikke en denylist) af filtyper, håndhævet
-// FØR selve express.static() kaldes.
+// (ikoner) via denne generiske "alt andet"-rute. HTML-siderne, service
+// workeren OG de to vendorede strøm-visualiserings-scripts (windy-
+// currents.js/leaflet-canvas-layer.js — RETTET: disse to ER nu lokale,
+// offentligt beregnede .js-filer, se deres egne eksplicitte routes
+// ovenfor) har hver deres egen, eksplicitte route OVENFOR (afvikles
+// derfor allerede FØR dette filter nås) — .js forbliver BEVIDST UDENFOR
+// selve allowlisten nedenfor, præcis fordi den ellers ville åbne for HELE
+// server-side kildekoden i samme STATIC_DIR-rod (server.js, db.js,
+// tenant-*.js, osv.); enhver ny offentlig .js-fil skal have sin EGEN
+// navngivne route, aldrig en generel .js-undtagelse her. Fail-closed
+// ALLOWLIST (ikke en denylist) af filtyper, håndhævet FØR selve
+// express.static() kaldes.
 //
 // RETTET (bruger-præcisering, samme samtale): indhold (siderne, data-
 // filerne) skal fortsat frit kunne crawles/indekseres af Google m.fl. —
