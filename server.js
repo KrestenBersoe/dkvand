@@ -3056,6 +3056,67 @@ setInterval(() => {
   if (Date.now() - currentsCache.ts > CURRENTS_TTL) fetchCMEMSCurrents();
 }, 60 * 1000);
 
+// ── Strøm-visualisering (TEST) — leaflet-velocity grid-format ────────────────
+// Genbruger SAMME currentsCache.grid som /api/currents (og dermed samme CMEMS-
+// hentning/cache/TTL) — kun output-formatet er nyt. leaflet-velocity forventer
+// et GRIB2-lignende par (U/V) af regulære gitre (header + flad data-array,
+// række for række fra nord mod syd, kolonne for kolonne fra vest mod øst),
+// se buildGrid()/createBuilder() i leaflet-velocity's kildekode: den matcher
+// U/V-komponenter via header.parameterCategory+","+header.parameterNumber ===
+// "2,2" hhv. "2,3" (samme GRIB2-konvention der historisk bruges til vind,
+// men biblioteket lægger ingen fysisk betydning i tallene — duer lige så
+// godt til havstrøm). fetch_currents.py's punkter STAMMER fra et regulært
+// lat/lon-gitter (strided xarray-udsnit), men nogle celler mangler (NaN/
+// fill-value droppet der) — manglende celler udfyldes her med 0,0 i stedet
+// for at springes over, da leaflet-velocity kræver et fuldt nx×ny-gitter.
+function buildVelocityGridJSON(grid) {
+  const lats = new Set(), lngs = new Set();
+  for (const [, v] of grid) { lats.add(v.lat); lngs.add(v.lng); }
+  if (lats.size < 2 || lngs.size < 2) return null; // for lidt til et meningsfuldt gitter
+
+  const latArr = [...lats].sort((a, b) => b - a); // nord → syd (la1 = nordligste)
+  const lngArr = [...lngs].sort((a, b) => a - b); // vest → øst (lo1 = vestligste)
+  const ny = latArr.length, nx = lngArr.length;
+  const la1 = latArr[0], la2 = latArr[ny - 1];
+  const lo1 = lngArr[0], lo2 = lngArr[nx - 1];
+  const dy = (la1 - la2) / (ny - 1);
+  const dx = (lo2 - lo1) / (nx - 1);
+
+  const uData = new Array(nx * ny).fill(0);
+  const vData = new Array(nx * ny).fill(0);
+  let idx = 0;
+  for (const lat of latArr) {
+    for (const lng of lngArr) {
+      const p = grid.get(`${lat.toFixed(2)}:${lng.toFixed(2)}`);
+      if (p) { uData[idx] = p.uo; vData[idx] = p.vo; }
+      idx++;
+    }
+  }
+
+  const header = {
+    nx, ny, lo1, la1, lo2, la2, dx, dy,
+    refTime: new Date(currentsCache.ts).toISOString(),
+    forecastTime: 0,
+  };
+  return [
+    { header: { ...header, parameterCategory: 2, parameterNumber: 2, parameterUnit: 'm.s-1', parameterNumberName: 'Eastward current' }, data: uData },
+    { header: { ...header, parameterCategory: 2, parameterNumber: 3, parameterUnit: 'm.s-1', parameterNumberName: 'Northward current' }, data: vData },
+  ];
+}
+
+app.get('/api/currents/velocity', async (req, res) => {
+  const grid = await fetchCMEMSCurrents();
+  if (!grid) {
+    return res.status(503).json({ error: currentsCache.error || 'No current data' });
+  }
+  const velocityJSON = buildVelocityGridJSON(grid);
+  if (!velocityJSON) {
+    return res.status(503).json({ error: 'Utilstrækkeligt gitter til velocity-format' });
+  }
+  res.set('Cache-Control', 'public, max-age=21600');
+  res.json(velocityJSON);
+});
+
 // ── GET /api/currents — serve current vector grid ────────────────────────────
 app.get('/api/currents', async (req, res) => {
   const grid = await fetchCMEMSCurrents();

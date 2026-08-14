@@ -79,6 +79,12 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <!-- Leaflet.heat -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+<!-- Strøm-visualisering (TEST — se toggleCurrentsVelocity()): leaflet-velocity,
+     animeret partikel-lag som erstatning for den statiske pil-visualisering
+     buildCurrentsArrowLayer() ovenfor. Vurderes side om side, ikke som
+     erstatning endnu. -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-velocity@2.1.4/dist/leaflet-velocity.min.css"/>
+<script src="https://cdn.jsdelivr.net/npm/leaflet-velocity@2.1.4/dist/leaflet-velocity.min.js"></script>
 
 <style>
   /* ── Design tokens ───────────────────────────────────────────────────────── */
@@ -2007,6 +2013,7 @@
       <button class="layer-btn" id="btn-vandlobdir" aria-pressed="false" onclick="toggleVandlobDir()">🧭 Vandløbsretning</button>
       <button class="layer-btn" id="btn-vp3kyst" aria-pressed="false" onclick="toggleVP3Kyst()">🌊 Kystvande</button>
       <button class="layer-btn" id="btn-currents" aria-pressed="false" onclick="toggleCurrents()">〰 Strøm</button>
+      <button class="layer-btn" id="btn-currents-velocity" aria-pressed="false" onclick="toggleCurrentsVelocity()">💫 Strøm (test)</button>
     </div>
     <div class="lag-group">
       <div class="lag-group-title">Risikolag</div>
@@ -5231,6 +5238,7 @@ setLayerBtnState('btn-vp3rburegn', false);
 setLayerBtnState('btn-vp3rbukloak', false);
 setLayerBtnState('btn-vp3kyst', false);
 setLayerBtnState('btn-currents', false);
+setLayerBtnState('btn-currents-velocity', false);
 setLayerBtnState('btn-pts', false);
 setLayerBtnState('btn-heat', false);
 setLayerBtnState('btn-viral', false);
@@ -5653,6 +5661,130 @@ function buildCurrentsArrowLayer() {
 
     L.marker([lat, lng], { icon, interactive: false, keyboard: false })
       .addTo(currentsArrowLayer);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// STRØM-VISUALISERING (TEST) — leaflet-velocity, animeret partikel-lag som
+// alternativ til buildCurrentsArrowLayer() ovenfor. Testes side om side under
+// egen knap ("💫 Strøm (test)") — erstatter IKKE det eksisterende pil-lag,
+// og rører ikke currentsGrid/getCurrentAt(), som risikomodellen afhænger af
+// (se filhovedet ved STRØMDATA-sektionen ovenfor).
+//
+// BRUGERKRAV: kun hav og søer — IKKE vandløb (i modsætning til
+// isInDanishWater(), som også dækker vandløbenes bufferzone). CMEMS'
+// Østersø-model leverer i praksis kun gyldige punkter over hav (søer er ikke
+// del af den model), så maskeringen til søer er et fremtidssikret no-op
+// indtil en sø-strøm-datakilde findes — men koden tjekker begge, så det
+// virker automatisk den dag data findes.
+// ═══════════════════════════════════════════════════════════════════════════
+let showCurrentsVelocity      = false;
+let currentsVelocityLayer     = null;
+let currentsVelocityLoading   = false;
+
+// Egen cache, adskilt fra _waterClassCache (som ALLIGEVEL dækker vandløb) —
+// deler dog samme f._bbox-felt på selve GeoJSON-featurene, sat af
+// computeGeometryBbox() første gang en af de to cacher rammer featuren.
+const _seaLakeCache = new Map();
+function isSeaOrLakeWater(lat, lng) {
+  if (!vp3KystvandeRaw?.features && !vp3SoeerRaw?.features) return false; // data ikke indlæst endnu — vis intet frem for forkert
+
+  const key = `${lat.toFixed(3)}:${lng.toFixed(3)}`;
+  if (_seaLakeCache.has(key)) return _seaLakeCache.get(key);
+
+  const inKystvand = vp3KystvandeRaw?.features?.some(f => {
+    if (!f._bbox) f._bbox = computeGeometryBbox(f.geometry);
+    const b = f._bbox;
+    if (lat < b.minLat || lat > b.maxLat || lng < b.minLng || lng > b.maxLng) return false;
+    return pointInGeometry(lat, lng, f.geometry);
+  }) || false;
+
+  let inSoe = false;
+  if (!inKystvand && vp3SoeerRaw?.features) {
+    inSoe = vp3SoeerRaw.features.some(f => {
+      if (!f._bbox) f._bbox = computeGeometryBbox(f.geometry);
+      const b = f._bbox;
+      if (lat < b.minLat || lat > b.maxLat || lng < b.minLng || lng > b.maxLng) return false;
+      return pointInGeometry(lat, lng, f.geometry);
+    });
+  }
+
+  const result = inKystvand || inSoe;
+  _seaLakeCache.set(key, result);
+  return result;
+}
+
+// Nulstiller u/v-komponenterne for ethvert gitterpunkt, der IKKE er hav/sø —
+// leaflet-velocitys partikelsystem interpolerer bilineært mellem nabopunkter,
+// så uden denne maskering ville strøm nær kysten "smitte" synligt ind over
+// land. Kører kun ÉN gang pr. datahentning (ikke pr. animationsframe).
+function applyWaterMaskToVelocityData(velocityJSON) {
+  const [uBand, vBand] = velocityJSON;
+  const { nx, ny, la1, lo1, dy, dx } = uBand.header;
+  for (let r = 0; r < ny; r++) {
+    const lat = la1 - r * dy;
+    for (let c = 0; c < nx; c++) {
+      const lng = lo1 + c * dx;
+      if (!isSeaOrLakeWater(lat, lng)) {
+        const idx = r * nx + c;
+        uBand.data[idx] = 0;
+        vBand.data[idx] = 0;
+      }
+    }
+  }
+  return velocityJSON;
+}
+
+async function loadCurrentsVelocityLayer() {
+  if (currentsVelocityLoading) return;
+  currentsVelocityLoading = true;
+  try {
+    const res = await fetch('api/currents/velocity');
+    if (!res.ok) throw new Error(`Server svarede ${res.status}`);
+    const raw = await res.json();
+    const masked = applyWaterMaskToVelocityData(raw);
+
+    if (currentsVelocityLayer && map.hasLayer(currentsVelocityLayer)) {
+      map.removeLayer(currentsVelocityLayer);
+    }
+    currentsVelocityLayer = L.velocityLayer({
+      displayValues: true,
+      displayOptions: {
+        velocityType: 'Strøm (test)',
+        position: 'bottomleft',
+        emptyString: 'Ingen strømdata',
+        speedUnit: 'm/s',
+      },
+      data: masked,
+      minVelocity: 0,
+      maxVelocity: 1,
+      velocityScale: 0.01,
+      lineWidth: 2,
+      particleAge: 90,
+      particleMultiplier: 1 / 300,
+      colorScale: ['#2166ac', '#67a9cf', '#d1e5f0', '#fddbc7', '#ef8a62', '#b2182b'],
+    });
+    if (showCurrentsVelocity) map.addLayer(currentsVelocityLayer);
+  } catch (e) {
+    console.warn('Strøm (velocity-test) fejlede:', e.message);
+    showCurrentsVelocity = false;
+    setLayerBtnState('btn-currents-velocity', false);
+  } finally {
+    currentsVelocityLoading = false;
+  }
+}
+
+function toggleCurrentsVelocity() {
+  showCurrentsVelocity = !showCurrentsVelocity;
+  setLayerBtnState('btn-currents-velocity', showCurrentsVelocity);
+  if (showCurrentsVelocity) {
+    if (currentsVelocityLayer) {
+      map.addLayer(currentsVelocityLayer);
+    } else {
+      loadCurrentsVelocityLayer();
+    }
+  } else if (currentsVelocityLayer && map.hasLayer(currentsVelocityLayer)) {
+    map.removeLayer(currentsVelocityLayer);
   }
 }
 
