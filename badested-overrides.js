@@ -1,6 +1,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// badested-overrides.js — Kommunepakke, modul 6: kommune-overstyring af et
-// badesteds offentlige status (grøn/gul/rød/lukket)
+// badested-overrides.js — Kommunepakke, modul 6: "Kommunalt Varsel", et
+// banner kommunen kan sætte på et badesteds side (grøn/gul/rød/lukket-farvet,
+// egen fritekst)
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // ⚠️ Dette er en BEVIDST ANDEN mekanisme end badested-observations.js's
@@ -27,14 +28,15 @@
 // computeBadevandRiskCascade() (badevand-risk.js) rører vi ALDRIG — cascaden
 // forbliver 100% uændret. applyActiveOverrides() nedenfor patcher i stedet
 // cascadens FÆRDIGE resultat (server.js's badevandRiskCache/badevandByIdCache),
-// ved at erstatte bact/viral med syntetiske værdier, der producerer den
-// ØNSKEDE bucket gennem den EKSISTERENDE, uændrede 0,6/0,2-tærskel-logik
-// (samme tærskler som resten af appen, se seo-pages.js's riskInfo()) — intet
-// forbrugende sted (klientens colorBadevandByRisk(), SSR-siderne, app-
-// metrics.js's daglige historik) behøver vide, at en overstyring fandtes.
-// Det ekstra `overrideInfo`-felt er PURT ADDITIVT (ingen eksisterende
-// forbruger læser det i dag) — det er DÉT feltet, banner-visningen (klient +
-// SSR) bruger til rent faktisk at vise overstyringen synligt for offentligheden.
+// men UDELUKKENDE ved at TILFØJE et `overrideInfo`-felt — bact/viral/source
+// er ALDRIG rørt (se badested-override-logic.js's patchBadevandEntry() for
+// selve grænsen, og dens filhoved for hvorfor dette blev strammet efter en
+// tidligere udgave, der faktisk ÆNDREDE badestedets officielle status).
+// `overrideInfo` er PURT ADDITIVT (ingen eksisterende forbruger læser det
+// medmindre den eksplicit tjekker for det) — det er DÉT feltet, banner-
+// visningen (klient + SSR) bruger til rent faktisk at vise "Kommunalt
+// Varsel" synligt for offentligheden, helt uafhængigt af den ægte, model-
+// beregnede risiko/farve.
 //
 // Kaldes TO steder (se server.js): (1) hver periodisk cyklus, FØR cachen
 // tildeles — udløb/tilbagekaldelse falder dermed automatisk væk uden nogen

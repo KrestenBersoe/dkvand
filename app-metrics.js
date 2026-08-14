@@ -97,6 +97,24 @@ const ready = query(`
     risk_push_total     INTEGER NOT NULL,
     recorded_at         BIGINT  NOT NULL
   );
+
+  -- NYT (Kommunepakke, modul 6 — badested-statistik): dagligt aggregat af
+  -- FAKTISK leverede webpush PR. BADESTED, opdelt på type (risikovarsel/
+  -- ny-vurdering/kommune-override, se PUSH_SEND_TYPES i server.js). Samme
+  -- "daglig aggregat, ikke rå event-log"-princip som badevand_daily_risk
+  -- ovenfor — nødvendigt her fordi kommune-dashboardet skal kunne vise
+  -- "kvartal"/"år", hvilket push_send_log's 8-dages-beskæring (se
+  -- pruneOldPushSendLog() nedenfor) ikke rækker til. ÉN række pr.
+  -- (badested, dato, type), aldrig beskåret — samme størrelsesorden som
+  -- badevand_daily_risk, ikke ubegrænset voksende pr. afsendelse.
+  CREATE TABLE IF NOT EXISTS badested_alert_daily (
+    badested_id TEXT NOT NULL,
+    date        TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    count       INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (badested_id, date, type)
+  );
+  CREATE INDEX IF NOT EXISTS idx_badested_alert_daily_badested_date ON badested_alert_daily(badested_id, date);
 `).then(() => console.info('app-metrics: Postgres-skema klar'))
   .catch(e => { console.error('app-metrics: skemaoprettelse fejlede —', e.message); throw e; });
 
@@ -447,6 +465,55 @@ async function getPushSendStats() {
   return { byType: list, totals };
 }
 
+/** UTC-dato ('YYYY-MM-DD') for et givet millisekund-tidsstempel — samme konvention som todayDateString(). */
+function dateStringFromMs(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/**
+ * Registrerer ÉT faktisk lykkedes, badested-scopet webpush — Kommunepakke,
+ * modul 6's badested-statistik ("hvor mange varsler er udsendt for DETTE
+ * sted"). Kaldes fra server.js's flushPushQueue(), KUN ved bekræftet
+ * vellykket levering (samme regel som recordPushSent() ovenfor), én gang
+ * pr. (badested, job) — et job der dækker flere badesteder (se
+ * enqueuePushNotifications()' RISIKOVARSEL) kalder denne én gang PR. id.
+ * @param {string} badestedId
+ * @param {string} type — PUSH_SEND_TYPES-værdi
+ * @param {number} sentAtMs — job'ets enqueued_at (ikke Date.now() ved flush-tidspunktet — se kaldestedets begrundelse)
+ */
+async function recordBadestedAlertSent(badestedId, type, sentAtMs) {
+  const date = dateStringFromMs(sentAtMs);
+  await query(`
+    INSERT INTO badested_alert_daily (badested_id, date, type, count)
+    VALUES ($1, $2, $3, 1)
+    ON CONFLICT (badested_id, date, type) DO UPDATE SET count = badested_alert_daily.count + 1
+  `, [String(badestedId), date, type]);
+}
+
+/**
+ * Summerer udsendte varsler pr. badested i et INKLUSIVT datointerval (begge
+ * 'YYYY-MM-DD') — bruges af GET /admin/api/badested-alert-stats. Et
+ * badested uden nogen rækker i intervallet er simpelthen fraværende fra
+ * Map'et (kaldestedet behandler det som 0), IKKE en fejl — gælder lige så
+ * vel gamle/tomme måneder som helt nye badesteder uden historik endnu.
+ * @param {string[]} badestedIds
+ * @param {string} fromDate
+ * @param {string} toDate
+ * @returns {Promise<Map<string, number>>}
+ */
+async function getAlertCountsForBadestedIds(badestedIds, fromDate, toDate) {
+  const result = new Map();
+  if (!Array.isArray(badestedIds) || badestedIds.length === 0) return result;
+  const { rows } = await query(`
+    SELECT badested_id, SUM(count)::int AS n
+    FROM badested_alert_daily
+    WHERE badested_id = ANY($1) AND date >= $2 AND date <= $3
+    GROUP BY badested_id
+  `, [badestedIds.map(String), fromDate, toDate]);
+  for (const r of rows) result.set(r.badested_id, r.n);
+  return result;
+}
+
 // ── Del 5: dagligt statistik-øjebliksbillede (til /stats' udviklingsgrafer) ─
 
 /**
@@ -506,6 +573,8 @@ module.exports = {
   recordPushSent,
   pruneOldPushSendLog,
   getPushSendStats,
+  recordBadestedAlertSent,
+  getAlertCountsForBadestedIds,
   recordDailyStatsSnapshot,
   getStatsHistory,
 };

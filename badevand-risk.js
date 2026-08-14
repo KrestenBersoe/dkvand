@@ -1701,10 +1701,11 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
       // vurdering. Se badested-observations.js's filhoved for den fulde
       // begrundelse, hvis det nogensinde virker fristende at koble dem.
       // (Denne grænse er UBERØRT af Kommunepakke, modul 6 — badested-
-      // overrides.js's applyActiveOverrides() patcher bact/viral EFTER
-      // denne cascade er beregnet, udenfor denne fil, som en bevidst
-      // ANDEN, autentificeret og tydeligt offentligt mærket mekanisme.
-      // Se badested-observations.js's filhoved for den fulde skelnen.)
+      // overrides.js's applyActiveOverrides() rører ALDRIG bact/viral/
+      // source overhovedet, hverken her eller efter denne cascade; den
+      // tilføjer udelukkende et separat overrideInfo-banner-felt til
+      // visning, som "Kommunalt Varsel". Se badested-observations.js's
+      // filhoved for den fulde skelnen.)
       badevand.push({
         id,
         bact: result?.bact ?? null, viral: result?.viral ?? null, algae: result?.algae ?? null,

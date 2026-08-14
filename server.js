@@ -729,6 +729,12 @@ app.post('/admin/api/override', tenantAdmin.requireTenantSession, express.json()
       throw e;
     }
 
+    // NYT (badested-statistik): ÉT varsel talt her — pr. UDSENDT Kommunalt
+    // Varsel, ALDRIG pr. abonnent (se GET /admin/api/badested-alert-stats).
+    // Tælles uafhængigt af pushSent nedenfor, som er antal ABONNENTER,
+    // en helt anden metrik.
+    await appMetrics.recordBadestedAlertSent(badestedId, PUSH_SEND_TYPES.KOMMUNE_OVERRIDE, Date.now());
+
     // Patcher den ALLEREDE LIVE cache med det samme — se
     // applyLiveOverridesToCache()'s egen begrundelse ("under 10 sekunder").
     await applyLiveOverridesToCache();
@@ -798,6 +804,78 @@ app.get('/admin/api/overrides', tenantAdmin.requireTenantSession, async (req, re
   }
 });
 
+// ── Kommunepakke, modul 6 — badested-statistik (varsler + abonnenter) ──────
+const VALID_ALERT_PERIODS = new Set(['today', '7d', 'month', 'quarter', 'year']);
+
+/**
+ * Oversætter en periode-forespørgsel til et INKLUSIVT ['YYYY-MM-DD', 'YYYY-MM-DD']-
+ * interval til appMetrics.getAlertCountsForBadestedIds(). 'month' er den
+ * ENESTE kalender-forankrede periode — kan pege på EN HVILKEN SOM HELST
+ * måned (også uden data, også fremtidige), samme frie måned-vælger-mønster
+ * som GET /admin/api/badested-history's egen month-parameter. De øvrige
+ * ('7d'/'quarter'/'year') er bevidst RULLENDE vinduer endende i dag, ikke
+ * kalenderafgrænsede — samme "sidste N dage"-princip som '7d' allerede
+ * antyder i sit eget navn.
+ * @returns {{from: string, to: string}|null} null ved ugyldigt month-format
+ */
+function computeAlertStatsRange(period, monthParam) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const daysAgo = n => new Date(Date.now() - n * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  if (period === 'today')   return { from: todayStr, to: todayStr };
+  if (period === '7d')      return { from: daysAgo(6), to: todayStr };
+  if (period === 'quarter') return { from: daysAgo(89), to: todayStr };
+  if (period === 'year')    return { from: daysAgo(364), to: todayStr };
+  // period === 'month'
+  const month = monthParam || todayStr.slice(0, 7);
+  const m = /^(\d{4})-(\d{2})$/.exec(month);
+  if (!m) return null;
+  const year = parseInt(m[1], 10), monthIdx = parseInt(m[2], 10) - 1;
+  return {
+    from: new Date(Date.UTC(year, monthIdx, 1)).toISOString().slice(0, 10),
+    to: new Date(Date.UTC(year, monthIdx + 1, 0)).toISOString().slice(0, 10), // månedens sidste dag
+  };
+}
+
+app.get('/admin/api/badested-alert-stats', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const period = typeof req.query.period === 'string' ? req.query.period : '';
+    if (!VALID_ALERT_PERIODS.has(period)) {
+      return res.status(400).json({ error: `Ugyldig period — skal være én af: ${[...VALID_ALERT_PERIODS].join(', ')}.` });
+    }
+    const monthParam = typeof req.query.month === 'string' ? req.query.month : null;
+    const range = computeAlertStatsRange(period, monthParam);
+    if (!range) {
+      return res.status(400).json({ error: "Ugyldigt month-format, forventede 'YYYY-MM'." });
+    }
+
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const badesteder = tenantBadesteder.resolveTenantBadesteder(tenant.name, kommuneKeyToBadesteder);
+    if (badesteder.length === 0) {
+      return res.json({ period, from: range.from, to: range.to, badesteder: [], warning: `Ingen badesteder fundet for "${tenant.name}" — kontakt support hvis dette er forkert.` });
+    }
+
+    const ids = badesteder.map(b => b.id);
+    const [alertCounts, subscriberCounts] = await Promise.all([
+      appMetrics.getAlertCountsForBadestedIds(ids, range.from, range.to),
+      getSubscriberCountsForBadestedIds(ids),
+    ]);
+    const result = badesteder.map(b => ({
+      id: b.id, slug: b.slug, navn: b.navn,
+      alertCount: alertCounts.get(String(b.id)) || 0,
+      subscriberCount: subscriberCounts.get(String(b.id)) || 0,
+    }));
+    res.set('Cache-Control', 'no-store');
+    res.json({ period, from: range.from, to: range.to, badesteder: result });
+  } catch (e) {
+    console.error('admin/api/badested-alert-stats: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente badested-statistik lige nu.' });
+  }
+});
+
 // Service worker: never cache (must update immediately)
 app.get('/overloeb-sw.js', (req, res) => {
   res.set('Cache-Control', 'no-cache');
@@ -831,6 +909,65 @@ for (const publicJsFile of ['windy-currents.js', 'leaflet-canvas-layer.js']) {
     res.sendFile(path.join(STATIC_DIR, publicJsFile));
   });
 }
+
+// ── Skærmkortet (SDFI/Datafordeler WMS) tile-proxy ────────────────────────
+// Basiskortet skiftede fra vores selv-hostede OSM-fliser (se
+// dansk-overloeb-kort.html for hvorfor DEN blev bygget) til SDFI's
+// officielle Skærmkortet-WMS. Den tjeneste kræver en apikey — samme slags
+// afhængighed vi tidligere fjernede med MAPTILER_KEY (se RETTET-kommentaren
+// længere oppe i filen). Fremfor at lægge nøglen direkte i klient-HTML'en
+// (synlig for enhver, kræver redeploy for at rotere), proxyer vi her:
+// klienten beder om almindelige XYZ-fliser på vores eget domæne, nøglen
+// lever kun server-side (Fly secret), og fliserne cachjes aggressivt —
+// SDFI's kortdata ændrer sig sjældent.
+const SKAERMKORT_API_KEY = process.env.SKAERMKORT_API_KEY || '';
+const SKAERMKORT_WMS_URL = 'https://wms.datafordeler.dk/Dkskaermkort/topo_skaermkort/1.0.0/wms';
+const WEB_MERCATOR_EXTENT = 20037508.342789244; // halv omkreds af Web Mercator-kvadratet, i meter
+
+app.get('/api/tiles/skaermkort/:z/:x/:y.png', (req, res) => {
+  if (!SKAERMKORT_API_KEY) {
+    return res.status(503).send('Skærmkort tile-proxy er ikke konfigureret (SKAERMKORT_API_KEY mangler)');
+  }
+  const z = parseInt(req.params.z, 10);
+  const x = parseInt(req.params.x, 10);
+  const y = parseInt(req.params.y, 10);
+  if (!Number.isInteger(z) || !Number.isInteger(x) || !Number.isInteger(y) || z < 0 || z > 22) {
+    return res.status(400).send('Ugyldige flise-koordinater');
+  }
+
+  // Standard slippy-map XYZ → EPSG:3857 BBOX (samme matematik som Leaflet/
+  // enhver anden Web Mercator-flisemotor bruger internt).
+  const n = 2 ** z;
+  const tileSize = (2 * WEB_MERCATOR_EXTENT) / n;
+  const minX = -WEB_MERCATOR_EXTENT + x * tileSize;
+  const maxX = minX + tileSize;
+  const maxY = WEB_MERCATOR_EXTENT - y * tileSize;
+  const minY = maxY - tileSize;
+
+  const params = new URLSearchParams({
+    apikey: SKAERMKORT_API_KEY,
+    SERVICE: 'WMS',
+    REQUEST: 'GetMap',
+    VERSION: '1.3.0',
+    LAYERS: 'dtk_skaermkort',
+    STYLES: '',
+    CRS: 'EPSG:3857',
+    BBOX: [minX, minY, maxX, maxY].join(','),
+    WIDTH: '256',
+    HEIGHT: '256',
+    FORMAT: 'image/png',
+  });
+
+  https.get(`${SKAERMKORT_WMS_URL}?${params.toString()}`, upstream => {
+    if (upstream.statusCode !== 200) {
+      upstream.resume();
+      return res.status(502).send('Skærmkort WMS fejlede');
+    }
+    res.set('Content-Type', upstream.headers['content-type'] || 'image/png');
+    res.set('Cache-Control', 'public, max-age=604800'); // 7 dage
+    upstream.pipe(res);
+  }).on('error', () => res.status(502).send('Skærmkort WMS uden svar'));
+});
 
 // robots.txt: egen eksplicitte route (samme mønster som ovenfor), IKKE
 // dækket af PUBLIC_STATIC_EXTENSIONS-allowlisten nedenfor — '.txt' er
@@ -2460,6 +2597,30 @@ async function getSubscriptionsForBadested(badestedId) {
   return matches;
 }
 
+// NYT (Kommunepakke, modul 6 — badested-statistik): SAMME koordinat-
+// opslags-princip som getSubscriptionsForBadested() ovenfor, men for MANGE
+// badested_id'er i ÉT gennemløb af abonnementerne i stedet for ét kald pr.
+// badested (undgår N separate fulde getAllPushSubscriptions()-hentninger
+// for et kommune-dashboard med flere badesteder).
+async function getSubscriberCountsForBadestedIds(badestedIds) {
+  const result = new Map(badestedIds.map(id => [String(id), 0]));
+  const coordIndex = getBadevandCoordIndex();
+  const subs = await getAllPushSubscriptions();
+  for (const entry of subs) {
+    const seen = new Set(); // ét abonnement tælles højst én gang pr. badested, selv ved flere matchende grupper
+    for (const group of (entry.badevandGroups || [])) {
+      if (group.lat == null || group.lng == null) continue;
+      const bvId = coordIndex.get(`${group.lat.toFixed(4)}:${group.lng.toFixed(4)}`);
+      if (bvId == null || seen.has(bvId)) continue;
+      const key = String(bvId);
+      if (!result.has(key)) continue;
+      result.set(key, result.get(key) + 1);
+      seen.add(bvId);
+    }
+  }
+  return result;
+}
+
 // Samme danske labels som selve indsendelses-UI'en (bv-obs-btn-knapperne og
 // bv-algae-level-btn-knapperne i dansk-overloeb-kort.html) — HOLD I SYNC,
 // så push-beskeden aldrig kan afvige fra hvad brugeren faktisk trykkede på.
@@ -2489,6 +2650,12 @@ async function broadcastFirstVurderingOfDay(badestedId, observationTypes, algaeL
   }
   const body = typeLabels.length > 0 ? typeLabels.join(', ') : 'Ny observation indsendt';
   const now = Date.now();
+
+  // NYT (badested-statistik): ÉT varsel talt her, pr. kald (matches.length
+  // > 0 er allerede bekræftet ovenfor) — ALDRIG pr. abonnent. Samme
+  // "count events, not recipients"-princip som modul 6's kommunale varsel.
+  appMetrics.recordBadestedAlertSent(badestedId, PUSH_SEND_TYPES.NY_VURDERING, now)
+    .catch(e => console.warn('recordBadestedAlertSent (ny vurdering) fejl:', e.message));
 
   await Promise.all(matches.map(({ endpoint, group }) => query(`
     INSERT INTO push_send_queue (endpoint, type, payload, hit_stamps, enqueued_at)
@@ -2637,6 +2804,12 @@ async function enqueuePushNotifications(warnPoints, pointRisks, bypassDedup = fa
   const now = Date.now();
   let queued = 0, skippedDuplicate = 0;
   const inserts = [];
+  // NYT (badested-statistik): denne løkke kører PR. ABONNENT — to abonnenter
+  // kan udløses på FORSKELLIGE tidspunkter for samme badested (egen
+  // notifiedState/dedup hver), så "ét varsel udsendt for badested X" tælles
+  // her som "X optrådte i mindst ét worthyHits denne kørsel", IKKE pr.
+  // abonnent-job nedenfor — se recordBadestedAlertSent()-kaldet efter loopet.
+  const alertedBadestedIds = new Set();
 
   for (const entry of subs) {
     const { endpoint, badevandGroups, notifiedState } = entry;
@@ -2729,6 +2902,13 @@ async function enqueuePushNotifications(warnPoints, pointRisks, bypassDedup = fa
       return false;
     });
     if (worthyHits.length === 0) { skippedDuplicate++; continue; }
+    if (coordIndex) {
+      for (const h of worthyHits) {
+        if (h.lat == null || h.lng == null) continue;
+        const bvId = coordIndex.get(`${h.lat.toFixed(4)}:${h.lng.toFixed(4)}`);
+        if (bvId != null) alertedBadestedIds.add(String(bvId));
+      }
+    }
 
     // RETTET: url pegede tidligere ALTID på forsiden ('/'), uanset hvad
     // varslet faktisk handlede om. Bruger nu det samme #badevand=lat:lng /
@@ -2768,6 +2948,12 @@ async function enqueuePushNotifications(warnPoints, pointRisks, bypassDedup = fa
   }
 
   await Promise.all(inserts);
+
+  if (alertedBadestedIds.size > 0) {
+    await Promise.all([...alertedBadestedIds].map(id =>
+      appMetrics.recordBadestedAlertSent(id, PUSH_SEND_TYPES.RISIKOVARSEL, now)
+    )).catch(e => console.warn('recordBadestedAlertSent (risikovarsel) fejl:', e.message));
+  }
 
   // RETTET: loggede tidligere kun ved faktisk afsendelse/fejl — men "0
   // sendt" er nu et FORVENTET, normalt udfald (deduplikering), ikke kun et

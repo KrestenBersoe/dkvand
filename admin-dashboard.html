@@ -66,7 +66,21 @@
   }
   .hist-empty { color: var(--ink-soft); font-size: .85rem; }
 
-  /* NYT (Kommunepakke, modul 6) — overstyringsknap */
+  /* NYT (Kommunepakke, modul 6) — badested-statistik */
+  .stat-controls { display: flex; align-items: center; gap: .6rem; margin-bottom: .9rem; flex-wrap: wrap; }
+  .stat-controls label { font-size: .82rem; color: var(--ink-soft); }
+  .stat-controls select, .stat-controls input[type="month"] {
+    background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .35rem .5rem; border-radius: 6px; font-size: .85rem; font-family: inherit;
+  }
+  .stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: .35rem 0; font-size: .86rem; }
+  .stat-row + .stat-row { border-top: 1px solid var(--border); }
+  .stat-name { flex: 1; }
+  .stat-nums { color: var(--ink-soft); font-size: .78rem; white-space: nowrap; margin-left: .8rem; }
+  .stat-empty { color: var(--ink-soft); font-size: .85rem; }
+
+  /* NYT (Kommunepakke, modul 6) — Kommunalt Varsel */
+  .ov-intro { color: var(--ink-soft); font-size: .82rem; margin-bottom: .9rem; line-height: 1.4; }
   .ov-field { margin-bottom: .7rem; }
   .ov-field label { display: block; font-size: .8rem; color: var(--ink-soft); margin-bottom: .3rem; }
   .ov-field select, .ov-field textarea, .ov-field input {
@@ -161,7 +175,28 @@ function render() {
     </div>
 
     <div class="card">
-      <h2>Overstyring — badevandsstatus</h2>
+      <h2>Badested-statistik</h2>
+      <div class="stat-controls">
+        <label for="stat-period">Periode</label>
+        <select id="stat-period" onchange="onStatPeriodChange()">
+          <option value="today">I dag</option>
+          <option value="7d">Sidste 7 dage</option>
+          <option value="month">Måned</option>
+          <option value="quarter">Sidste kvartal</option>
+          <option value="year">Sidste år</option>
+        </select>
+        <input type="month" id="stat-month" value="${currentMonthStr()}" onchange="loadAlertStats()" style="display:none">
+      </div>
+      <div id="stat-content">Indlæser…</div>
+    </div>
+
+    <div class="card">
+      <h2>Kommunalt Varsel</h2>
+      <div class="ov-intro">
+        Et banner på badestedets side og i push til abonnenter — ændrer
+        IKKE badestedets officielle status eller risikoprocent, kun
+        indholdet af banneret.
+      </div>
       <div id="ov-active"></div>
       <form id="ov-form" onsubmit="return submitOverride(event)">
         <div class="ov-field">
@@ -169,11 +204,11 @@ function render() {
           <select id="ov-badested" required></select>
         </div>
         <div class="ov-field">
-          <label for="ov-bucket">Status, der vises offentligt</label>
+          <label for="ov-bucket">Farve/alvorlighed i banneret (ændrer IKKE den officielle status)</label>
           <select id="ov-bucket" required>
-            <option value="groen">Grøn — god badevandskvalitet</option>
-            <option value="gul">Gul — moderat risiko</option>
-            <option value="roed">Rød — høj risiko</option>
+            <option value="groen">Grøn — informativ</option>
+            <option value="gul">Gul — moderat varsel</option>
+            <option value="roed">Rød — alvorligt varsel</option>
             <option value="lukket">Lukket for badning</option>
           </select>
         </div>
@@ -191,7 +226,7 @@ function render() {
             <option value="days" selected>dage</option>
           </select>
         </div>
-        <button type="submit">Sæt overstyring — synlig med det samme</button>
+        <button type="submit">Udsend kommunalt varsel — synligt med det samme</button>
         <div id="ov-result"></div>
       </form>
     </div>
@@ -205,6 +240,7 @@ function render() {
   `;
   loadHistory(currentMonthStr());
   loadOverrideBadesteder().then(loadActiveOverrides);
+  loadAlertStats();
 }
 
 /**
@@ -256,6 +292,50 @@ async function loadHistory(month) {
   }
 }
 
+// NYT (Kommunepakke, modul 6) — badested-statistik: viser #stat-month KUN
+// når "Måned" er valgt (native <input type="month"> tillader i sig selv
+// ENHVER måned, også uden data — se GET /admin/api/badested-alert-stats'
+// computeAlertStatsRange(), samme frie mønster som #f-month ovenfor).
+function onStatPeriodChange() {
+  const period = document.getElementById('stat-period').value;
+  document.getElementById('stat-month').style.display = period === 'month' ? '' : 'none';
+  loadAlertStats();
+}
+
+async function loadAlertStats() {
+  const statEl = document.getElementById('stat-content');
+  if (!statEl) return;
+  statEl.textContent = 'Indlæser…';
+  const period = document.getElementById('stat-period').value;
+  const month = document.getElementById('stat-month').value;
+  const qs = new URLSearchParams({ period });
+  if (period === 'month' && month) qs.set('month', month);
+  try {
+    const resp = await fetch(`/admin/api/badested-alert-stats?${qs.toString()}`, { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      statEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente statistik.')}</div>`;
+      return;
+    }
+    if (data.warning) {
+      statEl.innerHTML = `<div class="hist-warning">${escHtml(data.warning)}</div>`;
+      return;
+    }
+    if (!data.badesteder || data.badesteder.length === 0) {
+      statEl.innerHTML = '<div class="stat-empty">Ingen badesteder fundet.</div>';
+      return;
+    }
+    statEl.innerHTML = data.badesteder.map(b => `
+      <div class="stat-row">
+        <span class="stat-name">${escHtml(b.navn)}</span>
+        <span class="stat-nums">${b.alertCount} varsel${b.alertCount === 1 ? '' : 'er'} · ${b.subscriberCount} abonnent${b.subscriberCount === 1 ? '' : 'er'}</span>
+      </div>
+    `).join('');
+  } catch (e) {
+    statEl.innerHTML = '<div class="err">Kunne ikke hente statistik — tjek din forbindelse.</div>';
+  }
+}
+
 function fmtDateTime(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString('da-DK', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
@@ -300,7 +380,7 @@ async function submitOverride(e) {
   const durationHours = durationUnit === 'days' ? durationValue * 24 : durationValue;
   const bucketLabel = bucketSel.selectedOptions[0].textContent;
   const navn = (ovBadesteder.find(b => String(b.id) === badestedId) || {}).navn || 'dette badested';
-  if (!confirm(`Sæt "${bucketLabel}" for ${navn}?\n\nDette bliver ØJEBLIKKELIGT synligt for offentligheden (banner + push-varsel), og gælder i ${durationValue} ${durationUnit === 'days' ? 'dage' : 'timer'}.`)) {
+  if (!confirm(`Udsend kommunalt varsel ("${bucketLabel}") for ${navn}?\n\nBanneret på badestedets side + et push til abonnenter bliver ØJEBLIKKELIGT synligt, og gælder i ${durationValue} ${durationUnit === 'days' ? 'dage' : 'timer'}.\n\nDette ændrer IKKE badestedets officielle status eller risikoprocent — kun banneret.`)) {
     return false;
   }
 
@@ -313,14 +393,15 @@ async function submitOverride(e) {
     });
     const data = await resp.json();
     if (!resp.ok) {
-      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke oprette overstyring.')}</div>`;
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke udsende kommunalt varsel.')}</div>`;
       return false;
     }
-    resultEl.innerHTML = `<div class="ov-ok">✓ Sat og synlig med det samme — gælder til ${fmtDateTime(data.expiresAt)}.${data.pushSent ? ` ${data.pushSent} abonnent(er) varslet.` : ''}</div>`;
+    resultEl.innerHTML = `<div class="ov-ok">✓ Banner sat og synligt med det samme — gælder til ${fmtDateTime(data.expiresAt)}.${data.pushSent ? ` ${data.pushSent} abonnent(er) varslet.` : ''} (Officiel status/risikoprocent er uændret.)</div>`;
     document.getElementById('ov-message').value = '';
     loadActiveOverrides();
+    loadAlertStats();
   } catch (e) {
-    resultEl.innerHTML = '<div class="err">Kunne ikke oprette overstyring — tjek din forbindelse.</div>';
+    resultEl.innerHTML = '<div class="err">Kunne ikke udsende kommunalt varsel — tjek din forbindelse.</div>';
   }
   return false;
 }
@@ -351,7 +432,7 @@ async function loadActiveOverrides() {
 }
 
 async function clearOverride(badestedId) {
-  if (!confirm('Ryd overstyringen nu, før den naturligt udløber? Badestedet vender øjeblikkeligt tilbage til den almindelige, modelberegnede status.')) return;
+  if (!confirm('Ryd det kommunale varsel nu, før det naturligt udløber? Banneret fjernes øjeblikkeligt fra badestedets side.')) return;
   try {
     const resp = await fetch(`/admin/api/override/${encodeURIComponent(badestedId)}/clear`, { method: 'POST' });
     if (resp.ok) loadActiveOverrides();

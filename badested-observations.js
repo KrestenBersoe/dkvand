@@ -23,13 +23,15 @@
 // Enhver fremtidig ændring, der kobler de to sammen, er en fejl, ikke en
 // forbedring — spørg produktejeren igen, hvis det virker fristende.
 //
-// Kommunepakke, modul 6 (badested-overrides.js) SKRIVER derimod bevidst til
-// den officielle farve — det er IKKE en undtagelse fra grænsen ovenfor,
-// men en helt ANDEN, adskilt mekanisme: autentificeret kommune-medarbejder
-// (ikke en anonym borger), tenant-scoped til egne badesteder, tydeligt
-// offentligt mærket med kommunens navn/logo (ikke en stille tal-ændring),
-// og tidsbegrænset med automatisk udløb. Grænsen ovenfor gælder fortsat
-// UDELUKKENDE uautentificerede borgerobservationer.
+// Kommunepakke, modul 6 (badested-overrides.js, "Kommunalt Varsel") holder
+// sig endnu tydeligere væk fra denne grænse: den rører ALDRIG bact/viral/
+// farve/badge overhovedet — den tilføjer udelukkende et separat, rent
+// additivt banner-felt (overrideInfo), vist for abonnenter på badestedets
+// side og i push, men uden nogensinde at ændre den officielle,
+// modelberegnede status. Grænsen ovenfor gælder fortsat UDELUKKENDE
+// uautentificerede borgerobservationer — modul 6 er ikke en undtagelse fra
+// den, det er en helt separat mekanisme, der aldrig kommer i nærheden af
+// de samme felter.
 //
 // ── Lagring ───────────────────────────────────────────────────────────────
 // RETTET (2026-08-02): migreret fra SQLite (better-sqlite3, lokal /data-

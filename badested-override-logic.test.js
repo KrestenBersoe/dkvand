@@ -8,7 +8,7 @@
 'use strict';
 const assert = require('assert');
 const {
-  OVERRIDE_BUCKETS, isValidBucket, BUCKET_SYNTHETIC_RISK, MAX_OVERRIDE_DURATION_HOURS,
+  OVERRIDE_BUCKETS, isValidBucket, MAX_OVERRIDE_DURATION_HOURS,
   isOverrideRowActive, patchBadevandEntry,
 } = require('./badested-override-logic');
 
@@ -26,19 +26,6 @@ test('isValidBucket: ukendt/tomt/undefined afvises', () => {
   assert.strictEqual(isValidBucket('blaa'), false);
   assert.strictEqual(isValidBucket(''), false);
   assert.strictEqual(isValidBucket(undefined), false);
-});
-
-// ── BUCKET_SYNTHETIC_RISK — bekræfter værdierne rent faktisk rammer den
-// tilsigtede tærskel-bucket via SAMME 0,6/0,2-grænser som resten af appen ──
-test('BUCKET_SYNTHETIC_RISK: groen er under 0,2-grænsen', () => {
-  assert.ok(BUCKET_SYNTHETIC_RISK.groen < 0.2);
-});
-test('BUCKET_SYNTHETIC_RISK: gul er mellem 0,2 og 0,6', () => {
-  assert.ok(BUCKET_SYNTHETIC_RISK.gul >= 0.2 && BUCKET_SYNTHETIC_RISK.gul < 0.6);
-});
-test('BUCKET_SYNTHETIC_RISK: roed og lukket er begge over 0,6 (samme høj-alarm-farve)', () => {
-  assert.ok(BUCKET_SYNTHETIC_RISK.roed >= 0.6);
-  assert.ok(BUCKET_SYNTHETIC_RISK.lukket >= 0.6);
 });
 
 // ── isOverrideRowActive ────────────────────────────────────────────────────
@@ -72,26 +59,27 @@ test('patchBadevandEntry: udløbet overrideRow → entry returneres uændret', (
   const result = patchBadevandEntry(baseEntry, expired);
   assert.strictEqual(result, baseEntry);
 });
-test('patchBadevandEntry: aktiv "roed"-overstyring patcher bact/viral/source og tilføjer overrideInfo', () => {
+test('patchBadevandEntry: aktiv "roed"-overstyring tilføjer KUN overrideInfo — bact/viral/source UÆNDREDE', () => {
   const active = { bucket: 'roed', message: 'Forhøjet bakterieindhold', tenant_name: 'Testby Kommune', logo_url: 'https://example.com/logo.png',
     created_at: new Date('2026-07-01'), expires_at: new Date(Date.now() + 3600000), revoked_at: null };
   const result = patchBadevandEntry(baseEntry, active);
-  assert.strictEqual(result.bact, BUCKET_SYNTHETIC_RISK.roed);
-  assert.strictEqual(result.viral, BUCKET_SYNTHETIC_RISK.roed);
-  assert.strictEqual(result.source, 'kommune-override');
+  assert.strictEqual(result.bact, baseEntry.bact);
+  assert.strictEqual(result.viral, baseEntry.viral);
+  assert.strictEqual(result.source, baseEntry.source);
   assert.deepStrictEqual(result.overrideInfo, {
     bucket: 'roed', message: 'Forhøjet bakterieindhold', tenantName: 'Testby Kommune',
     logoUrl: 'https://example.com/logo.png', setAt: active.created_at, expiresAt: active.expires_at,
   });
 });
-test('patchBadevandEntry: "lukket"-overstyring bruger SAMME høje bact/viral som "roed" (høj-alarm-farve)', () => {
+test('patchBadevandEntry: "lukket"-overstyring rører HELLER IKKE bact/viral — kun banneret viser "Lukket"', () => {
   const active = { bucket: 'lukket', message: 'Badestedet er lukket', tenant_name: 'Testby Kommune', logo_url: null,
     created_at: new Date(), expires_at: new Date(Date.now() + 3600000), revoked_at: null };
   const result = patchBadevandEntry(baseEntry, active);
-  assert.strictEqual(result.bact, BUCKET_SYNTHETIC_RISK.lukket);
+  assert.strictEqual(result.bact, baseEntry.bact);
+  assert.strictEqual(result.viral, baseEntry.viral);
   assert.strictEqual(result.overrideInfo.bucket, 'lukket');
 });
-test('patchBadevandEntry: alle ANDRE felter (algae, forecast, outlets) forbliver UÆNDREDE', () => {
+test('patchBadevandEntry: alle ANDRE felter (algae, forecast, outlets, id) forbliver UÆNDREDE', () => {
   const active = { bucket: 'gul', message: 'Test', tenant_name: 'Testby', logo_url: null,
     created_at: new Date(), expires_at: new Date(Date.now() + 3600000), revoked_at: null };
   const result = patchBadevandEntry(baseEntry, active);
