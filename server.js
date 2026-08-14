@@ -876,6 +876,89 @@ app.get('/admin/api/badested-alert-stats', tenantAdmin.requireTenantSession, asy
   }
 });
 
+// ── Kommunepakke, modul 7 — kommune-scopet udgave af /stats ────────────────
+// Bruger-krav: "alle statistik elementer fra /stats skal kopieres til
+// Kommunal Dashboard og alle nøgletal skal beregnes for den pågældende
+// kommune". Kun DE elementer, der faktisk KAN kommune-scopes, er med her —
+// /stats' installations-/platform-tal har INGEN lokations-tilknytning i det
+// hele taget (app_installs har ingen badested/kommune-kolonne), så de kan
+// ikke ærligt genberegnes pr. kommune uden ny instrumentering, og er derfor
+// bevidst UDELADT her (i stedet for en misvisende 0/nationalt tal). Samme
+// tre-trins mønster (getTenant → resolveTenantBadesteder → scopet
+// forespørgsel) som GET /admin/api/badested-alert-stats og GET /admin/api/
+// badested-history ovenfor.
+app.get('/admin/api/stats', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const badesteder = tenantBadesteder.resolveTenantBadesteder(tenant.name, kommuneKeyToBadesteder);
+    if (badesteder.length === 0) {
+      return res.json({ badesteder: [], warning: `Ingen badesteder fundet for "${tenant.name}" — kontakt support hvis dette er forkert.` });
+    }
+    const ids = badesteder.map(b => b.id);
+
+    const [vurderinger, subscriberCounts, alertRows, vurderingTrendRows] = await Promise.all([
+      badestedObs.getVurderingStatsForBadestedIds(ids),
+      getSubscriberCountsForBadestedIds(ids),
+      appMetrics.getAlertRowsForBadestedIds(ids),
+      badestedObs.getVurderingTrendForBadestedIds(ids, 90),
+    ]);
+
+    const subscribers = [...subscriberCounts.values()].reduce((a, b) => a + b, 0);
+
+    // RETTET: /stats' "24t"-kolonne er en RULLENDE 24-timers-vindue (fra
+    // push_send_log's tidsstemplede rækker) — badested_alert_daily har KUN
+    // dags-granularitet (ingen klokkeslæt), så det bedste ærlige modstykke
+    // her er "i dag" (UTC-kalenderdato), ikke et sandt 24t-vindue. Klientens
+    // kolonneoverskrift siger derfor "I dag", ikke "24t", bevidst forskelligt
+    // fra /stats' egen tabel.
+    const todayStr        = new Date().toISOString().slice(0, 10);
+    const sevenDaysAgoStr = new Date(Date.now() - 6  * 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const ninetyDaysAgoStr= new Date(Date.now() - 89 * 24 * 3600 * 1000).toISOString().slice(0, 10);
+
+    // Kun de tre typer, der reelt registreres pr. badested (se recordBadested
+    // AlertSent()'s kaldesteder) — heartbeat/ugentlig-digest findes kun som
+    // globale tal (push_send_log), ikke pr. badested, og udelades derfor her
+    // i stedet for at vise et falsk 0.
+    const TRACKED_TYPES = [PUSH_SEND_TYPES.RISIKOVARSEL, PUSH_SEND_TYPES.NY_VURDERING, PUSH_SEND_TYPES.KOMMUNE_OVERRIDE];
+    const byType = {};
+    for (const t of TRACKED_TYPES) byType[t] = { today: 0, last7d: 0, total: 0 };
+    const risikovarselByDate = new Map();
+    for (const row of alertRows) {
+      const bucket = byType[row.type];
+      if (!bucket) continue;
+      bucket.total += row.count;
+      if (row.date >= sevenDaysAgoStr) bucket.last7d += row.count;
+      if (row.date === todayStr) bucket.today += row.count;
+      if (row.type === PUSH_SEND_TYPES.RISIKOVARSEL && row.date >= ninetyDaysAgoStr) {
+        risikovarselByDate.set(row.date, (risikovarselByDate.get(row.date) || 0) + row.count);
+      }
+    }
+    const risikovarselTrend = [...risikovarselByDate.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([date, n]) => ({ date, value: n }));
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      badestedCount: badesteder.length,
+      vurderinger,
+      subscribers,
+      pushByType: byType,
+      trends: {
+        vurderinger: vurderingTrendRows.map(r => ({ date: r.date, value: r.n })),
+        risikovarsel: risikovarselTrend,
+      },
+      generatedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.error('admin/api/stats: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente statistik lige nu.' });
+  }
+});
+
 // Service worker: never cache (must update immediately)
 app.get('/overloeb-sw.js', (req, res) => {
   res.set('Cache-Control', 'no-cache');

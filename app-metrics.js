@@ -514,6 +514,22 @@ async function getAlertCountsForBadestedIds(badestedIds, fromDate, toDate) {
   return result;
 }
 
+// NYT (Kommunepakke, modul 7 — kommune-scopet statistik, se GET /admin/api/
+// stats i server.js): rå (dato, type, count)-rækker for en kommunes
+// badested_id'er, UDEN dato-afgrænsning — kaldestedet bruger SAMME rækker
+// til to ting (dags/7d/total-opdeling PR. type, og risikovarsel-udviklings-
+// grafen), så én hentning her er nok i stedet for flere separate forespørgsler
+// (datamængden er lille: én række pr. badested/dag/type, ikke pr. afsendt push).
+async function getAlertRowsForBadestedIds(badestedIds) {
+  if (!Array.isArray(badestedIds) || badestedIds.length === 0) return [];
+  const { rows } = await query(`
+    SELECT date, type, count
+    FROM badested_alert_daily
+    WHERE badested_id = ANY($1)
+  `, [badestedIds.map(String)]);
+  return rows;
+}
+
 // ── Del 5: dagligt statistik-øjebliksbillede (til /stats' udviklingsgrafer) ─
 
 /**
@@ -575,6 +591,7 @@ module.exports = {
   getPushSendStats,
   recordBadestedAlertSent,
   getAlertCountsForBadestedIds,
+  getAlertRowsForBadestedIds,
   recordDailyStatsSnapshot,
   getStatsHistory,
 };

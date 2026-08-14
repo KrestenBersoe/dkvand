@@ -466,11 +466,51 @@ async function getVurderingStats() {
   return rows[0];
 }
 
+// NYT (Kommunepakke, modul 7 — kommune-scopet statistik, se GET /admin/api/
+// stats i server.js): SAMME tal som getVurderingStats() ovenfor, men
+// begrænset til ÉN kommunes badested_id'er — genbruger IKKE forespørgslen
+// direkte, da WHERE badested_id = ANY($1) skal med i selve COUNT-udtrykkene.
+async function getVurderingStatsForBadestedIds(badestedIds) {
+  if (!Array.isArray(badestedIds) || badestedIds.length === 0) return { total: 0, last7d: 0, last30d: 0 };
+  const now = Date.now();
+  const since7d  = now - 7  * 24 * 3600 * 1000;
+  const since30d = now - 30 * 24 * 3600 * 1000;
+  const { rows } = await query(`
+    SELECT
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE created_at > $2)::int AS last7d,
+      COUNT(*) FILTER (WHERE created_at > $3)::int AS last30d
+    FROM badested_vurderinger
+    WHERE badested_id = ANY($1)
+  `, [badestedIds.map(String), since7d, since30d]);
+  return rows[0];
+}
+
+// NYT (samme modul) — dags-optalt antal vurderinger for kommunens badesteder,
+// til udviklingsgrafen i Kommune-dashboardet. created_at er BIGINT ms (ikke
+// en DATE-kolonne), så dato udledes her via to_timestamp(...)::date — samme
+// UTC-konvention som resten af appens dags-nøgler (se fx dateStringFromMs()
+// i app-metrics.js).
+async function getVurderingTrendForBadestedIds(badestedIds, days = 90) {
+  if (!Array.isArray(badestedIds) || badestedIds.length === 0) return [];
+  const sinceMs = Date.now() - days * 24 * 3600 * 1000;
+  const { rows } = await query(`
+    SELECT to_char(to_timestamp(created_at / 1000.0), 'YYYY-MM-DD') AS date, COUNT(*)::int AS n
+    FROM badested_vurderinger
+    WHERE badested_id = ANY($1) AND created_at > $2
+    GROUP BY date
+    ORDER BY date
+  `, [badestedIds.map(String), sinceMs]);
+  return rows;
+}
+
 module.exports = {
   ready,
   recordVurdering,
   getObservationSummary,
   getVurderingStats,
+  getVurderingStatsForBadestedIds,
+  getVurderingTrendForBadestedIds,
   hashIp,
   PHOTOS_DIR,
   OBSERVATION_TYPES,

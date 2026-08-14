@@ -118,6 +118,47 @@
   .ov-active-msg { color: var(--ink-soft); margin: .3rem 0; }
   .ov-active-meta { color: var(--ink-soft); font-size: .74rem; margin-bottom: .5rem; }
   .ov-none { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1rem; }
+
+  /* NYT (Kommunepakke, modul 7) — kommune-scopet statistik, kopieret fra
+     /stats' tilsvarende elementer (se stats.html) for samme visuelle sprog.
+     Tal-kortene her er mindre/tættere end stats.html's egne (samme
+     kompakte stil som resten af DETTE dashboard, .row/.stat-row ovenfor),
+     men graf- og tabel-stilene er portet 1:1. */
+  .kstat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .7rem; margin-bottom: 1rem; }
+  .kstat-box { background: rgba(255,255,255,.02); border: 1px solid var(--border); border-radius: 8px; padding: .7rem .8rem; }
+  .kstat-box .kstat-label { font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-soft); margin-bottom: .35rem; }
+  .kstat-box .kstat-value { font-size: 1.4rem; font-weight: 700; line-height: 1.1; }
+  .kstat-box .kstat-note { font-size: .72rem; color: var(--ink-soft); margin-top: .25rem; }
+
+  table.kstat-table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .3rem; }
+  table.kstat-table td { padding: .3rem 0; }
+  table.kstat-table td.n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; padding-left: .9rem; }
+  table.kstat-table tr + tr td { border-top: 1px solid var(--border); }
+
+  .trend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin: 1rem 0; }
+  .trend-card { background: rgba(255,255,255,.02); border: 1px solid var(--border); border-radius: 8px; padding: .7rem .8rem; }
+  .trend-card h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-soft); margin: 0 0 .4rem; font-weight: 600; display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; }
+  .trend-chart-wrap { position: relative; }
+  .trend-chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .trend-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .trend-grad-stop-1 { stop-color: var(--accent); stop-opacity: .16; }
+  .trend-grad-stop-2 { stop-color: var(--accent); stop-opacity: 0; }
+  .trend-grid-line { stroke: rgba(255,255,255,.08); stroke-width: 1; shape-rendering: crispEdges; }
+  .trend-axis-label { fill: var(--ink-soft); font-size: 9px; font-family: inherit; }
+  .trend-end-dot { fill: var(--accent); stroke: var(--paper); stroke-width: 2; }
+  .trend-end-label { fill: var(--ink); font-size: 10px; font-weight: 700; font-family: inherit; }
+  .trend-crosshair { stroke: var(--ink-soft); stroke-width: 1; stroke-dasharray: 2 2; pointer-events: none; opacity: 0; }
+  .trend-hover-dot { fill: var(--accent); stroke: var(--paper); stroke-width: 2; pointer-events: none; opacity: 0; }
+  .trend-hit-layer { fill: transparent; cursor: crosshair; }
+  .trend-tooltip {
+    position: absolute; top: 0; left: 0; pointer-events: none; opacity: 0;
+    background: #0d1720; border: 1px solid var(--border); border-radius: 6px;
+    padding: .35rem .55rem; font-size: .72rem; white-space: nowrap; transform: translate(-50%, -115%);
+    transition: opacity .1s;
+  }
+  .trend-tooltip .tt-date { color: var(--ink-soft); }
+  .trend-tooltip .tt-value { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; margin-left: .4rem; }
+  .trend-empty { color: var(--ink-soft); font-size: .8rem; padding: 1.5rem 0; text-align: center; }
 </style>
 </head>
 <body>
@@ -250,6 +291,11 @@ function render() {
     </div>
 
     <div class="card">
+      <h2>Statistik</h2>
+      <div id="kstat-content">Indlæser…</div>
+    </div>
+
+    <div class="card">
       <h2>Rapporter</h2>
       <div class="report-buttons">
         <button type="button" disabled title="Kommer snart">📄 Myndighedsrapport</button>
@@ -263,6 +309,7 @@ function render() {
   `;
   loadHistory(currentMonthStr());
   loadOverrideBadesteder().then(loadActiveOverrides);
+  loadKommuneStats();
   loadAlertStats();
 }
 
@@ -356,6 +403,183 @@ async function loadAlertStats() {
     `).join('');
   } catch (e) {
     statEl.innerHTML = '<div class="err">Kunne ikke hente statistik — tjek din forbindelse.</div>';
+  }
+}
+
+// ── Kommunepakke, modul 7 — kommune-scopet statistik ────────────────────────
+// renderTrendChart/fmtDateShort/fmtCount er portet 1:1 fra stats.html (se
+// den for den fulde dataviz-begrundelse: 2px rund-cap-linje, ~16%
+// arealfyld-opacitet, hårfine gridlinjer, slutpunkt-mærkat, crosshair+
+// tooltip på hover) — IKKE genimplementeret, for at garantere identisk
+// visuel adfærd/ydelse mellem de to sider.
+function fmtDateShort(d) {
+  const [, m, day] = d.split('-');
+  return `${day}/${m}`;
+}
+function fmtCount(n) { return Math.round(n).toLocaleString('da-DK'); }
+
+let _trendChartSeq = 0;
+function renderTrendChart(containerId, points, opts) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return;
+  if (points.length === 0) {
+    wrap.innerHTML = '<div class="trend-empty">Ingen data endnu — første punkt gemmes i løbet af i dag</div>';
+    return;
+  }
+  if (points.length === 1) {
+    wrap.innerHTML = `<div class="trend-empty">${fmtCount(points[0].value)} (${fmtDateShort(points[0].date)}) — for lidt historik til en graf endnu</div>`;
+    return;
+  }
+
+  const W = 600, H = 150;
+  const padL = 4, padR = 46, padT = 10, padB = 20;
+  const plotL = padL, plotR = W - padR, plotT = padT, plotB = H - padB;
+  const plotW = plotR - plotL, plotH = plotB - plotT;
+
+  const values = points.map(p => p.value);
+  let vMin = Math.min(...values), vMax = Math.max(...values);
+  if (vMin === vMax) { vMin = Math.max(0, vMin - 1); vMax = vMax + 1; }
+  const yPad = (vMax - vMin) * 0.12;
+  vMin = Math.max(0, vMin - yPad);
+  vMax = vMax + yPad;
+
+  const xAt = i => plotL + (plotW * i) / (points.length - 1);
+  const yAt = v => plotB - ((v - vMin) / (vMax - vMin)) * plotH;
+
+  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yAt(p.value).toFixed(1)}`).join(' ');
+  const areaPath = `${linePath} L${xAt(points.length - 1).toFixed(1)},${plotB} L${xAt(0).toFixed(1)},${plotB} Z`;
+  const last = points[points.length - 1];
+  const gradId = `trendGrad${_trendChartSeq++}`;
+
+  wrap.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${opts.label} over tid, seneste værdi ${fmtCount(last.value)}">
+      <defs>
+        <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" class="trend-grad-stop-1"/>
+          <stop offset="100%" class="trend-grad-stop-2"/>
+        </linearGradient>
+      </defs>
+      <line class="trend-grid-line" x1="${plotL}" y1="${plotT}" x2="${plotR}" y2="${plotT}"/>
+      <line class="trend-grid-line" x1="${plotL}" y1="${(plotT + plotB) / 2}" x2="${plotR}" y2="${(plotT + plotB) / 2}"/>
+      <line class="trend-grid-line" x1="${plotL}" y1="${plotB}" x2="${plotR}" y2="${plotB}"/>
+      <path fill="url(#${gradId})" d="${areaPath}"/>
+      <path class="trend-line" d="${linePath}"/>
+      <circle class="trend-end-dot" cx="${xAt(points.length - 1).toFixed(1)}" cy="${yAt(last.value).toFixed(1)}" r="5"/>
+      <text class="trend-end-label" x="${(plotR + 8).toFixed(1)}" y="${yAt(last.value).toFixed(1)}" dominant-baseline="middle">${fmtCount(last.value)}</text>
+      <text class="trend-axis-label" x="${plotL}" y="${H - 4}">${fmtDateShort(points[0].date)}</text>
+      <text class="trend-axis-label" x="${plotR}" y="${H - 4}" text-anchor="end">${fmtDateShort(last.date)}</text>
+      <line class="trend-crosshair" x1="0" y1="${plotT}" x2="0" y2="${plotB}"/>
+      <circle class="trend-hover-dot" r="5"/>
+      <rect class="trend-hit-layer" x="${plotL}" y="0" width="${plotW}" height="${H}"/>
+    </svg>
+    <div class="trend-tooltip"><span class="tt-date"></span><span class="tt-value"></span></div>
+  `;
+
+  const svgEl      = wrap.querySelector('svg');
+  const hitLayer   = wrap.querySelector('.trend-hit-layer');
+  const crosshair  = wrap.querySelector('.trend-crosshair');
+  const hoverDot   = wrap.querySelector('.trend-hover-dot');
+  const tooltip    = wrap.querySelector('.trend-tooltip');
+  const ttDate     = tooltip.querySelector('.tt-date');
+  const ttValue    = tooltip.querySelector('.tt-value');
+
+  function showAt(clientX) {
+    const rect = svgEl.getBoundingClientRect();
+    const svgX = ((clientX - rect.left) / rect.width) * W;
+    let idx = Math.round(((svgX - plotL) / plotW) * (points.length - 1));
+    idx = Math.max(0, Math.min(points.length - 1, idx));
+    const p = points[idx];
+    const px = xAt(idx), py = yAt(p.value);
+    crosshair.setAttribute('x1', px); crosshair.setAttribute('x2', px);
+    crosshair.style.opacity = '1';
+    hoverDot.setAttribute('cx', px); hoverDot.setAttribute('cy', py);
+    hoverDot.style.opacity = '1';
+    tooltip.style.opacity = '1';
+    tooltip.style.left = `${(px / W) * 100}%`;
+    tooltip.style.top  = `${(py / H) * 100}%`;
+    ttDate.textContent  = p.date;
+    ttValue.textContent = fmtCount(p.value);
+  }
+  function hide() {
+    crosshair.style.opacity = '0';
+    hoverDot.style.opacity  = '0';
+    tooltip.style.opacity   = '0';
+  }
+  hitLayer.addEventListener('pointermove', e => showAt(e.clientX));
+  hitLayer.addEventListener('pointerdown', e => showAt(e.clientX));
+  hitLayer.addEventListener('pointerleave', hide);
+}
+
+const KSTAT_PUSH_TYPE_LABELS = {
+  'risikovarsel':     'Risikovarsler',
+  'ny-vurdering':     'Badestedsvurdering',
+  'kommune-override': 'Kommunalt varsel',
+};
+
+function kstatPushTypeRows(byType) {
+  const entries = Object.entries(byType || {});
+  if (entries.length === 0) return '<tr><td colspan="4" style="color:var(--ink-soft)">Ingen push sendt endnu</td></tr>';
+  return entries.map(([type, n]) => `
+    <tr>
+      <td>${escHtml(KSTAT_PUSH_TYPE_LABELS[type] || type)}</td>
+      <td class="n">${n.today}</td>
+      <td class="n">${n.last7d}</td>
+      <td class="n">${n.total}</td>
+    </tr>
+  `).join('');
+}
+
+async function loadKommuneStats() {
+  const el = document.getElementById('kstat-content');
+  if (!el) return;
+  el.textContent = 'Indlæser…';
+  try {
+    const resp = await fetch('/admin/api/stats', { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente statistik.')}</div>`;
+      return;
+    }
+    if (data.warning) {
+      el.innerHTML = `<div class="hist-warning">${escHtml(data.warning)}</div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div class="kstat-grid">
+        <div class="kstat-box">
+          <div class="kstat-label">Borger-vurderinger</div>
+          <div class="kstat-value">${data.vurderinger.total}</div>
+          <div class="kstat-note">${data.vurderinger.last7d} seneste 7 dage · ${data.vurderinger.last30d} seneste 30 dage</div>
+        </div>
+        <div class="kstat-box">
+          <div class="kstat-label">Webpush-abonnenter</div>
+          <div class="kstat-value">${data.subscribers}</div>
+          <div class="kstat-note">På tværs af ${data.badestedCount} badested${data.badestedCount === 1 ? '' : 'er'}</div>
+        </div>
+      </div>
+
+      <table class="kstat-table">
+        <thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
+          <td>Varseltype</td><td class="n">I dag</td><td class="n">7d</td><td class="n">Total</td>
+        </tr></thead>
+        <tbody>${kstatPushTypeRows(data.pushByType)}</tbody>
+      </table>
+
+      <div class="trend-grid">
+        <div class="trend-card">
+          <h2>Badestedsvurderinger over tid</h2>
+          <div class="trend-chart-wrap" id="kstat-trend-vurderinger"></div>
+        </div>
+        <div class="trend-card">
+          <h2>Risikovarsler over tid</h2>
+          <div class="trend-chart-wrap" id="kstat-trend-risikovarsel"></div>
+        </div>
+      </div>
+    `;
+    renderTrendChart('kstat-trend-vurderinger', data.trends.vurderinger, { label: 'Badestedsvurderinger' });
+    renderTrendChart('kstat-trend-risikovarsel', data.trends.risikovarsel, { label: 'Risikovarsler' });
+  } catch (e) {
+    el.innerHTML = '<div class="err">Kunne ikke hente statistik — tjek din forbindelse.</div>';
   }
 }
 
