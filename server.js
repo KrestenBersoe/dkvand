@@ -3056,23 +3056,30 @@ setInterval(() => {
   if (Date.now() - currentsCache.ts > CURRENTS_TTL) fetchCMEMSCurrents();
 }, 60 * 1000);
 
-// ── Strøm-visualisering (TEST) — leaflet-velocity grid-format ────────────────
+// ── Strøm-visualisering (TEST) — windy-currents.js grid-format ───────────────
 // Genbruger SAMME currentsCache.grid som /api/currents (og dermed samme CMEMS-
-// hentning/cache/TTL) — kun output-formatet er nyt. leaflet-velocity forventer
-// et GRIB2-lignende par (U/V) af regulære gitre (header + flad data-array,
-// række for række fra nord mod syd, kolonne for kolonne fra vest mod øst),
-// se buildGrid()/createBuilder() i leaflet-velocity's kildekode: den matcher
-// U/V-komponenter via header.parameterCategory+","+header.parameterNumber ===
-// "2,2" hhv. "2,3" (samme GRIB2-konvention der historisk bruges til vind,
-// men biblioteket lægger ingen fysisk betydning i tallene — duer lige så
-// godt til havstrøm). fetch_currents.py's punkter STAMMER fra et regulært
-// lat/lon-gitter (strided xarray-udsnit), men nogle celler mangler (NaN/
-// fill-value droppet der) — manglende celler udfyldes her med 0,0 i stedet
-// for at springes over, da leaflet-velocity kræver et fuldt nx×ny-gitter.
+// hentning/cache/TTL) — kun output-formatet er nyt. windy-currents.js (vendoret
+// kopi af wind-js-leaflet's windy.js, se filhovedet der) forventer et GRIB2-
+// lignende TRIPPEL (U/V/temperatur) af regulære gitre (header + flad data-
+// array, række for række fra nord mod syd, kolonne for kolonne fra vest mod
+// øst) — den matcher komponenterne via header.parameterCategory+","+
+// header.parameterNumber === "2,2" (U), "2,3" (V), "0,0" (temperatur, Kelvin).
+// fetch_currents.py's punkter STAMMER fra et regulært lat/lon-gitter (strided
+// xarray-udsnit), men nogle celler mangler (NaN/fill-value droppet der) —
+// disse udfyldes med NaN i u-komponenten (IKKE 0), som windy-currents.js'
+// patchede createWindBuilder.data() genkender som "intet gitterpunkt her" og
+// derfor slet ikke interpolerer/tegner over (se windy-currents.js' filhoved).
 function buildVelocityGridJSON(grid) {
   const lats = new Set(), lngs = new Set();
-  for (const [, v] of grid) { lats.add(v.lat); lngs.add(v.lng); }
+  let tempSum = 0, tempCount = 0;
+  for (const [, v] of grid) {
+    lats.add(v.lat); lngs.add(v.lng);
+    if (v.temp != null) { tempSum += v.temp; tempCount++; }
+  }
   if (lats.size < 2 || lngs.size < 2) return null; // for lidt til et meningsfuldt gitter
+  // Fallback for punkter uden temperatur (thetao kan mangle, se fetch_currents.py) —
+  // gittergennemsnittet er en langt bedre gæt end en vilkårlig konstant.
+  const fallbackTempC = tempCount ? tempSum / tempCount : 12;
 
   const latArr = [...lats].sort((a, b) => b - a); // nord → syd (la1 = nordligste)
   const lngArr = [...lngs].sort((a, b) => a - b); // vest → øst (lo1 = vestligste)
@@ -3082,13 +3089,21 @@ function buildVelocityGridJSON(grid) {
   const dy = (la1 - la2) / (ny - 1);
   const dx = (lo2 - lo1) / (nx - 1);
 
-  const uData = new Array(nx * ny).fill(0);
-  const vData = new Array(nx * ny).fill(0);
+  // RETTET: NaN kan ikke JSON-serialiseres (JSON.stringify(NaN) → "null",
+  // men uden en semantisk forskel fra "punkt aldrig sat") — bruger null
+  // direkte som sentinel i stedet, matcher windy-currents.js' createWindBuilder.
+  const uData = new Array(nx * ny).fill(null);
+  const vData = new Array(nx * ny).fill(null);
+  const tData = new Array(nx * ny).fill(fallbackTempC + 273.15);
   let idx = 0;
   for (const lat of latArr) {
     for (const lng of lngArr) {
       const p = grid.get(`${lat.toFixed(2)}:${lng.toFixed(2)}`);
-      if (p) { uData[idx] = p.uo; vData[idx] = p.vo; }
+      if (p) {
+        uData[idx] = p.uo;
+        vData[idx] = p.vo;
+        tData[idx] = (p.temp != null ? p.temp : fallbackTempC) + 273.15;
+      }
       idx++;
     }
   }
@@ -3101,6 +3116,7 @@ function buildVelocityGridJSON(grid) {
   return [
     { header: { ...header, parameterCategory: 2, parameterNumber: 2, parameterUnit: 'm.s-1', parameterNumberName: 'Eastward current' }, data: uData },
     { header: { ...header, parameterCategory: 2, parameterNumber: 3, parameterUnit: 'm.s-1', parameterNumberName: 'Northward current' }, data: vData },
+    { header: { ...header, parameterCategory: 0, parameterNumber: 0, parameterUnit: 'K', parameterNumberName: 'Temperature' }, data: tData },
   ];
 }
 

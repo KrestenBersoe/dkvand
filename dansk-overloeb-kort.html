@@ -79,12 +79,14 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <!-- Leaflet.heat -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
-<!-- Strøm-visualisering (TEST — se toggleCurrentsVelocity()): leaflet-velocity,
-     animeret partikel-lag som erstatning for den statiske pil-visualisering
-     buildCurrentsArrowLayer() ovenfor. Vurderes side om side, ikke som
-     erstatning endnu. -->
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-velocity@2.1.4/dist/leaflet-velocity.min.css"/>
-<script src="https://cdn.jsdelivr.net/npm/leaflet-velocity@2.1.4/dist/leaflet-velocity.min.js"></script>
+<!-- Strøm-visualisering (TEST — se buildCurrentsWindyLayer()/toggleCurrentsVelocity()):
+     vendoret windy.js-motor (fra wind-js-leaflet, se windy-currents.js' filhoved) —
+     animeret partikel-lag som alternativ til den statiske pil-visualisering
+     buildCurrentsArrowLayer() ovenfor. Selv-hostet, ikke CDN (samme princip
+     som TILE_SERVER_URL nedenfor), da vi patcher motoren (danske temperatur-
+     grænser, land-maskering, forstærket synlighed). -->
+<script src="leaflet-canvas-layer.js"></script>
+<script src="windy-currents.js"></script>
 
 <style>
   /* ── Design tokens ───────────────────────────────────────────────────────── */
@@ -3224,12 +3226,13 @@ let sharedInteractiveRenderer = null;   // sat af renderMap(), genbrugt af badev
 map.createPane('polygonPane');
 map.getPane('polygonPane').style.zIndex = 625;
 
-// waterBgPane (z350) — mørk baggrundsfarve for hav/søer, KUN brugt af
-// strøm-velocity-testlaget (se buildWaterBgLayer()/toggleCurrentsVelocity()).
-// Ligger over tilePane (200) og under Leaflets standard overlayPane (400,
-// hvor leaflet-velocitys canvas selv tegnes) — så animationen tegnes OVEN PÅ
+// waterBgPane (z350) — mørk baggrundsfarve for hav/søer, PERMANENT (se
+// initPermanentWaterBg(), kaldt ubetinget ved sideindlæsning — ikke kun
+// mens strøm-velocity-testlaget er aktivt, bruger-krav 2026-08-14). Ligger
+// over tilePane (200) og under Leaflets standard overlayPane (400, hvor
+// windy-currents.js' canvas selv tegnes) — så animationen tegnes OVEN PÅ
 // denne baggrund, ikke under den. Basiskortets lyseblå havfarve gav for lav
-// kontrast til at partiklerne kunne ses (bruger-rapport 2026-08-14).
+// kontrast til at partiklerne kunne ses (bruger-rapport).
 map.createPane('waterBgPane');
 map.getPane('waterBgPane').style.zIndex = 350;
 
@@ -5674,22 +5677,46 @@ function buildCurrentsArrowLayer() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// STRØM-VISUALISERING (TEST) — leaflet-velocity, animeret partikel-lag som
-// alternativ til buildCurrentsArrowLayer() ovenfor. Testes side om side under
-// egen knap ("💫 Strøm (test)") — erstatter IKKE det eksisterende pil-lag,
-// og rører ikke currentsGrid/getCurrentAt(), som risikomodellen afhænger af
-// (se filhovedet ved STRØMDATA-sektionen ovenfor).
+// STRØM-VISUALISERING (TEST) — vendoret windy.js-motor (windy-currents.js,
+// kopi af wind-js-leaflet's windy.js, se filhovedet der) i stedet for
+// leaflet-velocity: animeret partikel-lag med retning+fart (bevægelse) OG
+// temperatur (farve) som alternativ til buildCurrentsArrowLayer() ovenfor.
+// Testes under egen knap ("💫 Strøm (test)") — erstatter IKKE det
+// eksisterende pil-lag, og rører ikke currentsGrid/getCurrentAt(), som
+// risikomodellen afhænger af (se filhovedet ved STRØMDATA-sektionen
+// ovenfor).
 //
-// BRUGERKRAV: kun hav og søer — IKKE vandløb (i modsætning til
-// isInDanishWater(), som også dækker vandløbenes bufferzone). CMEMS'
-// Østersø-model leverer i praksis kun gyldige punkter over hav (søer er ikke
-// del af den model), så maskeringen til søer er et fremtidssikret no-op
-// indtil en sø-strøm-datakilde findes — men koden tjekker begge, så det
-// virker automatisk den dag data findes.
+// BRUGERKRAV (itereret over flere runder feedback):
+//   1. Havoverfladens farve er PERMANENT mørkeblå — se
+//      initPermanentWaterBg() nedenfor, kaldes ubetinget ved sideindlæsning,
+//      ikke kun mens dette testlag er aktivt.
+//   2. Visualiseringen forstørret markant — se RETTET-kommentarerne ved
+//      konstanterne øverst i windy-currents.js.
+//   3. Farvekodet efter TEMPERATUR (lyseblå=koldt → mørkerød=varmt), ikke
+//      fart — windy-currents.js har præcis denne mekanik indbygget
+//      (temperatur som 3. gitterbånd, farve afledt af den; bevægelse afledt
+//      af u/v alene), arvet fra selve wind-js-leaflet.
+//   4. INGEN strøm over land — to lag maskering: (a) gitterpunkter uden for
+//      hav/sø sættes til null (applyWaterMaskToVelocityData()), som
+//      windy-currents.js' createWindBuilder helt SPRINGER OVER ved
+//      interpolation; OG (b) selve canvas-elementet klippes præcist til
+//      hav-/sø-polygonernes omrids via en SVG clip-path, genberegnet ved
+//      hver gentegning (updateWaterClipPath()) — (a) reducerer "lækage"
+//      markant, men gitterets ~10 km opløsning kan stadig vise nogle pixel
+//      nær kysten uden (b), som er den geometrisk PRÆCISE garanti.
+//
+//   kun hav og søer — IKKE vandløb (i modsætning til isInDanishWater(), som
+//   også dækker vandløbenes bufferzone). CMEMS' Østersø-model leverer i
+//   praksis kun gyldige punkter over hav (søer er ikke del af den model), så
+//   maskeringen til søer er et fremtidssikret no-op indtil en sø-strøm-
+//   datakilde findes — men koden tjekker begge, så det virker automatisk
+//   den dag data findes.
 // ═══════════════════════════════════════════════════════════════════════════
 let showCurrentsVelocity      = false;
-let currentsVelocityLayer     = null;
 let currentsVelocityLoading   = false;
+let currentsWindy             = null;   // Windy-instans (windy-currents.js)
+let currentsCanvasLayer       = null;   // L.CanvasLayer-instans (leaflet-canvas-layer.js)
+let currentsVelocityRawData   = null;   // sidst hentede 3-bånds JSON — genbruges ved hver gentegning
 
 // Egen cache, adskilt fra _waterClassCache (som ALLIGEVEL dækker vandløb) —
 // deler dog samme f._bbox-felt på selve GeoJSON-featurene, sat af
@@ -5723,10 +5750,12 @@ function isSeaOrLakeWater(lat, lng) {
   return result;
 }
 
-// Nulstiller u/v-komponenterne for ethvert gitterpunkt, der IKKE er hav/sø —
-// leaflet-velocitys partikelsystem interpolerer bilineært mellem nabopunkter,
-// så uden denne maskering ville strøm nær kysten "smitte" synligt ind over
-// land. Kører kun ÉN gang pr. datahentning (ikke pr. animationsframe).
+// Sætter u/v (og dermed HELE gitterpunktet, se windy-currents.js'
+// createWindBuilder) til null for ethvert punkt uden for hav/sø — null,
+// ikke 0, fordi windy-currents.js' motor helt SPRINGER OVER interpolation
+// nær et null-punkt i stedet for at tegne en teknisk gyldig, men usynlig,
+// nul-hastigheds-partikel, der stadig kunne "smitte" farve/temperatur ind.
+// Kører kun ÉN gang pr. datahentning (ikke pr. animationsframe).
 function applyWaterMaskToVelocityData(velocityJSON) {
   const [uBand, vBand] = velocityJSON;
   const { nx, ny, la1, lo1, dy, dx } = uBand.header;
@@ -5736,21 +5765,20 @@ function applyWaterMaskToVelocityData(velocityJSON) {
       const lng = lo1 + c * dx;
       if (!isSeaOrLakeWater(lat, lng)) {
         const idx = r * nx + c;
-        uBand.data[idx] = 0;
-        vBand.data[idx] = 0;
+        uBand.data[idx] = null;
+        vBand.data[idx] = null;
       }
     }
   }
   return velocityJSON;
 }
 
-// Mørk baggrund for hav/søer, KUN mens strøm-velocity-testlaget er aktivt —
-// basiskortets lyseblå havflade gav for lav kontrast til at de animerede
-// partikler kunne ses (bruger-rapport). Bygges lazy og genbruges; hvis
-// vp3KystvandeRaw/vp3SoeerRaw endnu ikke er hentet (loadVP3Layers() kører
-// asynkront fra sideindlæsning, kan i teorien stadig være undervejs ved et
-// meget hurtigt første klik), caches resultatet IKKE, så næste toggle-on
-// forsøger igen i stedet for at fastfryse et tomt lag permanent.
+// ── Permanent mørk hav-/sø-baggrund (bruger-krav: ALTID, ikke kun i test) ──
+// Basiskortets lyseblå havflade gav for lav kontrast til de animerede
+// partikler (bruger-rapport). vp3KystvandeRaw/vp3SoeerRaw hentes asynkront
+// af loadVP3Layers() (kaldt ubetinget ved sideindlæsning) — poller derfor
+// billigt indtil mindst ét datasæt er klar, i stedet for at kræve at denne
+// funktion kaldes efter en bestemt anden initialisering er færdig.
 let waterBgLayer = null;
 function buildWaterBgLayer() {
   const parts = [];
@@ -5771,6 +5799,120 @@ function buildWaterBgLayer() {
   if (!parts.length) return null;
   return L.layerGroup(parts);
 }
+function initPermanentWaterBg() {
+  if (waterBgLayer) return;
+  const built = buildWaterBgLayer();
+  if (built) {
+    waterBgLayer = built;
+    map.addLayer(waterBgLayer);
+  } else {
+    setTimeout(initPermanentWaterBg, 500);
+  }
+}
+initPermanentWaterBg();
+
+// ── SVG clip-path: klipper canvas'et PRÆCIST til hav-/sø-polygonernes
+// aktuelle skærmposition, se filhovedets punkt 4. Genberegnes ved hver
+// windy-gentegning (samme udløsere som selve gentegningen: tilføjelse,
+// moveend, zoomend/resize), så den altid matcher canvas'ets lokale pixel-
+// koordinatsystem — canvas'et nulstilles til at flugte med viewportets
+// øverste venstre hjørne ved netop disse hændelser, se leaflet-canvas-
+// layer.js' _onLayerDidMove().
+let waterClipPathEl = null;
+function ensureWaterClipPath() {
+  if (waterClipPathEl) return waterClipPathEl;
+  const svgNS = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(svgNS, 'svg');
+  svg.setAttribute('width', '0');
+  svg.setAttribute('height', '0');
+  svg.style.position = 'absolute';
+  svg.style.pointerEvents = 'none';
+  const defs = document.createElementNS(svgNS, 'defs');
+  const clipPath = document.createElementNS(svgNS, 'clipPath');
+  clipPath.setAttribute('id', 'currents-water-clip');
+  clipPath.setAttribute('clipPathUnits', 'userSpaceOnUse');
+  const path = document.createElementNS(svgNS, 'path');
+  path.setAttribute('fill-rule', 'evenodd');
+  clipPath.appendChild(path);
+  defs.appendChild(clipPath);
+  svg.appendChild(defs);
+  document.body.appendChild(svg);
+  waterClipPathEl = path;
+  return path;
+}
+
+// Kun features hvis bbox rammer det aktuelle synsfelt tegnes ind i klip-
+// stien — uden dette filter ville hver gentegning konvertere ALLE 985 søers
+// (og 109 kystvandes) polygonhjørner til skærmpunkter, uanset hvor langt de
+// reelt ligger fra det viste udsnit (samme ydelses-lære som
+// isInDanishWater()'s bbox-forkastelse, se filhovedet der).
+function updateWaterClipPath() {
+  const path = ensureWaterClipPath();
+  const bounds = map.getBounds().pad(0.02);
+  const parts = [];
+  const addFeatures = (raw) => {
+    if (!raw?.features) return;
+    for (const f of raw.features) {
+      const geom = f.geometry;
+      if (!geom) continue;
+      if (!f._bbox) f._bbox = computeGeometryBbox(geom);
+      const b = f._bbox;
+      if (b.maxLat < bounds.getSouth() || b.minLat > bounds.getNorth() ||
+          b.maxLng < bounds.getWest()  || b.minLng > bounds.getEast()) continue;
+      const polys = geom.type === 'Polygon' ? [geom.coordinates]
+                  : geom.type === 'MultiPolygon' ? geom.coordinates
+                  : [];
+      for (const poly of polys) {
+        for (const ring of poly) {
+          let d = '';
+          for (let i = 0; i < ring.length; i++) {
+            const pt = map.latLngToContainerPoint([ring[i][1], ring[i][0]]);
+            d += (i === 0 ? 'M' : 'L') + pt.x.toFixed(1) + ',' + pt.y.toFixed(1) + ' ';
+          }
+          parts.push(d + 'Z');
+        }
+      }
+    }
+  };
+  addFeatures(vp3KystvandeRaw);
+  addFeatures(vp3SoeerRaw);
+  path.setAttribute('d', parts.join(' '));
+}
+
+// windy-currents.js-wrapper — samme grundstruktur som wind-js-leaflet's egen
+// WindJSLeaflet._initWindy()/onDrawLayer(), men uden dens jQuery-/wind-js-
+// server-afhængigheder (vi har allerede vores egen /api/currents/velocity).
+// Kaldes af L.CanvasLayer selv (via dens interne moveend/resize/zoomanim-
+// håndtering, se leaflet-canvas-layer.js' getEvents()) — IKKE noget vi selv
+// skal binde ekstra map-events til.
+function onDrawCurrentsLayer() {
+  if (!showCurrentsVelocity || !currentsWindy || !currentsVelocityRawData) return;
+  const bounds = map.getBounds();
+  const size = map.getSize();
+  currentsWindy.start(
+    [[0, 0], [size.x, size.y]],
+    size.x, size.y,
+    [[bounds.getWest(), bounds.getSouth()], [bounds.getEast(), bounds.getNorth()]]
+  );
+  updateWaterClipPath();
+}
+
+// (Gen)tilføjer canvas-laget til kortet og starter en FRISK Windy-instans —
+// L.CanvasLayer opretter et helt NYT <canvas>-element ved hver onAdd()
+// (se leaflet-canvas-layer.js), så en tidligere Windy-instans (bundet til
+// det GAMLE canvas) ikke kan genbruges på tværs af til/fra-toggling.
+function activateCurrentsVelocity() {
+  if (!map.hasLayer(currentsCanvasLayer)) map.addLayer(currentsCanvasLayer);
+  const canvas = currentsCanvasLayer._canvas;
+  canvas.style.clipPath = 'url(#currents-water-clip)';
+  currentsWindy = new Windy({ canvas, data: currentsVelocityRawData });
+  onDrawCurrentsLayer();
+}
+
+function deactivateCurrentsVelocity() {
+  if (currentsWindy) { currentsWindy.stop(); currentsWindy = null; }
+  if (currentsCanvasLayer && map.hasLayer(currentsCanvasLayer)) map.removeLayer(currentsCanvasLayer);
+}
 
 async function loadCurrentsVelocityLayer() {
   if (currentsVelocityLoading) return;
@@ -5779,29 +5921,12 @@ async function loadCurrentsVelocityLayer() {
     const res = await fetch('api/currents/velocity');
     if (!res.ok) throw new Error(`Server svarede ${res.status}`);
     const raw = await res.json();
-    const masked = applyWaterMaskToVelocityData(raw);
+    currentsVelocityRawData = applyWaterMaskToVelocityData(raw);
 
-    if (currentsVelocityLayer && map.hasLayer(currentsVelocityLayer)) {
-      map.removeLayer(currentsVelocityLayer);
+    if (!currentsCanvasLayer) {
+      currentsCanvasLayer = L.canvasLayer().delegate({ onDrawLayer: onDrawCurrentsLayer });
     }
-    currentsVelocityLayer = L.velocityLayer({
-      displayValues: true,
-      displayOptions: {
-        velocityType: 'Strøm (test)',
-        position: 'bottomleft',
-        emptyString: 'Ingen strømdata',
-        speedUnit: 'm/s',
-      },
-      data: masked,
-      minVelocity: 0,
-      maxVelocity: 1,
-      velocityScale: 0.01,
-      lineWidth: 2,
-      particleAge: 90,
-      particleMultiplier: 1 / 300,
-      colorScale: ['#2166ac', '#67a9cf', '#d1e5f0', '#fddbc7', '#ef8a62', '#b2182b'],
-    });
-    if (showCurrentsVelocity) map.addLayer(currentsVelocityLayer);
+    if (showCurrentsVelocity) activateCurrentsVelocity();
   } catch (e) {
     console.warn('Strøm (velocity-test) fejlede:', e.message);
     showCurrentsVelocity = false;
@@ -5815,16 +5940,13 @@ function toggleCurrentsVelocity() {
   showCurrentsVelocity = !showCurrentsVelocity;
   setLayerBtnState('btn-currents-velocity', showCurrentsVelocity);
   if (showCurrentsVelocity) {
-    if (!waterBgLayer) waterBgLayer = buildWaterBgLayer();
-    if (waterBgLayer) map.addLayer(waterBgLayer);
-    if (currentsVelocityLayer) {
-      map.addLayer(currentsVelocityLayer);
+    if (currentsVelocityRawData && currentsCanvasLayer) {
+      activateCurrentsVelocity();
     } else {
       loadCurrentsVelocityLayer();
     }
   } else {
-    if (waterBgLayer && map.hasLayer(waterBgLayer)) map.removeLayer(waterBgLayer);
-    if (currentsVelocityLayer && map.hasLayer(currentsVelocityLayer)) map.removeLayer(currentsVelocityLayer);
+    deactivateCurrentsVelocity();
   }
 }
 

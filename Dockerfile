@@ -86,6 +86,11 @@ COPY admin-oauth-setup.html ./
 COPY admin-login.html ./
 COPY fetch_currents.py ./
 COPY dansk-overloeb-kort.html ./
+# Vendoret (ikke CDN-loadet) windy.js-motor for strøm-visualiseringen — se
+# windy-currents.js' filhoved. express.static(STATIC_DIR) i server.js
+# server dem automatisk, når de blot findes i containeren.
+COPY windy-currents.js ./
+COPY leaflet-canvas-layer.js ./
 COPY badevand-risk.js ./
 # NYT: borgerobservationer (ét-tryks status + algeobservation) — server.js
 # kræver (require('./badested-observations')) dette modul ved opstart,
