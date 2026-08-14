@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kommune-dashboard — Badevandsvarsel</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  /* Samme farvepalet/tema som stats.html — se den for begrundelsen. */
+  :root {
+    --paper: #12202a; --card: #16283355; --ink: #f0ede6; --ink-soft: #9fb0bb;
+    --accent: #4fb8d6; --border: rgba(255,255,255,.08);
+    --ok: #3fa96a; --warn: #d4a020; --bad: #d1584a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    background: linear-gradient(180deg, #0d1720, #12202a 40%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
+  .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
+  .card {
+    background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.1rem 1.3rem; margin-bottom: 1rem;
+  }
+  .card h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-soft); margin: 0 0 .6rem; font-weight: 600; }
+  .row { display: flex; justify-content: space-between; padding: .3rem 0; font-size: .9rem; }
+  .row + .row { border-top: 1px solid var(--border); }
+  .row span:first-child { color: var(--ink-soft); }
+  .badge { display: inline-block; padding: .15rem .5rem; border-radius: 999px; font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+  .badge-trial { background: rgba(212,160,32,.18); color: var(--warn); }
+  .badge-active { background: rgba(63,169,106,.18); color: var(--ok); }
+  .badge-suspended { background: rgba(209,88,74,.18); color: var(--bad); }
+  .placeholder-note {
+    background: rgba(79,184,214,.08); border: 1px dashed var(--accent); border-radius: 10px;
+    padding: .9rem 1.1rem; font-size: .82rem; color: var(--ink-soft); margin-top: 1.5rem;
+  }
+  button {
+    background: transparent; border: 1px solid var(--border); color: var(--ink-soft);
+    padding: .5rem 1rem; border-radius: 8px; font-size: .85rem; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); color: var(--ink); }
+  .err { color: var(--bad); font-size: .9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="content">Indlæser…</div>
+</div>
+
+<script>
+// NYT (Kommunepakke, modul 1): server.js's GET /admin/dashboard injicerer
+// tenant-data HER (server-side string-erstatning af %%TENANT_JSON%%, se
+// dens route-handler) — siden er allerede bag requireTenantSession, så
+// dette script kører kun for en gyldig, autoriseret session. Ingen
+// efterfølgende fetch nødvendig for selve tenant-identiteten (i modsætning
+// til stats.html's api/stats-mønster) — men et separat, senere modul der
+// tilføjer RIGTIGT dashboard-indhold (historik/rapporter/analyser) vil
+// naturligt hente det via egne /admin/api/*-ruter, samme mønster som
+// stats.html.
+window.__TENANT__ = %%TENANT_JSON%%;
+
+function statusBadge(status) {
+  const cls = status === 'active' ? 'badge-active' : status === 'suspended' ? 'badge-suspended' : 'badge-trial';
+  const label = status === 'active' ? 'Aktiv' : status === 'suspended' ? 'Suspenderet' : 'Trial';
+  return `<span class="badge ${cls}">${label}</span>`;
+}
+
+function fmtDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' });
+}
+
+function render() {
+  const t = window.__TENANT__;
+  const content = document.getElementById('content');
+  if (!t) {
+    content.innerHTML = '<div class="err">Ikke logget ind, eller sessionen er udløbet.</div>';
+    return;
+  }
+  content.innerHTML = `
+    <h1>🏛 ${t.name}</h1>
+    <div class="sub">Kommune-dashboard — logget ind via ${t.authMethod === 'trial' ? 'trial-adgang' : 'kommunens eget OAuth-login'}</div>
+
+    <div class="card">
+      <h2>Status</h2>
+      <div class="row"><span>Status</span><span>${statusBadge(t.status)}</span></div>
+      ${t.status === 'trial' ? `<div class="row"><span>Trial udløber</span><span>${fmtDate(t.trialExpiresAt)}</span></div>` : ''}
+      ${t.agreementSignedAt ? `<div class="row"><span>Aftale underskrevet</span><span>${fmtDate(t.agreementSignedAt)}</span></div>` : ''}
+    </div>
+
+    <div class="placeholder-note">
+      Dette er fundamentet for Kommunepakken (login + tenant-isolation) —
+      selve dashboard-indholdet (badevandshistorik, myndighedsrapporter,
+      hotspot-analyser, overstyringsknap) bygges i de næste moduler.
+    </div>
+
+    <button onclick="logout()">Log ud</button>
+  `;
+}
+
+async function logout() {
+  await fetch('/admin/logout', { method: 'POST' });
+  location.reload();
+}
+
+render();
+</script>
+</body>
+</html>

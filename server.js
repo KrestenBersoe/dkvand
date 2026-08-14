@@ -48,6 +48,11 @@ const appMetrics   = require('./app-metrics');
 // kollisioner), ikke antaget.
 const slugIndex    = require('./slug-index');
 const seoPages     = require('./seo-pages');
+// NYT (Kommunepakke, modul 1 — se planen cached-toasting-stardust.md):
+// tenant-model, database-skema, trial-login og sessions-cookie for det
+// kommende kommune-admin-dashboard. Se modulets eget filhoved for den fulde
+// afgrænsning af hvad der ER og IKKE ER med i dette modul.
+const tenantAdmin  = require('./tenant-admin');
 // NYT: delt Postgres-forbindelse — push-abonnementer/-kø (nedenfor) er den
 // sidste del af appen der stadig lå i en lokal, ikke-delt fil/Map, se
 // db.js's filhoved for den fulde begrundelse (samme multi-maskine-
@@ -394,6 +399,70 @@ app.get(['/', '/dansk-overloeb-kort.html'], (req, res) => {
 app.get('/stats', (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.sendFile(path.join(STATIC_DIR, 'stats.html'));
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Kommunepakke, modul 1 — se tenant-admin.js's filhoved for den fulde
+// afgrænsning (kun trial-login virker i dette modul, OAuth-login er et
+// fremtidigt modul). Alle tre ruter er BEVIDST placeret her, før
+// PUBLIC_STATIC_EXTENSIONS-gatemiddleware'en længere nede — /admin/trial/:token
+// og /admin/dashboard har ingen fil-endelse og ville ellers blive 404'et af den
+// (samme begrundelse som Tier 1/2/3-URL-arkitekturens routes ovenfor).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Trial-login: hasher token'et, slår op, sætter sessions-cookien, redirect.
+// Fejler ALTID til en generisk fejlbesked (aldrig "token findes ikke" vs.
+// "token udløbet" separat) — et gættet/forsøgt token skal ikke kunne
+// skelne de to, samme princip som badested-observations.js's bevidst vage
+// rate limit-besked mod automatiseret afprøvning.
+app.get('/admin/trial/:token', async (req, res) => {
+  try {
+    const trial = await tenantAdmin.consumeTrialLogin(req.params.token);
+    if (!trial) {
+      res.set('X-Robots-Tag', 'noindex, nofollow');
+      return res.status(401).type('text/plain').send('Login-link er ugyldigt, udløbet eller tilbagekaldt.');
+    }
+    const cookieValue = tenantAdmin.signSession({ tenantId: trial.tenantId, authMethod: 'trial' });
+    res.set('Set-Cookie', tenantAdmin.buildSessionSetCookieHeader(cookieValue));
+    res.redirect('/admin/dashboard');
+  } catch (e) {
+    console.error('admin/trial: uventet fejl —', e.message);
+    res.status(500).type('text/plain').send('Kunne ikke behandle login-linket lige nu.');
+  }
+});
+
+// Dashboard-placeholder — se admin-dashboard.html's filhoved. Tenant-data
+// injiceres server-side (samme "%%TOKEN%%".replace()-princip som seo-
+// pages.js's injectHead(), men lokalt her fremfor en delt hjælpefunktion,
+// da dette er den ENESTE side der endnu har brug for det i dette modul).
+app.get('/admin/dashboard', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).type('text/plain').send('Kommunen findes ikke længere — log ind igen.');
+    }
+    const tenantJson = JSON.stringify({
+      name: tenant.name,
+      status: tenant.status,
+      trialExpiresAt: tenant.trial_expires_at,
+      agreementSignedAt: tenant.agreement_signed_at,
+      authMethod: req.tenant.authMethod,
+    });
+    const html = fs.readFileSync(path.join(STATIC_DIR, 'admin-dashboard.html'), 'utf8')
+      .replace('%%TENANT_JSON%%', tenantJson);
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (e) {
+    console.error('admin/dashboard: uventet fejl —', e.message);
+    res.status(500).type('text/plain').send('Kunne ikke hente dashboard lige nu.');
+  }
+});
+
+app.post('/admin/logout', (req, res) => {
+  res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+  res.json({ ok: true });
 });
 
 // Service worker: never cache (must update immediately)
@@ -2903,7 +2972,7 @@ const DAILY_STATS_SNAPSHOT_INTERVAL_MS = 24 * 3600 * 1000;
 // ovenfor (rute-registrering, setInterval-opsætning, den forsinkede
 // warmCache()-opstart) kræver ikke databasen og kører uændret synkront —
 // kun selve lytte-starten er gated.
-Promise.all([appMetrics.ready, badestedObs.ready, schema])
+Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, schema])
   .then(() => {
     app.listen(PORT, HOST, () => {
       console.log(`Overløbsrisiko server kører på http://${HOST}:${PORT}`);
