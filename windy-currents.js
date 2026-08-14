@@ -53,26 +53,16 @@ var Windy = function (params) {
 	// hver enkelt temperaturfarve i sig selv har nok kontrast.
 	const PARTICLE_HALO_LINE_WIDTH = PARTICLE_LINE_WIDTH + 3.5;
 	const PARTICLE_HALO_COLOR = 'rgba(10,20,35,0.55)';
-	// RETTET (bruger-krav: hurtigere strøm skal have en LÆNGERE, mere
-	// markant hale end langsommere strøm) — hvert billedes segment (x,y)→
-	// (xt,yt) er i sig selv allerede proportional med farten (v[0]/v[1] ER
-	// billedets pixel-forskydning), men denne strækker segmentets START-
-	// punkt YDERLIGERE tilbage, proportionalt med samme hastighedsvektor
-	// (se evolve()/draw() nedenfor: particle.xs/ys) — så forskellen mellem
-	// hurtig og langsom strøm bliver visuelt tydelig ÉN halelængde ad
-	// gangen, ikke kun via hvor mange (ens-falmende) tidligere billeder der
-	// statistisk overlapper. 1 = intet ekstra (kun det naturlige segment).
-	// RETTET: 2.5 → 10 (bruger-rapport: ingen synlig forskel) — det
-	// dominerende visuelle "hale"-indtryk i dette partikelsystem kommer fra
-	// den FLERBILLEDE falme-effekt (draw()'s globalAlpha=.16-udtoning,
-	// ENS for alle partikler uanset fart), ikke fra ét enkelt billedes
-	// segment — 2.5x af et i forvejen kort segment, oven i PARTICLE_LINE_
-	// WIDTH's runde endestykker (som selv bidrager synlig "klat"-bredde),
-	// druknede simpelthen i det. Markant større multiplikator nødvendig
-	// for at gøre længde-forskellen tydelig over for det.
-	const TAIL_LENGTH_MULTIPLIER = 10;
 	const PARTICLE_MULTIPLIER = 1 / 60;                                          // RETTET: 1/200 → 1/60 (tættere partikelfelt)
 	const PARTICLE_REDUCTION = (Math.pow(window.devicePixelRatio,1/3) || 1.6);   // multiply particle count for mobiles by this amount
+	// RETTET (bruger-krav: længere, mere synlige haler — se draw() nedenfor)
+	// — global udtoningsrate pr. billede, ÉN fælles hastighed for alle
+	// partikler (et per-partikel-varieret spor kræver en helt anden,
+	// historik-baseret arkitektur, se samtalen der afviste det til fordel
+	// for denne simplere, ensartede løsning). 0.16 → 0.06: ved 15 fps
+	// (FRAME_RATE) betyder det en synlig spor-levetid på ca. 1,2s → ca. 3,2s
+	// (tid til at falme til ~5% opacitet, 0.94^n = 0.05).
+	const TRAIL_FADE_ALPHA = 0.06;
 	const FRAME_RATE = 15, FRAME_TIME = 1000 / FRAME_RATE;                       // desired frames per second
 
 	var NULL_WIND_VECTOR = [NaN, NaN, null];                                     // singleton for no wind in the form: [u, v, magnitude]
@@ -489,14 +479,6 @@ var Windy = function (params) {
 						// Path from (x,y) to (xt,yt) is visible, so add this particle to the appropriate draw bucket.
 						particle.xt = xt;
 						particle.yt = yt;
-						// RETTET (se TAIL_LENGTH_MULTIPLIER's filhoved): halens
-						// STARTPUNKT trækkes tilbage langs samme retning som
-						// bevægelsen selv (v[0]/v[1]) — jo hurtigere strømmen,
-						// jo længere hale, uden at ændre selve partiklens
-						// reelle position (xt/yt, som stadig kun rykker ét
-						// naturligt skridt pr. billede).
-						particle.xs = x - (TAIL_LENGTH_MULTIPLIER - 1) * v[0];
-						particle.ys = y - (TAIL_LENGTH_MULTIPLIER - 1) * v[1];
 						buckets[colorStyles.indexFor(m)].push(particle);
 					}
 					else {
@@ -516,7 +498,7 @@ var Windy = function (params) {
 		function draw() {
 			// Fade existing particle trails.
 			g.save();
-			g.globalAlpha = .16;
+			g.globalAlpha = TRAIL_FADE_ALPHA;
 			g.globalCompositeOperation = 'destination-out';
 			g.fillStyle = '#000';
 			g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
@@ -530,7 +512,7 @@ var Windy = function (params) {
 				if (bucket.length > 0) {
 					g.beginPath();
 					bucket.forEach(function (particle) {
-						g.moveTo(particle.xs, particle.ys);
+						g.moveTo(particle.x, particle.y);
 						g.lineTo(particle.xt, particle.yt);
 					});
 					g.lineWidth = PARTICLE_HALO_LINE_WIDTH;

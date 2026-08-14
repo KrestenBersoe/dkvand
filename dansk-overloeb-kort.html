@@ -93,7 +93,7 @@
      Bump versionsnummeret her ved enhver FREMTIDIG ændring af de to filer,
      der skal nå eksisterende besøgende med det samme. -->
 <script src="leaflet-canvas-layer.js?v=2"></script>
-<script src="windy-currents.js?v=4"></script>
+<script src="windy-currents.js?v=5"></script>
 
 <style>
   /* ── Design tokens ───────────────────────────────────────────────────────── */
@@ -3817,25 +3817,27 @@ let showVP3RbuKloak  = false;
 
 // Strøm-visualisering (punkt 11) — animeret partikel-lag (windy-currents.js,
 // se dens sektion nedenfor), klippet til hav via en SVG clip-path
-// (updateWaterClipPath()) bygget fra denmarkLandRaw (se dens deklaration
+// (updateWaterClipPath()) bygget fra denmarkSeaRaw (se dens deklaration
 // nedenfor) — IKKE vp3KystvandeRaw/vp3SoeerRaw (kun brugt til andre lag nu).
 let showCurrents  = false;
 let vp3KystvandeRaw = null;   // rå GeoJSON — sat i loadVP3Layers()
 let vp3SoeerRaw     = null;   // rå GeoJSON (polygoner) — søer, hentet med fetch-vp3-water-layers.js
 // RETTET (bruger-krav: strøm-animation skal dække ALT dansk hav, ikke kun
-// VP3's navngivne kystvande-/søer-polygoner, se scripts/fetch-and-simplify-
-// denmark-land.py's filhoved for hele begrundelsen) — Danmarks fulde
-// landpolygon (DAGI danmark_current, forenklet), bruges som NEGATIV maske:
-// alt UNDTAGEN land. Dækker dermed automatisk også åbent Kattegat/
-// Skagerrak-farvand uden for VP3's klassificerede vandområder, og udelukker
-// søer (som er en del af landpolygonen, ikke hul deri).
-let denmarkLandRaw = null;
-async function loadDenmarkLand() {
+// VP3's navngivne kystvande-/søer-polygoner) — Danmarks søterritorium,
+// FORUDBEREGNET server-side som en rigtig geometrisk differens (bbox minus
+// landpolygon, se scripts/compute-denmark-sea.py) i stedet for et klient-
+// side "skærm-rektangel minus land"-hak. Én positiv Polygon med Danmarks
+// ~1477 land-øer/-dele som interne huller — samme grundlæggende
+// ring-struktur og samme addFeatures()-mønster, som allerede beviseligt
+// virkede korrekt for VP3 kystvande tidligere (se RETTET nedenfor for
+// hvorfor den tidligere kunstige-rektangel-udgave blev droppet).
+let denmarkSeaRaw = null;
+async function loadDenmarkSea() {
   try {
-    const resp = await hentBuildBustet('denmark_land_simplified.geojson');
-    if (resp.ok) denmarkLandRaw = await resp.json();
+    const resp = await hentBuildBustet('denmark_sea_simplified.geojson');
+    if (resp.ok) denmarkSeaRaw = await resp.json();
   } catch (e) {
-    console.warn('Kunne ikke hente denmark_land_simplified.geojson — strøm-animationen vises slet ikke (tom klip-sti er den sikre fejlmåde, se updateWaterClipPath), indtil næste forsøg:', e.message);
+    console.warn('Kunne ikke hente denmark_sea_simplified.geojson — strøm-animationen vises slet ikke (tom klip-sti er den sikre fejlmåde, se updateWaterClipPath), indtil næste forsøg:', e.message);
   }
 }
 let vp3SoeerLayer   = null;   // synligt, algerisiko-farvelagt lag — se colorSoeerByRisk()
@@ -5704,14 +5706,27 @@ function ensureWaterClipPath() {
 }
 
 // RETTET (bruger-krav: strøm-animation skal dække ALT dansk hav, ikke kun
-// VP3's navngivne kystvande, se denmarkLandRaw's deklaration for hvorfor) —
-// klip-stien er nu et NEGATIVT hul: en rektangel der dækker HELE det synlige
-// kortudsnit, med Danmarks landpolygon "skåret ud" via evenodd-fill-rule
-// (sat i ensureWaterClipPath()) — alt der er tilbage er "synsfelt MINUS
-// land", dvs. alt hav, inklusive åbent Kattegat/Skagerrak, uden at skulle
-// kende til hver enkelt navngivet vandområde. Søer udelukkes automatisk,
-// fordi de er en del af landpolygonen (afgrænset af selve kystlinjen), ikke
-// et hul deri.
+// VP3's navngivne kystvande) — klip-stien bygges nu fra denmarkSeaRaw, ÉN
+// FORUDBEREGNET (server-side, scripts/compute-denmark-sea.py) hav-polygon
+// med Danmarks landmasse som interne huller (evenodd-fill-rule, sat i
+// ensureWaterClipPath()) — dækker automatisk alt åbent Kattegat/Skagerrak-
+// farvand, ikke kun navngivne vandområder, og udelukker søer (del af
+// landmassen, ikke hul deri).
+//
+// RETTET (bruger-rapport: strøm-animation over HELT land — ikke fikset af
+// ovenstående alene): en TIDLIGERE udgave af denne funktion byggede selv
+// hav-formen i browseren ("skærm-rektangel [map.getSize(), CANVAS-lokale
+// pixel-koordinater] minus land-ringe [map.latLngToContainerPoint(),
+// KORTCONTAINER-relative koordinater]") — to koordinatsystemer, der
+// TEORETISK burde stemme overens, men som i praksis IKKE gjorde, uden at
+// en logisk fejl nogensinde blev fundet ved kildekode-gennemgang alene
+// (ingen live-browser til rådighed for at fejlsøge videre). I stedet
+// forudberegnes hele hav-formen (bbox minus land) som en ÆGTE geometrisk
+// differens SERVER-side (shapely) — ALLE koordinater (både den ydre
+// afgrænsning og alle land-huller) kommer nu fra SAMME kilde og behandles
+// IDENTISK via map.latLngToContainerPoint(), ligesom VP3 kystvande-
+// polygonerne (som beviseligt VIRKEDE korrekt) altid har gjort. Ingen
+// kunstig rektangel, ingen blanding af koordinatsystemer.
 //
 // Kun features hvis bbox rammer det aktuelle synsfelt tegnes ind i klip-
 // stien — uden dette filter ville hver gentegning konvertere ALLE Danmarks
@@ -5722,20 +5737,6 @@ function updateWaterClipPath() {
   const path = ensureWaterClipPath();
   const bounds = map.getBounds().pad(0.02);
   const parts = [];
-
-  // VIGTIGT (sikker fejlmåde, se waitForWaterPolygons()' filhoved): baggrunds-
-  // rektanglet tilføjes KUN hvis landpolygonen faktisk er indlæst. Uden dette
-  // ville en manglende/endnu-ikke-hentet denmarkLandRaw give et UKLIPPET
-  // rektangel (strøm over HELE kortet, inkl. land) i stedet for tomt (intet
-  // vist) — omvendt af den tilsigtede fejlmåde.
-  if (denmarkLandRaw?.features?.length) {
-    // Baggrunden: hele det synlige kortudsnit, i samme container-pixel-
-    // koordinatsystem som featurenes punkter herunder (begge via
-    // map.latLngToContainerPoint, hvis origo ER kortcontainerens eget
-    // øverste venstre hjørne — upåvirket af panorering).
-    const size = map.getSize();
-    parts.push(`M0,0 L${size.x},0 L${size.x},${size.y} L0,${size.y} Z`);
-  }
 
   const addFeatures = (raw) => {
     if (!raw?.features) return;
@@ -5761,7 +5762,7 @@ function updateWaterClipPath() {
       }
     }
   };
-  addFeatures(denmarkLandRaw);
+  addFeatures(denmarkSeaRaw);
   path.setAttribute('d', parts.join(' '));
 }
 
@@ -5831,17 +5832,16 @@ function deactivateCurrentsVelocity() {
 
 // RETTET (bruger-rapport: knappen skifter tilstand, men intet vises):
 // updateWaterClipPath() (se dens filhoved) bygger klip-stien ud fra
-// denmarkLandRaw — er den ikke hentet endnu, bliver klip-stien TOM (intet
-// baggrunds-rektangel tilføjes), hvilket klipper HELE canvas'et væk. Men
-// loadDenmarkLand() henter den ASYNKRONT fra sideindlæsning, og intet
-// forhindrede tidligere brugeren i at klikke "Strøm" FØR den var klar.
-// Venter nu på den, med en generøs timeout som sikkerhedsventil, hvis
-// hentningen fejler helt.
+// denmarkSeaRaw — er den ikke hentet endnu, bliver klip-stien TOM, hvilket
+// klipper HELE canvas'et væk. Men loadDenmarkSea() henter den ASYNKRONT fra
+// sideindlæsning, og intet forhindrede tidligere brugeren i at klikke
+// "Strøm" FØR den var klar. Venter nu på den, med en generøs timeout som
+// sikkerhedsventil, hvis hentningen fejler helt.
 function waitForWaterPolygons(timeoutMs = 15000) {
   return new Promise(resolve => {
     const start = Date.now();
     (function poll() {
-      if (denmarkLandRaw?.features?.length || Date.now() - start > timeoutMs) {
+      if (denmarkSeaRaw?.features?.length || Date.now() - start > timeoutMs) {
         resolve();
       } else {
         setTimeout(poll, 300);
@@ -11139,7 +11139,7 @@ setInterval(loadBadevandRiskData, 5 * 60 * 1000);
 // BOOT
 loadAll();
 loadVP3Layers();
-loadDenmarkLand();  // statisk landegrænse — hentes én gang, ikke del af de periodiske genopdateringer ovenfor
+loadDenmarkSea();  // statisk søterritorium — hentes én gang, ikke del af de periodiske genopdateringer ovenfor
 // RETTET: handleHash() blev tidligere KUN kaldt fra popstate-eventet — men
 // en frisk sideindlæsning med et #badevand=...-hash allerede i URL'en
 // (fx når en push-notifikation åbner et helt nyt vindue via
