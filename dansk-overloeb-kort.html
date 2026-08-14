@@ -3224,6 +3224,15 @@ let sharedInteractiveRenderer = null;   // sat af renderMap(), genbrugt af badev
 map.createPane('polygonPane');
 map.getPane('polygonPane').style.zIndex = 625;
 
+// waterBgPane (z350) — mørk baggrundsfarve for hav/søer, KUN brugt af
+// strøm-velocity-testlaget (se buildWaterBgLayer()/toggleCurrentsVelocity()).
+// Ligger over tilePane (200) og under Leaflets standard overlayPane (400,
+// hvor leaflet-velocitys canvas selv tegnes) — så animationen tegnes OVEN PÅ
+// denne baggrund, ikke under den. Basiskortets lyseblå havfarve gav for lav
+// kontrast til at partiklerne kunne ses (bruger-rapport 2026-08-14).
+map.createPane('waterBgPane');
+map.getPane('waterBgPane').style.zIndex = 350;
+
 // Luk en åbnet kystvande-/sø-tooltip ved klik/tryk andetsteds på kortet —
 // nødvendigt på mobil, hvor der ikke findes en "museover væk"-hændelse til
 // at lukke den automatisk, som der gør på desktop.
@@ -5735,6 +5744,34 @@ function applyWaterMaskToVelocityData(velocityJSON) {
   return velocityJSON;
 }
 
+// Mørk baggrund for hav/søer, KUN mens strøm-velocity-testlaget er aktivt —
+// basiskortets lyseblå havflade gav for lav kontrast til at de animerede
+// partikler kunne ses (bruger-rapport). Bygges lazy og genbruges; hvis
+// vp3KystvandeRaw/vp3SoeerRaw endnu ikke er hentet (loadVP3Layers() kører
+// asynkront fra sideindlæsning, kan i teorien stadig være undervejs ved et
+// meget hurtigt første klik), caches resultatet IKKE, så næste toggle-on
+// forsøger igen i stedet for at fastfryse et tomt lag permanent.
+let waterBgLayer = null;
+function buildWaterBgLayer() {
+  const parts = [];
+  if (vp3KystvandeRaw?.features?.length) {
+    parts.push(L.geoJSON(vp3KystvandeRaw, {
+      renderer: L.svg({ pane: 'waterBgPane' }),
+      interactive: false,
+      style: { color: 'transparent', weight: 0, fillColor: '#071c2c', fillOpacity: 0.88 },
+    }));
+  }
+  if (vp3SoeerRaw?.features?.length) {
+    parts.push(L.geoJSON(vp3SoeerRaw, {
+      renderer: L.svg({ pane: 'waterBgPane' }),
+      interactive: false,
+      style: { color: 'transparent', weight: 0, fillColor: '#071c2c', fillOpacity: 0.88 },
+    }));
+  }
+  if (!parts.length) return null;
+  return L.layerGroup(parts);
+}
+
 async function loadCurrentsVelocityLayer() {
   if (currentsVelocityLoading) return;
   currentsVelocityLoading = true;
@@ -5778,13 +5815,16 @@ function toggleCurrentsVelocity() {
   showCurrentsVelocity = !showCurrentsVelocity;
   setLayerBtnState('btn-currents-velocity', showCurrentsVelocity);
   if (showCurrentsVelocity) {
+    if (!waterBgLayer) waterBgLayer = buildWaterBgLayer();
+    if (waterBgLayer) map.addLayer(waterBgLayer);
     if (currentsVelocityLayer) {
       map.addLayer(currentsVelocityLayer);
     } else {
       loadCurrentsVelocityLayer();
     }
-  } else if (currentsVelocityLayer && map.hasLayer(currentsVelocityLayer)) {
-    map.removeLayer(currentsVelocityLayer);
+  } else {
+    if (waterBgLayer && map.hasLayer(waterBgLayer)) map.removeLayer(waterBgLayer);
+    if (currentsVelocityLayer && map.hasLayer(currentsVelocityLayer)) map.removeLayer(currentsVelocityLayer);
   }
 }
 
