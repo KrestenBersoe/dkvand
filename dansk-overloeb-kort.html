@@ -3816,11 +3816,28 @@ let showVP3RbuRegn   = false;
 let showVP3RbuKloak  = false;
 
 // Strøm-visualisering (punkt 11) — animeret partikel-lag (windy-currents.js,
-// se dens sektion nedenfor), klippet til vandområder via en SVG clip-path
-// (updateWaterClipPath()) bygget fra vp3KystvandeRaw/vp3SoeerRaw.
+// se dens sektion nedenfor), klippet til hav via en SVG clip-path
+// (updateWaterClipPath()) bygget fra denmarkLandRaw (se dens deklaration
+// nedenfor) — IKKE vp3KystvandeRaw/vp3SoeerRaw (kun brugt til andre lag nu).
 let showCurrents  = false;
 let vp3KystvandeRaw = null;   // rå GeoJSON — sat i loadVP3Layers()
 let vp3SoeerRaw     = null;   // rå GeoJSON (polygoner) — søer, hentet med fetch-vp3-water-layers.js
+// RETTET (bruger-krav: strøm-animation skal dække ALT dansk hav, ikke kun
+// VP3's navngivne kystvande-/søer-polygoner, se scripts/fetch-and-simplify-
+// denmark-land.py's filhoved for hele begrundelsen) — Danmarks fulde
+// landpolygon (DAGI danmark_current, forenklet), bruges som NEGATIV maske:
+// alt UNDTAGEN land. Dækker dermed automatisk også åbent Kattegat/
+// Skagerrak-farvand uden for VP3's klassificerede vandområder, og udelukker
+// søer (som er en del af landpolygonen, ikke hul deri).
+let denmarkLandRaw = null;
+async function loadDenmarkLand() {
+  try {
+    const resp = await hentBuildBustet('denmark_land_simplified.geojson');
+    if (resp.ok) denmarkLandRaw = await resp.json();
+  } catch (e) {
+    console.warn('Kunne ikke hente denmark_land_simplified.geojson — strøm-animationen vises slet ikke (tom klip-sti er den sikre fejlmåde, se updateWaterClipPath), indtil næste forsøg:', e.message);
+  }
+}
 let vp3SoeerLayer   = null;   // synligt, algerisiko-farvelagt lag — se colorSoeerByRisk()
 
 // NYT: sø-stofbelastning (N/P/COD/BOD samt miljøfremmede stoffer, se
@@ -5686,15 +5703,40 @@ function ensureWaterClipPath() {
   return path;
 }
 
+// RETTET (bruger-krav: strøm-animation skal dække ALT dansk hav, ikke kun
+// VP3's navngivne kystvande, se denmarkLandRaw's deklaration for hvorfor) —
+// klip-stien er nu et NEGATIVT hul: en rektangel der dækker HELE det synlige
+// kortudsnit, med Danmarks landpolygon "skåret ud" via evenodd-fill-rule
+// (sat i ensureWaterClipPath()) — alt der er tilbage er "synsfelt MINUS
+// land", dvs. alt hav, inklusive åbent Kattegat/Skagerrak, uden at skulle
+// kende til hver enkelt navngivet vandområde. Søer udelukkes automatisk,
+// fordi de er en del af landpolygonen (afgrænset af selve kystlinjen), ikke
+// et hul deri.
+//
 // Kun features hvis bbox rammer det aktuelle synsfelt tegnes ind i klip-
-// stien — uden dette filter ville hver gentegning konvertere ALLE 985 søers
-// (og 109 kystvandes) polygonhjørner til skærmpunkter, uanset hvor langt de
-// reelt ligger fra det viste udsnit (samme ydelses-lære som
-// isInDanishWater()'s bbox-forkastelse, se filhovedet der).
+// stien — uden dette filter ville hver gentegning konvertere ALLE Danmarks
+// ø-/kystlinje-polygonhjørner til skærmpunkter, uanset hvor langt de reelt
+// ligger fra det viste udsnit (samme ydelses-lære som isInDanishWater()'s
+// bbox-forkastelse, se filhovedet der).
 function updateWaterClipPath() {
   const path = ensureWaterClipPath();
   const bounds = map.getBounds().pad(0.02);
   const parts = [];
+
+  // VIGTIGT (sikker fejlmåde, se waitForWaterPolygons()' filhoved): baggrunds-
+  // rektanglet tilføjes KUN hvis landpolygonen faktisk er indlæst. Uden dette
+  // ville en manglende/endnu-ikke-hentet denmarkLandRaw give et UKLIPPET
+  // rektangel (strøm over HELE kortet, inkl. land) i stedet for tomt (intet
+  // vist) — omvendt af den tilsigtede fejlmåde.
+  if (denmarkLandRaw?.features?.length) {
+    // Baggrunden: hele det synlige kortudsnit, i samme container-pixel-
+    // koordinatsystem som featurenes punkter herunder (begge via
+    // map.latLngToContainerPoint, hvis origo ER kortcontainerens eget
+    // øverste venstre hjørne — upåvirket af panorering).
+    const size = map.getSize();
+    parts.push(`M0,0 L${size.x},0 L${size.x},${size.y} L0,${size.y} Z`);
+  }
+
   const addFeatures = (raw) => {
     if (!raw?.features) return;
     for (const f of raw.features) {
@@ -5719,13 +5761,7 @@ function updateWaterClipPath() {
       }
     }
   };
-  // RETTET (bruger-krav: strøm-animationen skal KUN vises i hav-/kystvande,
-  // ikke søer) — addFeatures(vp3SoeerRaw) fjernet. Særlig relevant efter
-  // fillNearestNeighbor() i server.js (se dens filhoved): den fylder NU
-  // ubetinget ethvert tomt gitterpunkt, inkl. søer/land, med nærmeste
-  // havmåling — denne clip-path er derfor den ENESTE ting, der forhindrer
-  // søer i at vise (fabrikeret) havstrøm.
-  addFeatures(vp3KystvandeRaw);
+  addFeatures(denmarkLandRaw);
   path.setAttribute('d', parts.join(' '));
 }
 
@@ -5794,20 +5830,18 @@ function deactivateCurrentsVelocity() {
 }
 
 // RETTET (bruger-rapport: knappen skifter tilstand, men intet vises):
-// updateWaterClipPath() (se dens filhoved) bygger clip-path'en ud fra
-// vp3KystvandeRaw/vp3SoeerRaw — er INGEN af dem hentet endnu, bliver
-// klip-stien TOM (ingen polygon-punkter at tegne), hvilket klipper HELE
-// canvas'et væk (en tom <clipPath> definerer et areal på nul). Men
-// loadVP3Layers() henter dem ASYNKRONT fra sideindlæsning (985 sø-
-// polygoner tager mærkbar tid), og intet forhindrede tidligere brugeren i
-// at klikke "Strøm" FØR de var klar. Venter nu på (mindst ét af)
-// datasættene, med en generøs timeout som sikkerhedsventil, hvis VP3-
+// updateWaterClipPath() (se dens filhoved) bygger klip-stien ud fra
+// denmarkLandRaw — er den ikke hentet endnu, bliver klip-stien TOM (intet
+// baggrunds-rektangel tilføjes), hvilket klipper HELE canvas'et væk. Men
+// loadDenmarkLand() henter den ASYNKRONT fra sideindlæsning, og intet
+// forhindrede tidligere brugeren i at klikke "Strøm" FØR den var klar.
+// Venter nu på den, med en generøs timeout som sikkerhedsventil, hvis
 // hentningen fejler helt.
 function waitForWaterPolygons(timeoutMs = 15000) {
   return new Promise(resolve => {
     const start = Date.now();
     (function poll() {
-      if (vp3KystvandeRaw?.features?.length || vp3SoeerRaw?.features?.length || Date.now() - start > timeoutMs) {
+      if (denmarkLandRaw?.features?.length || Date.now() - start > timeoutMs) {
         resolve();
       } else {
         setTimeout(poll, 300);
@@ -11105,6 +11139,7 @@ setInterval(loadBadevandRiskData, 5 * 60 * 1000);
 // BOOT
 loadAll();
 loadVP3Layers();
+loadDenmarkLand();  // statisk landegrænse — hentes én gang, ikke del af de periodiske genopdateringer ovenfor
 // RETTET: handleHash() blev tidligere KUN kaldt fra popstate-eventet — men
 // en frisk sideindlæsning med et #badevand=...-hash allerede i URL'en
 // (fx når en push-notifikation åbner et helt nyt vindue via

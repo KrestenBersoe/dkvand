@@ -53,6 +53,16 @@ var Windy = function (params) {
 	// hver enkelt temperaturfarve i sig selv har nok kontrast.
 	const PARTICLE_HALO_LINE_WIDTH = PARTICLE_LINE_WIDTH + 3.5;
 	const PARTICLE_HALO_COLOR = 'rgba(10,20,35,0.55)';
+	// RETTET (bruger-krav: hurtigere strøm skal have en LÆNGERE, mere
+	// markant hale end langsommere strøm) — hvert billedes segment (x,y)→
+	// (xt,yt) er i sig selv allerede proportional med farten (v[0]/v[1] ER
+	// billedets pixel-forskydning), men denne strækker segmentets START-
+	// punkt YDERLIGERE tilbage, proportionalt med samme hastighedsvektor
+	// (se evolve()/draw() nedenfor: particle.xs/ys) — så forskellen mellem
+	// hurtig og langsom strøm bliver visuelt tydelig ÉN halelængde ad
+	// gangen, ikke kun via hvor mange (ens-falmende) tidligere billeder der
+	// statistisk overlapper. 1 = intet ekstra (kun det naturlige segment).
+	const TAIL_LENGTH_MULTIPLIER = 2.5;
 	const PARTICLE_MULTIPLIER = 1 / 60;                                          // RETTET: 1/200 → 1/60 (tættere partikelfelt)
 	const PARTICLE_REDUCTION = (Math.pow(window.devicePixelRatio,1/3) || 1.6);   // multiply particle count for mobiles by this amount
 	const FRAME_RATE = 15, FRAME_TIME = 1000 / FRAME_RATE;                       // desired frames per second
@@ -471,6 +481,14 @@ var Windy = function (params) {
 						// Path from (x,y) to (xt,yt) is visible, so add this particle to the appropriate draw bucket.
 						particle.xt = xt;
 						particle.yt = yt;
+						// RETTET (se TAIL_LENGTH_MULTIPLIER's filhoved): halens
+						// STARTPUNKT trækkes tilbage langs samme retning som
+						// bevægelsen selv (v[0]/v[1]) — jo hurtigere strømmen,
+						// jo længere hale, uden at ændre selve partiklens
+						// reelle position (xt/yt, som stadig kun rykker ét
+						// naturligt skridt pr. billede).
+						particle.xs = x - (TAIL_LENGTH_MULTIPLIER - 1) * v[0];
+						particle.ys = y - (TAIL_LENGTH_MULTIPLIER - 1) * v[1];
 						buckets[colorStyles.indexFor(m)].push(particle);
 					}
 					else {
@@ -504,7 +522,7 @@ var Windy = function (params) {
 				if (bucket.length > 0) {
 					g.beginPath();
 					bucket.forEach(function (particle) {
-						g.moveTo(particle.x, particle.y);
+						g.moveTo(particle.xs, particle.ys);
 						g.lineTo(particle.xt, particle.yt);
 					});
 					g.lineWidth = PARTICLE_HALO_LINE_WIDTH;
