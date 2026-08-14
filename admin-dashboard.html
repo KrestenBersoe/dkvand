@@ -44,6 +44,27 @@
   }
   button:hover { border-color: var(--accent); color: var(--ink); }
   .err { color: var(--bad); font-size: .9rem; }
+
+  /* NYT (Kommunepakke, modul 4) — badevandshistorik */
+  .hist-controls { display: flex; align-items: center; gap: .6rem; margin-bottom: .9rem; }
+  .hist-controls label { font-size: .82rem; color: var(--ink-soft); }
+  .hist-controls input[type="month"] {
+    background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .35rem .5rem; border-radius: 6px; font-size: .85rem; font-family: inherit;
+  }
+  .hist-row { margin-bottom: .8rem; }
+  .hist-row:last-child { margin-bottom: 0; }
+  .hist-name { font-size: .86rem; margin-bottom: .3rem; }
+  .hist-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,.06); }
+  .hist-seg-green  { background: var(--ok); }
+  .hist-seg-yellow { background: var(--warn); }
+  .hist-seg-red    { background: var(--bad); }
+  .hist-counts { font-size: .74rem; color: var(--ink-soft); margin-top: .3rem; }
+  .hist-warning {
+    background: rgba(212,160,32,.1); border: 1px solid rgba(212,160,32,.3); border-radius: 8px;
+    padding: .7rem .9rem; font-size: .84rem; color: var(--warn);
+  }
+  .hist-empty { color: var(--ink-soft); font-size: .85rem; }
 </style>
 </head>
 <body>
@@ -63,6 +84,10 @@
 // stats.html.
 window.__TENANT__ = %%TENANT_JSON%%;
 
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function statusBadge(status) {
   const cls = status === 'active' ? 'badge-active' : status === 'suspended' ? 'badge-suspended' : 'badge-trial';
   const label = status === 'active' ? 'Aktiv' : status === 'suspended' ? 'Suspenderet' : 'Trial';
@@ -74,6 +99,10 @@ function fmtDate(iso) {
   return new Date(iso).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
+function currentMonthStr() {
+  return new Date().toISOString().slice(0, 7); // 'YYYY-MM', UTC — samme konvention som backend'ens badevand_daily_risk
+}
+
 function render() {
   const t = window.__TENANT__;
   const content = document.getElementById('content');
@@ -82,7 +111,7 @@ function render() {
     return;
   }
   content.innerHTML = `
-    <h1>🏛 ${t.name}</h1>
+    <h1>🏛 ${escHtml(t.name)}</h1>
     <div class="sub">Kommune-dashboard — logget ind via ${t.authMethod === 'trial' ? 'trial-adgang' : 'kommunens eget OAuth-login'}</div>
 
     <div class="card">
@@ -92,15 +121,72 @@ function render() {
       ${t.agreementSignedAt ? `<div class="row"><span>Aftale underskrevet</span><span>${fmtDate(t.agreementSignedAt)}</span></div>` : ''}
     </div>
 
+    <div class="card">
+      <h2>Badevandshistorik</h2>
+      <div class="hist-controls">
+        <label for="f-month">Måned</label>
+        <input type="month" id="f-month" value="${currentMonthStr()}" onchange="loadHistory(this.value)">
+      </div>
+      <div id="hist-content">Indlæser…</div>
+    </div>
+
     <div class="placeholder-note">
-      Dette er fundamentet for Kommunepakken (login + tenant-isolation) —
-      selve dashboard-indholdet (badevandshistorik, myndighedsrapporter,
-      hotspot-analyser, overstyringsknap) bygges i de næste moduler.
+      Myndighedsrapporter, hotspot-analyser og overstyringsknappen bygges i de næste moduler.
     </div>
 
     <button onclick="location.href='/admin/settings/oauth'">⚙️ OAuth-opsætning</button>
     <button onclick="logout()">Log ud</button>
   `;
+  loadHistory(currentMonthStr());
+}
+
+/**
+ * Henter og viser grøn/gul/rød-fordelingen for kommunens badesteder i den
+ * valgte måned — se server.js's GET /admin/api/badested-history og
+ * app-metrics.js's getMonthlyRiskBuckets() for selve beregningen. Al
+ * beregning sker server-side, denne funktion renderer udelukkende de
+ * færdige tal (samme server-autoritative princip som resten af appen).
+ */
+async function loadHistory(month) {
+  const histEl = document.getElementById('hist-content');
+  histEl.textContent = 'Indlæser…';
+  try {
+    const resp = await fetch(`/admin/api/badested-history?month=${encodeURIComponent(month)}`, { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      histEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente historik.')}</div>`;
+      return;
+    }
+    if (data.warning) {
+      histEl.innerHTML = `<div class="hist-warning">${escHtml(data.warning)}</div>`;
+      return;
+    }
+    if (!data.badesteder || data.badesteder.length === 0) {
+      histEl.innerHTML = '<div class="hist-empty">Ingen badesteder fundet.</div>';
+      return;
+    }
+    histEl.innerHTML = data.badesteder.map(b => {
+      // NYT: procenterne er bevidst af (green+yellow+red+noData), IKKE kun
+      // af de dage der HAR data — en måned med mest noData skal vise en
+      // synligt kort farvet bjælke, ikke misvisende strække få reelle
+      // dage ud til at udfylde hele bjælken.
+      const total = (b.green || 0) + (b.yellow || 0) + (b.red || 0) + (b.noData || 0);
+      const pct = n => total > 0 ? Math.round(100 * n / total) : 0;
+      return `
+        <div class="hist-row">
+          <div class="hist-name">${escHtml(b.navn)}</div>
+          <div class="hist-bar">
+            <div class="hist-seg-green"  style="width:${pct(b.green)}%"  title="${b.green} grønne dage"></div>
+            <div class="hist-seg-yellow" style="width:${pct(b.yellow)}%" title="${b.yellow} gule dage"></div>
+            <div class="hist-seg-red"    style="width:${pct(b.red)}%"    title="${b.red} røde dage"></div>
+          </div>
+          <div class="hist-counts">🟢 ${b.green}&nbsp;&nbsp;🟡 ${b.yellow}&nbsp;&nbsp;🔴 ${b.red}${b.noData ? `&nbsp;&nbsp;· ${b.noData} dage uden data` : ''}</div>
+        </div>
+      `;
+    }).join('');
+  } catch (e) {
+    histEl.innerHTML = '<div class="err">Kunne ikke hente historik — tjek din forbindelse.</div>';
+  }
 }
 
 async function logout() {

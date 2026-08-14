@@ -63,6 +63,11 @@ COPY oauth-config-validation.js ./
 # integrationen), samme "crasher øjeblikkeligt uden denne linje"-fælde
 # som de øvrige lokale moduler i denne fil.
 COPY oauth-login.js ./
+# NYT: Kommunepakke, modul 4 — server.js requirer nu også
+# (require('./tenant-badesteder')) dette modul ved opstart, samme
+# "crasher øjeblikkeligt uden denne linje"-fælde som de øvrige lokale
+# moduler i denne fil.
+COPY tenant-badesteder.js ./
 # server.js's GET /admin/dashboard, GET /admin/settings/oauth og
 # GET /admin/login læser disse filer direkte via fs.readFileSync(STATIC_DIR,
 # ...) ved hver request (samme mønster som stats.html nedenfor) — mangler

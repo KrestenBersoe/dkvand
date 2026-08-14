@@ -56,9 +56,40 @@ function dedupeSlug(baseSlug, usedSlugs) {
   return `${baseSlug}-${n}`;
 }
 
+// NYT (Kommunepakke, modul 4): normaliseret nøgle til tenant↔badested-
+// matchning (se tenant-badesteder.js) — kommune-feltet i kildedata er
+// INKONSISTENT ("Odense Kommune", "KØBENHAVNS KOMMUNE", "Aarhus kommune"),
+// og en tenants `name` (frit tekstfelt, sat manuelt via
+// scripts/create-tenant-trial.js) skal kunne matches mod det uanset
+// forskellig store/små bogstaver og "kommune"-suffiks.
+//
+// BEVIDST EN SELVSTÆNDIG, DUPLIKERET udgave af slugify()'s tilsvarende
+// normalisering — ikke delt/genbrugt kode. slugify() er allerede
+// verificeret mod reelle data (0 kollisioner, se filhoved) og bruges af
+// den etablerede URL-arkitektur (/badested/:slug); at dele normaliserings-
+// logikken mellem de to ville risikere at ændre slugify()'s adfærd for et
+// helt andet formål. De få linjer duplikeret kode her er en langt mindre
+// risiko end det.
+//
+// Eksempler: normalizeKommuneKey("Odense Kommune") === normalizeKommuneKey("ODENSE KOMMUNE") === normalizeKommuneKey("Odense") === "odense".
+function normalizeKommuneKey(s) {
+  return String(s || '')
+    .replace(/\s*kommune\s*$/i, '')
+    .trim()
+    .toLowerCase()
+    .replace(/æ/g, 'ae').replace(/ø/g, 'oe').replace(/å/g, 'aa')
+    .normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 function buildBadestedSlugs(staticDir) {
   const badestedSlugToInfo = new Map(); // slug -> {id, navn, kommune, lat, lng}
   const idToBadestedSlug   = new Map();
+  // NYT (Kommunepakke, modul 4): normaliseret kommune-nøgle -> liste af
+  // badesteder — se tenant-badesteder.js for hvordan en tenants navn
+  // matches mod denne.
+  const kommuneKeyToBadesteder = new Map();
   const usedSlugs = new Set();
 
   let geo, analyse;
@@ -67,7 +98,7 @@ function buildBadestedSlugs(staticDir) {
     analyse = JSON.parse(fs.readFileSync(path.join(staticDir, 'badevand-analyseresultater.json'), 'utf8'));
   } catch (e) {
     console.warn('slug-index: kunne ikke indlæse badevand-kilder —', e.message);
-    return { badestedSlugToInfo, idToBadestedSlug };
+    return { badestedSlugToInfo, idToBadestedSlug, kommuneKeyToBadesteder };
   }
 
   // dkbw-nummer -> analyseresultat-record (navn/kommune/lat/lng) — samme
@@ -102,9 +133,17 @@ function buildBadestedSlugs(staticDir) {
 
     badestedSlugToInfo.set(slug, { id: bathingwat, navn, kommune, lat, lng });
     idToBadestedSlug.set(bathingwat, slug);
+
+    if (kommune) {
+      const key = normalizeKommuneKey(kommune);
+      if (key) {
+        if (!kommuneKeyToBadesteder.has(key)) kommuneKeyToBadesteder.set(key, []);
+        kommuneKeyToBadesteder.get(key).push({ id: bathingwat, slug, navn, lat, lng });
+      }
+    }
   }
 
-  return { badestedSlugToInfo, idToBadestedSlug };
+  return { badestedSlugToInfo, idToBadestedSlug, kommuneKeyToBadesteder };
 }
 
 function buildSoeSlugs(staticDir) {
@@ -150,12 +189,12 @@ function buildSoeSlugs(staticDir) {
   return { soeSlugToInfo, navnToSoeSlug };
 }
 
-/** Bygger alle fire Map'er — kaldes ÉN gang ved serveropstart i server.js. */
+/** Bygger alle Map'er — kaldes ÉN gang ved serveropstart i server.js. */
 function buildSlugIndex(staticDir) {
-  const { badestedSlugToInfo, idToBadestedSlug } = buildBadestedSlugs(staticDir);
+  const { badestedSlugToInfo, idToBadestedSlug, kommuneKeyToBadesteder } = buildBadestedSlugs(staticDir);
   const { soeSlugToInfo, navnToSoeSlug }         = buildSoeSlugs(staticDir);
-  console.info(`slug-index: ${badestedSlugToInfo.size} badested-slugs, ${soeSlugToInfo.size} sø-slugs bygget`);
-  return { badestedSlugToInfo, idToBadestedSlug, soeSlugToInfo, navnToSoeSlug };
+  console.info(`slug-index: ${badestedSlugToInfo.size} badested-slugs, ${soeSlugToInfo.size} sø-slugs, ${kommuneKeyToBadesteder.size} kommune-nøgler bygget`);
+  return { badestedSlugToInfo, idToBadestedSlug, soeSlugToInfo, navnToSoeSlug, kommuneKeyToBadesteder };
 }
 
-module.exports = { slugify, buildSlugIndex };
+module.exports = { slugify, normalizeKommuneKey, buildSlugIndex };

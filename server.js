@@ -56,6 +56,9 @@ const tenantAdmin  = require('./tenant-admin');
 // NYT (Kommunepakke, modul 3): dynamisk OAuth-login (openid-client) — se
 // modulets eget filhoved.
 const oauthLogin   = require('./oauth-login');
+// NYT (Kommunepakke, modul 4): tenant -> badesteder-mapping (normaliseret
+// kommune-navnematch) — se modulets eget filhoved.
+const tenantBadesteder = require('./tenant-badesteder');
 // NYT: delt Postgres-forbindelse — push-abonnementer/-kø (nedenfor) er den
 // sidste del af appen der stadig lå i en lokal, ikke-delt fil/Map, se
 // db.js's filhoved for den fulde begrundelse (samme multi-maskine-
@@ -275,7 +278,7 @@ const STATIC_DIR = __dirname;
 // se slug-index.js's filhoved for hvorfor runtime-genopbygning ikke er
 // nødvendig (kilde-filerne ændres kun via den offline update-all-data.sh-
 // pipeline). Bruges af /badested/:slug, /soe/:slug og /sitemap.xml nedenfor.
-const { badestedSlugToInfo, idToBadestedSlug, soeSlugToInfo, navnToSoeSlug } = slugIndex.buildSlugIndex(STATIC_DIR);
+const { badestedSlugToInfo, idToBadestedSlug, soeSlugToInfo, navnToSoeSlug, kommuneKeyToBadesteder } = slugIndex.buildSlugIndex(STATIC_DIR);
 
 // PULS data: changes once a year → cache aggressively
 app.get('/puls-data.json', (req, res) => {
@@ -642,6 +645,44 @@ app.get(oauthLogin.CALLBACK_PATH, async (req, res) => {
     // egen fejlfinding, aldrig videre til klienten.
     console.error(`admin/oauth/callback: fejlede (${e.code || 'UKENDT'}) —`, e.message, e.cause ? `— cause: ${e.cause.message}` : '');
     res.redirect('/admin/login?error=' + encodeURIComponent(e.message || 'Login mislykkedes — prøv igen.'));
+  }
+});
+
+// ── Kommunepakke, modul 4 — månedlig badevandshistorik ──────────────────────
+// Se app-metrics.js's getMonthlyRiskBuckets() og tenant-badesteder.js's
+// resolveTenantBadesteder() for selve beregningen/mappingen.
+app.get('/admin/api/badested-history', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const monthParam = typeof req.query.month === 'string' ? req.query.month : null;
+    if (monthParam && !/^\d{4}-\d{2}$/.test(monthParam)) {
+      return res.status(400).json({ error: "Ugyldigt month-format, forventede 'YYYY-MM'." });
+    }
+    const month = monthParam || new Date().toISOString().slice(0, 7); // default: indeværende UTC-måned
+
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+
+    const badesteder = tenantBadesteder.resolveTenantBadesteder(tenant.name, kommuneKeyToBadesteder);
+    if (badesteder.length === 0) {
+      // NYT: IKKE en fejl (401/500) — en tenant med reelt 0 badesteder
+      // (eller et tastefejlsramt tenants.name, se planens "Bevidst uden
+      // for scope") skal se en klar, handlingsanvisende besked, ikke et
+      // crash. Logges også server-side, så et tastefejlsramt navn er let
+      // at diagnosticere fra driftssiden.
+      console.warn(`admin/api/badested-history: intet badested-match for tenant.name="${tenant.name}" (tenant=${req.tenant.tenantId})`);
+      return res.json({ month, badesteder: [], warning: `Ingen badesteder fundet for "${tenant.name}" — kontakt support hvis dette er forkert.` });
+    }
+
+    const buckets = await appMetrics.getMonthlyRiskBuckets(badesteder.map(b => b.id), month);
+    const result = badesteder.map(b => ({ id: b.id, slug: b.slug, navn: b.navn, ...buckets.get(String(b.id)) }));
+    res.set('Cache-Control', 'no-store');
+    res.json({ month, badesteder: result });
+  } catch (e) {
+    console.error('admin/api/badested-history: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente badevandshistorik lige nu.' });
   }
 });
 

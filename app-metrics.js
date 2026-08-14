@@ -291,6 +291,60 @@ function riskBucket(r) {
 }
 
 /**
+ * Kommunepakke, modul 4 — grøn/gul/rød-dagtal pr. badested for én
+ * kalendermåned (UTC, samme dato-konvention som todayDateString()/hele
+ * badevand_daily_risk). ÉN forespørgsel for ALLE badestedIds (WHERE
+ * badested_id = ANY($1)), ikke én pr. badested — se planens eksplicitte
+ * krav om en effektiv forespørgsel.
+ *
+ * Kombinerer bact/viral PRÆCIS som buildWeeklyDigestMessage() ovenfor
+ * (Math.max, algae/forecast bevidst UDELADT — samme HÅRDE grænse som
+ * badested-observations.js's filhoved: alge må aldrig påvirke den
+ * officielle farve). En dag uden NOGEN matchende række (badestedet var
+ * ikke oprettet endnu, eller lå før denne tabel fandtes) tælles som
+ * `noData`, ALDRIG stille som grøn.
+ *
+ * @param {string[]} badestedIds
+ * @param {string} yearMonth — 'YYYY-MM'
+ * @returns {Promise<Map<string, {green:number, yellow:number, red:number, noData:number, daysInMonth:number}>>}
+ */
+async function getMonthlyRiskBuckets(badestedIds, yearMonth) {
+  const result = new Map();
+  if (!Array.isArray(badestedIds) || badestedIds.length === 0) return result;
+  const m = /^(\d{4})-(\d{2})$/.exec(yearMonth);
+  if (!m) throw new Error(`getMonthlyRiskBuckets: ugyldigt yearMonth-format "${yearMonth}", forventede 'YYYY-MM'`);
+  const year = parseInt(m[1], 10), monthIdx = parseInt(m[2], 10) - 1; // 0-baseret måned til Date.UTC
+
+  const rangeStart = new Date(Date.UTC(year, monthIdx, 1)).toISOString().slice(0, 10);
+  const rangeEnd   = new Date(Date.UTC(year, monthIdx + 1, 1)).toISOString().slice(0, 10); // eksklusiv — næste måneds 1.
+  const daysInMonth = new Date(Date.UTC(year, monthIdx + 1, 0)).getUTCDate();
+
+  const ids = badestedIds.map(String);
+  for (const id of ids) result.set(id, { green: 0, yellow: 0, red: 0, noData: daysInMonth, daysInMonth });
+
+  const { rows } = await query(`
+    SELECT badested_id, date, sum_bact, n_bact, sum_viral, n_viral
+    FROM badevand_daily_risk
+    WHERE badested_id = ANY($1) AND date >= $2 AND date < $3
+  `, [ids, rangeStart, rangeEnd]);
+
+  for (const r of rows) {
+    const entry = result.get(r.badested_id);
+    if (!entry) continue; // kan ikke ske givet WHERE badested_id = ANY($1), men fail-safe
+    const bact  = r.n_bact  > 0 ? r.sum_bact  / r.n_bact  : null;
+    const viral = r.n_viral > 0 ? r.sum_viral / r.n_viral : null;
+    const combined = (bact != null || viral != null) ? Math.max(bact ?? 0, viral ?? 0) : null;
+    const bucket = riskBucket(combined);
+    if (bucket === null) continue; // ingen bact/viral-data for netop denne dag — forbliver i noData
+    entry.noData--;
+    if (bucket === 'høj') entry.red++;
+    else if (bucket === 'moderat') entry.yellow++;
+    else entry.green++;
+  }
+  return result;
+}
+
+/**
  * Bygger titel/body til den ugentlige badested-digest, eller null hvis der
  * endnu ikke er nok historik (kræver alle 7 foregående dage — ny
  * funktionalitet, ingen bagudrettet data, se plan). Kombinerer bact/viral
@@ -447,6 +501,8 @@ module.exports = {
   getWeeklyBadevandHistory,
   getAllWeeklyBadevandHistory,
   buildWeeklyDigestMessage,
+  riskBucket,
+  getMonthlyRiskBuckets,
   recordPushSent,
   pruneOldPushSendLog,
   getPushSendStats,
