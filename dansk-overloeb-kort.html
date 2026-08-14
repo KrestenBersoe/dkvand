@@ -5897,11 +5897,33 @@ function onDrawCurrentsLayer() {
   updateWaterClipPath();
 }
 
+// Tjekker at alle 3 bånd (u/v/temperatur) rent faktisk er til stede, FØR
+// windy-currents.js selv får chancen til at fejle på det (uncaught, se
+// createWindBuilder's filhoved) — en browser-cachet/afkortet
+// /api/currents/velocity-respons (se loadCurrentsVelocityLayer()'s { cache:
+// 'no-store' }-rettelse) er den kendte årsag, men denne guard beskytter
+// mod ETHVERT fremtidigt tilfælde af manglende bånd, ikke kun den ene.
+function hasAllVelocityBands(velocityJSON) {
+  if (!Array.isArray(velocityJSON) || velocityJSON.length < 3) return false;
+  const need = new Set(['2,2', '2,3', '0,0']);
+  for (const band of velocityJSON) {
+    const key = `${band?.header?.parameterCategory},${band?.header?.parameterNumber}`;
+    need.delete(key);
+  }
+  return need.size === 0;
+}
+
 // (Gen)tilføjer canvas-laget til kortet og starter en FRISK Windy-instans —
 // L.CanvasLayer opretter et helt NYT <canvas>-element ved hver onAdd()
 // (se leaflet-canvas-layer.js), så en tidligere Windy-instans (bundet til
 // det GAMLE canvas) ikke kan genbruges på tværs af til/fra-toggling.
 function activateCurrentsVelocity() {
+  if (!hasAllVelocityBands(currentsVelocityRawData)) {
+    console.warn('Strøm (velocity-test): ugyldigt/ufuldstændigt gitter i cache — henter igen.');
+    currentsVelocityRawData = null;
+    loadCurrentsVelocityLayer();
+    return;
+  }
   if (!map.hasLayer(currentsCanvasLayer)) map.addLayer(currentsCanvasLayer);
   const canvas = currentsCanvasLayer._canvas;
   canvas.style.clipPath = 'url(#currents-water-clip)';
@@ -5945,7 +5967,16 @@ async function loadCurrentsVelocityLayer() {
   currentsVelocityLoading = true;
   try {
     await waitForWaterPolygons();
-    const res = await fetch('api/currents/velocity');
+    // RETTET (bruger-rapport: konsol viste "temp.data" på null i
+    // createWindBuilder — men /api/currents/velocity's LIVE svar er
+    // bekræftet velformet med alle 3 bånd) — { cache: 'no-store' } tvinger
+    // et FRISK netværkskald. Uden det respekterer fetch() bare endpointets
+    // egen Cache-Control: max-age=21600 (6t), og enhver bruger der havde
+    // besøgt siden FØR temperatur-båndet blev tilføjet (samme dag, tidligere
+    // iteration af denne funktion) fik derfor et 6 timer gammelt, kun-2-
+    // bånds svar fra browserens EGEN cache — createBuilder()'s "0,0"-match
+    // for temperatur fandt intet, og temp forblev null.
+    const res = await fetch('api/currents/velocity', { cache: 'no-store' });
     if (!res.ok) throw new Error(`Server svarede ${res.status}`);
     const raw = await res.json();
     currentsVelocityRawData = applyWaterMaskToVelocityData(raw);
