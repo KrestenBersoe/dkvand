@@ -3232,16 +3232,6 @@ let sharedInteractiveRenderer = null;   // sat af renderMap(), genbrugt af badev
 map.createPane('polygonPane');
 map.getPane('polygonPane').style.zIndex = 625;
 
-// waterBgPane (z350) — mørk baggrundsfarve for hav/søer, PERMANENT (se
-// initPermanentWaterBg(), kaldt ubetinget ved sideindlæsning — ikke kun
-// mens strøm-velocity-testlaget er aktivt, bruger-krav 2026-08-14). Ligger
-// over tilePane (200) og under Leaflets standard overlayPane (400, hvor
-// windy-currents.js' canvas selv tegnes) — så animationen tegnes OVEN PÅ
-// denne baggrund, ikke under den. Basiskortets lyseblå havfarve gav for lav
-// kontrast til at partiklerne kunne ses (bruger-rapport).
-map.createPane('waterBgPane');
-map.getPane('waterBgPane').style.zIndex = 350;
-
 // Luk en åbnet kystvande-/sø-tooltip ved klik/tryk andetsteds på kortet —
 // nødvendigt på mobil, hvor der ikke findes en "museover væk"-hændelse til
 // at lukke den automatisk, som der gør på desktop.
@@ -3675,21 +3665,20 @@ function centerOnMyLocation(btnEl) {
   );
 }
 
-// Light basemap — selv-hostet, kun-Danmark tileserver (se tileserver/-
-// mappen i repoet for hele opsætningen).
+// Light basemap — SDFI/Klimadatastyrelsens officielle Skærmkortet (Klassisk),
+// hentet via Datafordelerens WMS og proxyet gennem vores egen /api/tiles/
+// skaermkort/-route i server.js (se dén for hvorfor: nøglen skal blive
+// server-side, og ruten leverer almindelige XYZ-PNG'er, så resten af denne
+// fil er uændret — kun URL'en herunder skiftede).
 //
-// RETTET/MIGRERET: skiftede tidligere gentagne gange leverandør, hver gang
-// det "gratis" niveau blev strammet uden varsel (rå tile.openstreetmap.org
-// → CARTO → MapTiler, se git-historik for de tidligere begrundelser hvis
-// nødvendigt). Mønstret var klart: uautentificerede/kvote-baserede
-// tredjeparts-CDN'er strammes før eller siden. Løsningen her fjerner
-// problemet permanent i stedet for at udskyde det: vi genererer og
-// hoster selv kortfliser for Danmark (+ kystnært farvand), baseret på
-// OpenStreetMap-data (samme kildedata MapTiler i øvrigt selv bruger) via
-// Planetiler + TileServer GL, deployet som en selvstændig Fly.io-service
-// ved siden af denne. Ingen ekstern kvote at løbe tør for, ingen API-nøgle
-// at rotere. Se scripts/tiles/build-denmark-tiles.sh for generering af
-// selve fliserne, og tileserver/ for serverings-opsætningen.
+// RETTET/MIGRERET: kortet var tidligere selv-hostede OSM-baserede fliser
+// (se git-historik: tile.openstreetmap.org → CARTO → MapTiler → egen
+// Planetiler/TileServer-GL-pipeline, se scripts/tiles/build-denmark-
+// tiles.sh og tileserver/ hvis den pipeline skal genoplives). Skiftet til
+// Skærmkortet er bevidst: officiel dansk kortlægning (GeoDanmark + Danske
+// Stednavne) fremfor OSM, på bekostning af at genindføre en ekstern
+// afhængighed (Datafordeler-apikey, 2 års udløb, tjenesten er under
+// migrering frem til jan. 2027) — se serverens kommentar for afvejningen.
 //
 // RETTET (2026-07-25): peger nu på tiles.ditbadevand.dk i stedet for det
 // rå dkvand-tiles.fly.dev — det rå fly.dev-hostname går UDEN OM
@@ -3699,22 +3688,15 @@ function centerOnMyLocation(btnEl) {
 // for hver eneste flise. tiles.ditbadevand.dk er en Cloudflare-proxied
 // CNAME til samme dkvand-tiles.fly.dev (se fly certs list -a dkvand-tiles
 // for TLS-certifikatet), med en Cache Rule der cacher alt på stien —
-// bekræftet virkende (cf-cache-status: HIT på gentagne opslag).
-const TILE_SERVER_URL = 'https://tiles.ditbadevand.dk/styles/basic/{z}/{x}/{y}.png';
+// bekræftet virkende (cf-cache-status: HIT på gentagne opslag). Nu, hvor
+// fliserne kommer fra vores egen /api/tiles/skaermkort/-proxy i stedet for
+// tileserver-Fly-appen, går de allerede gennem samme ditbadevand.dk-
+// origin/Cloudflare-cache uden yderligere opsætning.
+const TILE_SERVER_URL = '/api/tiles/skaermkort/{z}/{x}/{y}.png';
 
 L.tileLayer(TILE_SERVER_URL, {
-  attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  maxZoom: 19,
-  // RETTET (KRITISK — overbelastede tileserveren): denmark.mbtiles har kun
-  // data til zoom 14 (se metadata: minzoom/maxzoom). Uden maxNativeZoom
-  // bad Leaflet tileserveren om ÆGTE fliser for zoom 15-19 også, hvilket
-  // tvang den (kun 1 delt vCPU) til dyr on-the-fly vektor→raster-rendering
-  // pr. flise (1,4-3 sek. observeret pr. flise i produktionslogs) — nok til
-  // at overbelaste serveren så almindelige fliser på ALLE zoom-niveauer
-  // begyndte at time out. maxNativeZoom får Leaflet til i stedet at
-  // CSS-opskalere den sidste rigtige zoom-14-flise for niveau 15-19,
-  // helt uden server-belastning.
-  maxNativeZoom: 14
+  attribution: '© <a href="https://datafordeler.dk">SDFI/Klimadatastyrelsen</a>',
+  maxZoom: 19
 }).addTo(map);
 
 // ── Hjem-kort: separat lille Leaflet-instans for lokal visning ─────────────
@@ -3732,9 +3714,8 @@ function initHjemMap() {
     zoomControl: true,
   });
   L.tileLayer(TILE_SERVER_URL, {
-    attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: 19,
-    maxNativeZoom: 14 // se hovedkortets tileLayer ovenfor for hvorfor
+    attribution: '© <a href="https://datafordeler.dk">SDFI/Klimadatastyrelsen</a>',
+    maxZoom: 19
   }).addTo(hjemMap);
   hjemNearestLayer = L.layerGroup().addTo(hjemMap);
   return hjemMap;
@@ -5693,9 +5674,12 @@ function buildCurrentsArrowLayer() {
 // ovenfor).
 //
 // BRUGERKRAV (itereret over flere runder feedback):
-//   1. Havoverfladens farve er PERMANENT mørkeblå — se
-//      initPermanentWaterBg() nedenfor, kaldes ubetinget ved sideindlæsning,
-//      ikke kun mens dette testlag er aktivt.
+//   1. RETTET (2026-08-14, bruger-beslutning — reverserer et tidligere krav):
+//      havoverfladens farve var en periode PERMANENT mørkeblå (egen SVG-lag,
+//      waterBgPane), indført fordi det daværende basiskorts lyseblå havflade
+//      gav for lav kontrast til partiklerne. Fjernet igen efter skiftet til
+//      Skærmkortet (SDFI/Datafordeler) som basiskort — havfarven skal nu
+//      komme fra selve baggrundskortet, ikke fra et ekstra fyldt lag ovenpå.
 //   2. Visualiseringen forstørret markant — se RETTET-kommentarerne ved
 //      konstanterne øverst i windy-currents.js.
 //   3. Farvekodet efter TEMPERATUR (lyseblå=koldt → mørkerød=varmt), ikke
@@ -5746,44 +5730,6 @@ function computeVelocityTempRangeK(velocityJSON) {
   if (!isFinite(min) || !isFinite(max)) return null; // ingen vandpunkter — lad windy-currents.js' faldback gælde
   return { min, max };
 }
-
-// ── Permanent mørk hav-/sø-baggrund (bruger-krav: ALTID, ikke kun i test) ──
-// Basiskortets lyseblå havflade gav for lav kontrast til de animerede
-// partikler (bruger-rapport). vp3KystvandeRaw/vp3SoeerRaw hentes asynkront
-// af loadVP3Layers() (kaldt ubetinget ved sideindlæsning) — poller derfor
-// billigt indtil mindst ét datasæt er klar, i stedet for at kræve at denne
-// funktion kaldes efter en bestemt anden initialisering er færdig.
-let waterBgLayer = null;
-function buildWaterBgLayer() {
-  const parts = [];
-  if (vp3KystvandeRaw?.features?.length) {
-    parts.push(L.geoJSON(vp3KystvandeRaw, {
-      renderer: L.svg({ pane: 'waterBgPane' }),
-      interactive: false,
-      style: { color: 'transparent', weight: 0, fillColor: '#071c2c', fillOpacity: 0.88 },
-    }));
-  }
-  if (vp3SoeerRaw?.features?.length) {
-    parts.push(L.geoJSON(vp3SoeerRaw, {
-      renderer: L.svg({ pane: 'waterBgPane' }),
-      interactive: false,
-      style: { color: 'transparent', weight: 0, fillColor: '#071c2c', fillOpacity: 0.88 },
-    }));
-  }
-  if (!parts.length) return null;
-  return L.layerGroup(parts);
-}
-function initPermanentWaterBg() {
-  if (waterBgLayer) return;
-  const built = buildWaterBgLayer();
-  if (built) {
-    waterBgLayer = built;
-    map.addLayer(waterBgLayer);
-  } else {
-    setTimeout(initPermanentWaterBg, 500);
-  }
-}
-initPermanentWaterBg();
 
 // ── SVG clip-path: klipper canvas'et PRÆCIST til hav-/sø-polygonernes
 // aktuelle skærmposition, se filhovedets punkt 4. Genberegnes ved hver

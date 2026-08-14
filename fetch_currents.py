@@ -91,8 +91,21 @@ DATASET_ID = "cmems_mod_bal_phy_anfc_PT1H-i"
 LAT_MIN, LAT_MAX = 54.0, 58.0
 LON_MIN, LON_MAX = 8.0, 15.0
 
-# Stride ~4 -> ca. 10 km opløsning.
-STRIDE = 4
+# RETTET (fjorde/smalle bælter manglede næsten al strøm-animation, se
+# dansk-overloeb-kort.html's currents-sektion): windy-currents.js springer
+# en HEL gittercelle over, hvis blot ÉT af dens fire hjørner mangler data
+# (land/uden for CMEMS' maske) — ved STRIDE=4 (~10 km gitter) ramte det
+# 28 ud af 30 celler, der overlapper Isefjord (målt direkte mod
+# produktionens /api/currents/velocity), fordi et ~10 km gitter næsten
+# aldrig finder fire nabopunkter, der ALLE ligger inden for en smal fjord.
+# Halveret til STRIDE=2 (~5 km, dobbelt så fint i begge retninger, altså
+# ca. 4x så mange gitterpunkter som før) som et første, forsigtigt skridt —
+# CMEMS' native opløsning er ~2,5 km, så STRIDE=1 ville ramme den præcist,
+# men det giver ~16x flere punkter end i dag; test STRIDE=2's effekt på
+# fjord-dækningen, FØR der eventuelt skrues yderligere ned (se også
+# alternativet i dansk-overloeb-kort.html: lempe windy's "alle fire hjørner
+# skal være gyldige"-krav i stedet for/i tillæg til dette).
+STRIDE = 2
 
 # ── subset() i stedet for open_dataset() ─────────────────────────────────────
 # open_dataset() streamer datasættet lazy via xarray/dask/zarr, hvilket har en
