@@ -15,6 +15,7 @@ process.env.ADMIN_SESSION_SECRET = 'test-session-secret-ikke-en-rigtig-hemmeligh
 
 const {
   encryptClientSecret, decryptClientSecret,
+  signPayload, verifyPayload,
   signSession, verifySession, parseCookies,
   buildSessionSetCookieHeader, buildClearSessionSetCookieHeader,
   requireTenantSession, SESSION_COOKIE_NAME,
@@ -54,6 +55,37 @@ test('decrypt: forkert IV fejler (eller giver forkert resultat, aldrig den rigti
   const enc = encryptClientSecret('vigtig-hemmelighed');
   const wrongIv = Buffer.from(enc.iv); wrongIv[0] ^= 0xff;
   assert.throws(() => decryptClientSecret({ ...enc, iv: wrongIv }));
+});
+
+// ── signPayload / verifyPayload (generisk, Kommunepakke modul 3) ─────────
+test('signPayload→verifyPayload: vilkårligt payload rundtur, inkl. iat/exp', () => {
+  const cookie = signPayload({ tenantId: 'abc', codeVerifier: 'xyz' }, 10 * 60 * 1000);
+  const result = verifyPayload(cookie);
+  assert.strictEqual(result.tenantId, 'abc');
+  assert.strictEqual(result.codeVerifier, 'xyz');
+  assert.strictEqual(typeof result.iat, 'number');
+  assert.strictEqual(typeof result.exp, 'number');
+});
+test('signPayload: maxAgeMs sætter exp = iat + maxAgeMs, uafhængigt af sessionens 12 timer', () => {
+  const TEN_MIN_MS = 10 * 60 * 1000;
+  const cookie = signPayload({ x: 1 }, TEN_MIN_MS);
+  const payload = verifyPayload(cookie);
+  assert.strictEqual(payload.exp - payload.iat, TEN_MIN_MS);
+  assert.ok(payload.exp - payload.iat < 12 * 3600 * 1000, 'skal være markant kortere end sessionens 12 timer');
+});
+test('verifyPayload: udløbet payload (kort maxAgeMs) afvises — samme deterministiske teknik som "verify: udløbet session afvises" (håndkrafted exp i fortiden, ingen reel ventetid)', () => {
+  const payload = { x: 1, iat: Date.now() - 700000, exp: Date.now() - 600000 }; // "udløbet for 10 min siden" — simulerer en OAuth-state-cookie, der overskred sin 10-minutters levetid
+  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const sig = require('crypto').createHmac('sha256', process.env.ADMIN_SESSION_SECRET).update(payloadB64).digest('hex');
+  assert.strictEqual(verifyPayload(payloadB64 + '.' + sig), null);
+});
+test('verifyPayload: manipuleret payload afvises (samme signaturbeskyttelse som verifySession)', () => {
+  const cookie = signPayload({ tenantId: 'abc' }, 60000);
+  const [payloadB64, sig] = cookie.split('.');
+  const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+  payload.tenantId = 'ONDSINDET';
+  const forged = Buffer.from(JSON.stringify(payload)).toString('base64url') + '.' + sig;
+  assert.strictEqual(verifyPayload(forged), null);
 });
 
 // ── signSession / verifySession ──────────────────────────────────────────

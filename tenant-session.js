@@ -73,10 +73,20 @@ function decryptClientSecret({ ciphertext, iv, authTag }) {
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
 }
 
-// ── Sessions-cookie — håndrullet, signeret, INGEN session-store/express-
+// ── Signerede cookies (generisk) — håndrullet, INGEN session-store/express-
 // session (appen er i dag helt stateless, og repoets stil er konsekvent
 // "ingen unødig afhængighed" — samme princip som badested-observations.js's
 // håndrullede IP-hashing). Format: <base64url(JSON-payload)>.<hex-HMAC>.
+//
+// RETTET (Kommunepakke, modul 3): generaliseret fra den tidligere
+// sessions-specifikke signSession()/verifySession() til signPayload()/
+// verifyPayload() med en VILKÅRLIG payload og udløbstid — genbruges nu af
+// BÅDE selve sessions-cookien (12 timer) OG modul 3's kortlivede (10 min)
+// OAuth-state-cookie (state/nonce/PKCE-code_verifier under selve login-
+// omdirigeringen til udbyderen). Samme signatur-/timingSafeEqual-logik som
+// før, blot ikke længere hårdkodet til {tenantId,authMethod}-formen.
+// signSession()/verifySession() er nu TYNDE wrappers herom — deres
+// offentlige adfærd/signatur er UÆNDRET, se tenant-session.test.js.
 const SESSION_COOKIE_NAME = 'dkv_admin_session';
 const SESSION_MAX_AGE_MS = 12 * 3600 * 1000; // 12 timer — én arbejdsdag, kommune-medarbejder logger ind igen næste dag
 // Defensiv note: 'Secure'-cookie-flaget kræver HTTPS. fly.toml sætter
@@ -88,22 +98,23 @@ const SESSION_MAX_AGE_MS = 12 * 3600 * 1000; // 12 timer — én arbejdsdag, kom
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 /**
- * @param {{tenantId: string, authMethod: 'trial'|'oauth'}} p
+ * @param {object} payload — vilkårligt JSON-serialiserbart objekt
+ * @param {number} maxAgeMs — udløbstid, tilføjes som payload.exp
  * @returns {string} cookieværdi (ikke selve Set-Cookie-headeren)
  */
-function signSession({ tenantId, authMethod }) {
+function signPayload(payload, maxAgeMs) {
   const now = Date.now();
-  const payload = { tenantId, authMethod, iat: now, exp: now + SESSION_MAX_AGE_MS };
-  const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const full = { ...payload, iat: now, exp: now + maxAgeMs };
+  const payloadB64 = Buffer.from(JSON.stringify(full), 'utf8').toString('base64url');
   const sig = crypto.createHmac('sha256', SESSION_SECRET).update(payloadB64).digest('hex');
   return `${payloadB64}.${sig}`;
 }
 
 /**
  * @param {string|undefined} cookieValue
- * @returns {{tenantId: string, authMethod: string}|null}
+ * @returns {object|null} det oprindelige payload (inkl. iat/exp) eller null ved manipuleret/udløbet/ugyldig cookie
  */
-function verifySession(cookieValue) {
+function verifyPayload(cookieValue) {
   if (!cookieValue || typeof cookieValue !== 'string') return null;
   const dotIdx = cookieValue.lastIndexOf('.');
   if (dotIdx < 0) return null;
@@ -121,7 +132,24 @@ function verifySession(cookieValue) {
   try { payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')); }
   catch (e) { return null; }
   if (!payload || typeof payload.exp !== 'number' || payload.exp < Date.now()) return null;
-  if (!payload.tenantId || !payload.authMethod) return null;
+  return payload;
+}
+
+/**
+ * @param {{tenantId: string, authMethod: 'trial'|'oauth'}} p
+ * @returns {string} cookieværdi (ikke selve Set-Cookie-headeren)
+ */
+function signSession({ tenantId, authMethod }) {
+  return signPayload({ tenantId, authMethod }, SESSION_MAX_AGE_MS);
+}
+
+/**
+ * @param {string|undefined} cookieValue
+ * @returns {{tenantId: string, authMethod: string}|null}
+ */
+function verifySession(cookieValue) {
+  const payload = verifyPayload(cookieValue);
+  if (!payload || !payload.tenantId || !payload.authMethod) return null;
   return { tenantId: payload.tenantId, authMethod: payload.authMethod };
 }
 
@@ -177,6 +205,8 @@ module.exports = {
   encryptClientSecret,
   decryptClientSecret,
   SESSION_COOKIE_NAME,
+  signPayload,
+  verifyPayload,
   signSession,
   verifySession,
   parseCookies,

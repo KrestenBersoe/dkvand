@@ -194,10 +194,20 @@ const DISCOVERY_MAX_BYTES = 100 * 1024;
 const REQUIRED_DISCOVERY_FIELDS = ['issuer', 'authorization_endpoint', 'token_endpoint', 'jwks_uri'];
 
 /**
+ * SSRF-sikker hentning af en vilkårlig bruger-angivet URL, forventet at
+ * indeholde et OIDC/OAuth2 discovery-JSON-dokument — se filhovedets
+ * begrundelse. UDTRUKKET som selvstændig funktion (RETTET, Kommunepakke
+ * modul 3): oprindeligt indlejret direkte i validateDiscoveryUrl(), men
+ * oauth-login.js har brug for PRÆCIS samme SSRF-beskyttelse, når det
+ * (ved hvert login-forsøg, se filhovedet) skal genhente samme dokument
+ * for reelt at kunne konstruere en openid-client Configuration — at lade
+ * to steder i koden hver hånd-rulle deres egen udgave af SSRF-tjekket
+ * ville være at duplikere præcis den slags sikkerhedskritiske kode, denne
+ * fil ellers konsekvent undgår at duplikere.
  * @param {string} rawUrl
- * @returns {Promise<{ok: true}|{ok: false, reason: string}>}
+ * @returns {Promise<{ok: true, doc: object}|{ok: false, reason: string}>}
  */
-async function validateDiscoveryUrl(rawUrl) {
+async function fetchDiscoveryDocument(rawUrl) {
   let parsed;
   try { parsed = new URL(rawUrl); }
   catch (e) { return { ok: false, reason: 'Ugyldig URL.' }; }
@@ -271,17 +281,27 @@ async function validateDiscoveryUrl(rawUrl) {
         let doc;
         try { doc = JSON.parse(body); }
         catch (e) { return settle({ ok: false, reason: "Discovery-URL'en returnerede ikke gyldig JSON." }); }
-        const missing = REQUIRED_DISCOVERY_FIELDS.filter(f => typeof doc[f] !== 'string' || !doc[f]);
-        if (missing.length > 0) {
-          return settle({ ok: false, reason: `Discovery-dokumentet mangler felt(er): ${missing.join(', ')}.` });
-        }
-        settle({ ok: true });
+        settle({ ok: true, doc });
       });
       res.on('error', e => settle({ ok: false, reason: `Fejl ved læsning af svar: ${e.message}` }));
     });
     req.on('timeout', () => { req.destroy(); settle({ ok: false, reason: "Discovery-URL'en svarede ikke inden for tidsgrænsen." }); });
     req.on('error', e => settle({ ok: false, reason: `Kunne ikke kontakte discovery-URL'en: ${e.message}` }));
   });
+}
+
+/**
+ * @param {string} rawUrl
+ * @returns {Promise<{ok: true}|{ok: false, reason: string}>}
+ */
+async function validateDiscoveryUrl(rawUrl) {
+  const result = await fetchDiscoveryDocument(rawUrl);
+  if (!result.ok) return result;
+  const missing = REQUIRED_DISCOVERY_FIELDS.filter(f => typeof result.doc[f] !== 'string' || !result.doc[f]);
+  if (missing.length > 0) {
+    return { ok: false, reason: `Discovery-dokumentet mangler felt(er): ${missing.join(', ')}.` };
+  }
+  return { ok: true };
 }
 
 /**
@@ -360,6 +380,74 @@ async function getOauthConfig(tenantId) {
   return { ...rows[0], hasSecret: true };
 }
 
+// ── OAuth-login (Kommunepakke, modul 3) ─────────────────────────────────────
+
+/**
+ * Finder en VERIFICERET OAuth-konfiguration for det domæne, en bruger
+ * indtastede på /admin/login. Kun verified_at IS NOT NULL kan bruges til
+ * et reelt login-forsøg (se modul 2: en ubekræftet konfiguration kan
+ * skyldes en fejlkonfigureret discovery-URL — skal ikke kunne forsøges).
+ * Flere matches burde ikke forekomme (domæner er unikke pr. kommune i
+ * praksis) — logges som advarsel, første match bruges, ingen hård fejl
+ * (en driftsforstyrrelse for ÉN kommune skal ikke kunne blokere login for
+ * andre).
+ * @param {string} emailDomain — allerede udtrukket/normaliseret domæne, se emailMatchesAllowedDomains()
+ * @returns {Promise<{tenantId: string, providerType: string, clientId: string, discoveryUrl: string, allowedEmailDomains: string[]}|null>}
+ */
+async function findTenantOauthConfigByEmailDomain(emailDomain) {
+  const { rows } = await query(
+    `SELECT tenant_id, provider_type, client_id, discovery_url, allowed_email_domains
+     FROM tenant_oauth_configs
+     WHERE verified_at IS NOT NULL AND $1 = ANY(allowed_email_domains)`,
+    [emailDomain]
+  );
+  if (rows.length === 0) return null;
+  if (rows.length > 1) {
+    console.warn(`findTenantOauthConfigByEmailDomain: ${rows.length} tenants deler domænet "${emailDomain}" — bruger første match (tenant_id=${rows[0].tenant_id})`);
+  }
+  const row = rows[0];
+  return {
+    tenantId: row.tenant_id,
+    providerType: row.provider_type,
+    clientId: row.client_id,
+    discoveryUrl: row.discovery_url,
+    allowedEmailDomains: row.allowed_email_domains,
+  };
+}
+
+/**
+ * INTERN udgave af getOauthConfig() — DEKRYPTERER client_secret. Kaldes
+ * UDELUKKENDE af oauth-login.js, som reelt skal tale med udbyderen for at
+ * udveksle en autorisationskode. ALDRIG brugt af noget der sender data
+ * videre til en klient — modsat getOauthConfig() ovenfor (den offentlige,
+ * sikre udgave bag modul 2's indstillingsside), bevidst navngivet tydeligt
+ * forskelligt for at gøre det umuligt ved en fejl at forveksle de to.
+ * @param {string} tenantId
+ */
+async function getOauthConfigForLogin(tenantId) {
+  const { rows } = await query(
+    `SELECT provider_type, client_id, client_secret_ciphertext, client_secret_iv, client_secret_auth_tag,
+            discovery_url, allowed_email_domains, verified_at
+     FROM tenant_oauth_configs WHERE tenant_id = $1`,
+    [tenantId]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const clientSecret = tenantSession.decryptClientSecret({
+    ciphertext: row.client_secret_ciphertext,
+    iv: row.client_secret_iv,
+    authTag: row.client_secret_auth_tag,
+  });
+  return {
+    providerType: row.provider_type,
+    clientId: row.client_id,
+    clientSecret,
+    discoveryUrl: row.discovery_url,
+    allowedEmailDomains: row.allowed_email_domains,
+    verifiedAt: row.verified_at,
+  };
+}
+
 module.exports = {
   ready,
   // re-eksporteret fra tenant-session.js — se filhovedets "Filopdeling"
@@ -374,7 +462,11 @@ module.exports = {
   consumeTrialLogin,
   getTenant,
   // OAuth-konfiguration (modul 2)
+  fetchDiscoveryDocument,
   validateDiscoveryUrl,
   upsertOauthConfig,
   getOauthConfig,
+  // OAuth-login (modul 3)
+  findTenantOauthConfigByEmailDomain,
+  getOauthConfigForLogin,
 };

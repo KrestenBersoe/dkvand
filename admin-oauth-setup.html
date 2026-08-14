@@ -101,6 +101,12 @@ function render() {
     <div class="sub">Konfigurer jeres egen login-udbyder for medarbejder-adgang til dashboardet ${verifiedBadge}</div>
 
     <div class="card">
+      <h2>Redirect URI</h2>
+      <div class="hint" style="margin-top:0">Registrér denne PRÆCISE adresse som tilladt redirect/callback-URL hos jeres udbyder, FØR I opretter en Client ID/Secret til ditbadevand.dk:</div>
+      <input type="text" value="${escHtml(cfg.redirectUri || '')}" readonly onclick="this.select()" style="margin-top:.5rem;font-family:monospace;font-size:.82rem">
+    </div>
+
+    <div class="card">
       <h2>Udbyder</h2>
       <label for="f-provider">OAuth 2.0 / OpenID Connect-udbyder</label>
       <select id="f-provider">
@@ -178,7 +184,12 @@ async function save() {
     const message = data.verified
       ? '✓ Gemt og bekræftet — discovery-dokumentet blev hentet og valideret korrekt.'
       : `Gemt, men kunne ikke bekræfte discovery-URL'en: ${data.verifyReason || 'ukendt årsag'}. Tjek URL'en og gem igen.`;
-    window.__OAUTH_CONFIG__ = { config: data.config };
+    // RETTET: bevar redirectUri fra det ORIGINALT injicerede objekt —
+    // POST-svaret indeholder kun { config, verified, verifyReason }, ikke
+    // redirectUri (den ændrer sig aldrig i løbet af en sides levetid, kun
+    // config gør). Uden dette blev redirect-URI-feltet fejlagtigt tomt
+    // efter enhver vellykket gemning.
+    window.__OAUTH_CONFIG__ = { ...window.__OAUTH_CONFIG__, config: data.config };
     render();
     const newStatusEl = document.getElementById('status-msg');
     newStatusEl.textContent = message;

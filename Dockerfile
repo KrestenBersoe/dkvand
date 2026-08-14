@@ -58,13 +58,19 @@ COPY tenant-session.js ./
 # HER (før deploy, ikke efter) efter modul 1's produktionsudfald lærte
 # denne lektie — se planens ⚠️-tjekliste-punkt.
 COPY oauth-config-validation.js ./
-# server.js's GET /admin/dashboard og GET /admin/settings/oauth læser
-# disse filer direkte via fs.readFileSync(STATIC_DIR, ...) ved hver
-# request (samme mønster som stats.html nedenfor) — mangler en af dem,
-# fejler netop DEN rute med ENOENT, men crasher IKKE hele processen
-# (læsningen sker i en try/catch, se ruterne).
+# NYT: Kommunepakke, modul 3 — server.js requirer nu også
+# (require('./oauth-login')) dette modul ved opstart (openid-client-
+# integrationen), samme "crasher øjeblikkeligt uden denne linje"-fælde
+# som de øvrige lokale moduler i denne fil.
+COPY oauth-login.js ./
+# server.js's GET /admin/dashboard, GET /admin/settings/oauth og
+# GET /admin/login læser disse filer direkte via fs.readFileSync(STATIC_DIR,
+# ...) ved hver request (samme mønster som stats.html nedenfor) — mangler
+# en af dem, fejler netop DEN rute med ENOENT, men crasher IKKE hele
+# processen (læsningen sker i en try/catch, se ruterne).
 COPY admin-dashboard.html ./
 COPY admin-oauth-setup.html ./
+COPY admin-login.html ./
 COPY fetch_currents.py ./
 COPY dansk-overloeb-kort.html ./
 COPY badevand-risk.js ./

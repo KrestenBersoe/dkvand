@@ -51,6 +51,27 @@ function normalizeEmailDomains(rawInput) {
   return unique;
 }
 
+// NYT (Kommunepakke, modul 3): genbruges af BÅDE /admin/logins indledende
+// e-mail→tenant-opslag OG oauth-login.js's callback-genkontrol EFTER selve
+// OAuth-godkendelsen (den faktisk AUTENTIFICEREDE e-mail kan afvige fra den,
+// brugeren indtastede før omdirigeringen — begge steder skal tjekke
+// uafhængigt, se planens login-flow-afsnit). Sammenligner udelukkende
+// domænedelen, case-insensitivt — allowedDomains forventes allerede
+// normaliseret (se normalizeEmailDomains()), men lowercases forsvarligt
+// begge sider alligevel.
+/**
+ * @param {string} email
+ * @param {string[]} allowedDomains
+ * @returns {boolean}
+ */
+function emailMatchesAllowedDomains(email, allowedDomains) {
+  if (typeof email !== 'string' || !Array.isArray(allowedDomains)) return false;
+  const atIdx = email.lastIndexOf('@');
+  if (atIdx < 0 || atIdx === email.length - 1) return false;
+  const domain = email.slice(atIdx + 1).toLowerCase();
+  return allowedDomains.some(d => String(d).toLowerCase() === domain);
+}
+
 // ── SSRF-beskyttelse: private/loopback/link-local/reserverede IP-ranges ────
 // Bruges af tenant-admin.js's validateDiscoveryUrl() til at afvise en
 // resolvet IP FØR noget HTTP-kald sker. Se planens "Ny sikkerhedsrisiko"-
@@ -124,5 +145,6 @@ module.exports = {
   PROVIDER_TYPES,
   isValidProviderType,
   normalizeEmailDomains,
+  emailMatchesAllowedDomains,
   isPrivateOrDisallowedIp,
 };

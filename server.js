@@ -53,6 +53,9 @@ const seoPages     = require('./seo-pages');
 // kommende kommune-admin-dashboard. Se modulets eget filhoved for den fulde
 // afgrænsning af hvad der ER og IKKE ER med i dette modul.
 const tenantAdmin  = require('./tenant-admin');
+// NYT (Kommunepakke, modul 3): dynamisk OAuth-login (openid-client) — se
+// modulets eget filhoved.
+const oauthLogin   = require('./oauth-login');
 // NYT: delt Postgres-forbindelse — push-abonnementer/-kø (nedenfor) er den
 // sidste del af appen der stadig lå i en lokal, ikke-delt fil/Map, se
 // db.js's filhoved for den fulde begrundelse (samme multi-maskine-
@@ -473,8 +476,11 @@ app.post('/admin/logout', (req, res) => {
 app.get('/admin/settings/oauth', tenantAdmin.requireTenantSession, async (req, res) => {
   try {
     const config = await tenantAdmin.getOauthConfig(req.tenant.tenantId);
+    // NYT (Kommunepakke, modul 3): redirectUri kan først vises nu selve
+    // callback-ruten reelt findes — kommunen skal registrere DENNE præcise
+    // URL som deres tilladte redirect_uri hos egen udbyder.
     const html = fs.readFileSync(path.join(STATIC_DIR, 'admin-oauth-setup.html'), 'utf8')
-      .replace('%%OAUTH_CONFIG_JSON%%', JSON.stringify({ config }));
+      .replace('%%OAUTH_CONFIG_JSON%%', JSON.stringify({ config, redirectUri: oauthLogin.CALLBACK_URL }));
     res.set('Cache-Control', 'no-store');
     res.set('Content-Type', 'text/html; charset=utf-8');
     res.send(html);
@@ -549,6 +555,93 @@ app.post('/admin/settings/oauth', tenantAdmin.requireTenantSession, express.json
   } catch (e) {
     console.error('admin/settings/oauth POST: uventet fejl —', e.message);
     res.status(500).json({ error: 'Kunne ikke gemme OAuth-opsætning lige nu.' });
+  }
+});
+
+// ── Kommunepakke, modul 3 — dynamisk OAuth-login ────────────────────────────
+// Se oauth-login.js's filhoved for selve flowet (autorisationskode+PKCE,
+// standard OIDC). Ingen requireTenantSession her — det er JO netop det,
+// brugeren er ved at opnå.
+app.get('/admin/login', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(STATIC_DIR, 'admin-login.html'));
+});
+
+// NYT: rute-lokal express.urlencoded() — admin-login.html bruger en
+// ALMINDELIG HTML-formular-POST (ikke fetch/JSON, se dens filhoved for
+// hvorfor), browseren sender derfor application/x-www-form-urlencoded,
+// IKKE JSON. Samme "rute-lokal, ikke global"-begrundelse som
+// POST /admin/settings/oauths express.json() ovenfor.
+app.post('/admin/login', express.urlencoded({ extended: false }), async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim();
+    const atIdx = email.lastIndexOf('@');
+    if (atIdx < 0 || atIdx === email.length - 1) {
+      return res.redirect('/admin/login?error=' + encodeURIComponent('Angiv en gyldig e-mailadresse.'));
+    }
+    const domain = email.slice(atIdx + 1).toLowerCase();
+
+    // Bevidst GENERISK fejlbesked ved intet match — samme "afslør ikke
+    // præcis hvorfor"-princip som trial-loginets fejlbesked (se
+    // GET /admin/trial/:token) — ikke et forsøg på hemmeligholdelse af
+    // hvilke kommuner der bruger platformen (lav-stakes B2G-kontekst,
+    // ikke en hemmelighed i sig selv), men almindelig hygiejne mod
+    // automatiseret afprøvning af domænelisten.
+    const providerConfig = await tenantAdmin.findTenantOauthConfigByEmailDomain(domain);
+    if (!providerConfig) {
+      return res.redirect('/admin/login?error=' + encodeURIComponent('Kunne ikke finde en kommune tilknyttet denne e-mailadresse.'));
+    }
+
+    let redirectUrl, stateCookieValue;
+    try {
+      ({ redirectUrl, stateCookieValue } = await oauthLogin.buildAuthorizationRedirect({
+        tenantId: providerConfig.tenantId,
+        clientId: providerConfig.clientId,
+        discoveryUrl: providerConfig.discoveryUrl,
+      }));
+    } catch (e) {
+      console.error('admin/login: kunne ikke bygge autorisations-URL —', e.message);
+      return res.redirect('/admin/login?error=' + encodeURIComponent(e.message));
+    }
+
+    res.set('Set-Cookie', oauthLogin.buildOauthStateSetCookieHeader(stateCookieValue));
+    res.redirect(redirectUrl.href);
+  } catch (e) {
+    console.error('admin/login POST: uventet fejl —', e.message);
+    res.redirect('/admin/login?error=' + encodeURIComponent('Der opstod en uventet fejl — prøv igen.'));
+  }
+});
+
+app.get(oauthLogin.CALLBACK_PATH, async (req, res) => {
+  try {
+    const cookies = tenantAdmin.parseCookies(req.headers.cookie);
+    const stateCookieValue = cookies[oauthLogin.OAUTH_STATE_COOKIE_NAME];
+    // NYT: currentUrl bygges fra seoPages.SITE_URL (fast, kendt korrekt —
+    // samme kilde som resten af appens absolutte URL'er) + req.originalUrl,
+    // IKKE fra req.protocol/req.get('host') — undgår enhver tvivl om
+    // hvorvidt Fly's proxy-headere (X-Forwarded-*) er korrekt tillid-
+    // svækkede her; fly.toml's force_https garanterer allerede at eksterne
+    // requests ankommer som https.
+    const currentUrl = new URL(seoPages.SITE_URL + req.originalUrl);
+
+    const { tenantId, email } = await oauthLogin.handleCallback({ stateCookieValue, currentUrl });
+    // RETTET: rydning af state-cookien og udstedelse af den nye sessions-
+    // cookie skal ske i SAMME Set-Cookie-header — res.set() OVERSKRIVER
+    // (ikke tilføjer til) en tidligere sat Set-Cookie-header, et separat
+    // clearStateCookie()-kald HER ville derfor blot være blevet overskrevet
+    // igen af linjen nedenfor og aldrig reelt sendt til klienten.
+    const sessionCookie = tenantAdmin.signSession({ tenantId, authMethod: 'oauth' });
+    res.set('Set-Cookie', [oauthLogin.buildClearOauthStateSetCookieHeader(), tenantAdmin.buildSessionSetCookieHeader(sessionCookie)]);
+    console.info(`admin/oauth/callback: login lykkedes for ${email.replace(/^(.).*(@.*)$/, '$1***$2')} (tenant=${tenantId})`);
+    res.redirect('/admin/dashboard');
+  } catch (e) {
+    res.set('Set-Cookie', oauthLogin.buildClearOauthStateSetCookieHeader());
+    // e.message er ALTID bruger-sikker her — se oauth-login.js's
+    // handleCallback(), hver kastet fejl har eksplicit en formuleret,
+    // ikke-lækkende besked. e.cause (hvis sat) logges server-side for
+    // egen fejlfinding, aldrig videre til klienten.
+    console.error(`admin/oauth/callback: fejlede (${e.code || 'UKENDT'}) —`, e.message, e.cause ? `— cause: ${e.cause.message}` : '');
+    res.redirect('/admin/login?error=' + encodeURIComponent(e.message || 'Login mislykkedes — prøv igen.'));
   }
 });
 

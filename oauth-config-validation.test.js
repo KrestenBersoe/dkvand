@@ -7,7 +7,7 @@
 const assert = require('assert');
 const {
   PROVIDER_TYPES, isValidProviderType,
-  normalizeEmailDomains, isPrivateOrDisallowedIp,
+  normalizeEmailDomains, emailMatchesAllowedDomains, isPrivateOrDisallowedIp,
 } = require('./oauth-config-validation');
 
 let passed = 0, failed = 0;
@@ -55,6 +55,35 @@ test('normalizeEmailDomains: ugyldigt domæne (intet punktum) kaster', () => {
 });
 test('normalizeEmailDomains: en fuld e-mailadresse (ikke kun domæne) kaster', () => {
   assert.throws(() => normalizeEmailDomains('jens@kommune.dk'), /gyldigt domænenavn/);
+});
+
+// ── emailMatchesAllowedDomains ─────────────────────────────────────────────
+test('emailMatchesAllowedDomains: matcher domænet efter @', () => {
+  assert.strictEqual(emailMatchesAllowedDomains('jens@kommune.dk', ['kommune.dk']), true);
+});
+test('emailMatchesAllowedDomains: case-insensitiv på begge sider', () => {
+  assert.strictEqual(emailMatchesAllowedDomains('Jens@KOMMUNE.DK', ['kommune.dk']), true);
+  assert.strictEqual(emailMatchesAllowedDomains('jens@kommune.dk', ['KOMMUNE.DK']), true);
+});
+test('emailMatchesAllowedDomains: ikke-matchende domæne afvises', () => {
+  assert.strictEqual(emailMatchesAllowedDomains('jens@andet.dk', ['kommune.dk']), false);
+});
+test('emailMatchesAllowedDomains: matcher mod EN af flere tilladte domæner', () => {
+  assert.strictEqual(emailMatchesAllowedDomains('jens@andet.dk', ['kommune.dk', 'andet.dk']), true);
+});
+test('emailMatchesAllowedDomains: ugyldig e-mail (intet @, eller @ som sidste tegn) afvises uden at kaste', () => {
+  assert.strictEqual(emailMatchesAllowedDomains('ikke-en-email', ['kommune.dk']), false);
+  assert.strictEqual(emailMatchesAllowedDomains('jens@', ['kommune.dk']), false);
+  assert.strictEqual(emailMatchesAllowedDomains('', ['kommune.dk']), false);
+});
+test('emailMatchesAllowedDomains: ugyldigt/manglende input afvises uden at kaste', () => {
+  assert.strictEqual(emailMatchesAllowedDomains(undefined, ['kommune.dk']), false);
+  assert.strictEqual(emailMatchesAllowedDomains('jens@kommune.dk', undefined), false);
+  assert.strictEqual(emailMatchesAllowedDomains('jens@kommune.dk', []), false);
+});
+test('emailMatchesAllowedDomains: en e-mail med flere @-tegn matcher stadig kun den SIDSTE del som domæne', () => {
+  assert.strictEqual(emailMatchesAllowedDomains('a@b@kommune.dk', ['kommune.dk']), true);
+  assert.strictEqual(emailMatchesAllowedDomains('a@b@kommune.dk', ['b']), false);
 });
 
 // ── isPrivateOrDisallowedIp ────────────────────────────────────────────────

@@ -12,6 +12,7 @@
     "compression": "^1.7.4",
     "express": "^4.21.0",
     "multer": "^2.2.0",
+    "openid-client": "^6.8.5",
     "pg": "^8.22.0",
     "proj4": "^2.20.9",
     "web-push": "^3.6.7"
