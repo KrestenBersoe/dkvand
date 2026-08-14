@@ -62,7 +62,15 @@ var Windy = function (params) {
 	// hurtig og langsom strøm bliver visuelt tydelig ÉN halelængde ad
 	// gangen, ikke kun via hvor mange (ens-falmende) tidligere billeder der
 	// statistisk overlapper. 1 = intet ekstra (kun det naturlige segment).
-	const TAIL_LENGTH_MULTIPLIER = 2.5;
+	// RETTET: 2.5 → 10 (bruger-rapport: ingen synlig forskel) — det
+	// dominerende visuelle "hale"-indtryk i dette partikelsystem kommer fra
+	// den FLERBILLEDE falme-effekt (draw()'s globalAlpha=.16-udtoning,
+	// ENS for alle partikler uanset fart), ikke fra ét enkelt billedes
+	// segment — 2.5x af et i forvejen kort segment, oven i PARTICLE_LINE_
+	// WIDTH's runde endestykker (som selv bidrager synlig "klat"-bredde),
+	// druknede simpelthen i det. Markant større multiplikator nødvendig
+	// for at gøre længde-forskellen tydelig over for det.
+	const TAIL_LENGTH_MULTIPLIER = 10;
 	const PARTICLE_MULTIPLIER = 1 / 60;                                          // RETTET: 1/200 → 1/60 (tættere partikelfelt)
 	const PARTICLE_REDUCTION = (Math.pow(window.devicePixelRatio,1/3) || 1.6);   // multiply particle count for mobiles by this amount
 	const FRAME_RATE = 15, FRAME_TIME = 1000 / FRAME_RATE;                       // desired frames per second
