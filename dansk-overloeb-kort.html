@@ -5914,10 +5914,37 @@ function deactivateCurrentsVelocity() {
   if (currentsCanvasLayer && map.hasLayer(currentsCanvasLayer)) map.removeLayer(currentsCanvasLayer);
 }
 
+// RETTET (bruger-rapport: knappen skifter tilstand, men intet vises):
+// isSeaOrLakeWater() returnerer BEVIDST false for ALT, hvis hverken
+// vp3KystvandeRaw eller vp3SoeerRaw er hentet endnu (se dens filhoved,
+// "vis intet frem for forkert") — men loadVP3Layers() henter dem
+// ASYNKRONT fra sideindlæsning (985 sø-polygoner tager mærkbar tid), og
+// intet forhindrede tidligere brugeren i at klikke "Strøm (test)" FØR de
+// var klar. Resultatet var et gitter maskeret til null OVERALT (ingen
+// data at tegne) — og fordi currentsVelocityRawData derefter var ikke-
+// null (blot alt-null indeni), forsøgte toggleCurrentsVelocity() aldrig
+// at hente igen ved efterfølgende til/fra-klik, så fejlen var permanent
+// for resten af sessionen. Venter nu på (mindst ét af) datasættene, med
+// en generøs timeout som sikkerhedsventil, hvis VP3-hentningen fejler
+// helt.
+function waitForWaterPolygons(timeoutMs = 15000) {
+  return new Promise(resolve => {
+    const start = Date.now();
+    (function poll() {
+      if (vp3KystvandeRaw?.features?.length || vp3SoeerRaw?.features?.length || Date.now() - start > timeoutMs) {
+        resolve();
+      } else {
+        setTimeout(poll, 300);
+      }
+    })();
+  });
+}
+
 async function loadCurrentsVelocityLayer() {
   if (currentsVelocityLoading) return;
   currentsVelocityLoading = true;
   try {
+    await waitForWaterPolygons();
     const res = await fetch('api/currents/velocity');
     if (!res.ok) throw new Error(`Server svarede ${res.status}`);
     const raw = await res.json();
