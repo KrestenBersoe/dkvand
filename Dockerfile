@@ -41,6 +41,22 @@ COPY water-classification.js ./
 # som resten af de lokale moduler i denne fil.
 COPY slug-index.js ./
 COPY seo-pages.js ./
+# RETTET (produktionsudfald 2026-08-14): Kommunepakke, modul 1 — server.js
+# kræver (require('./tenant-admin'), som selv require'r require('./tenant-
+# session')) disse to moduler ved opstart, samme "crasher øjeblikkeligt
+# uden denne linje"-fælde som resten af de lokale moduler i denne fil.
+# Manglede oprindeligt her, hvilket fik containeren til at crashe i et
+# tæt genstarts-loop i produktion (Node: "Cannot find module
+# './tenant-admin'") — Fly's egen rate-limiting på gentagne maskine-
+# genstarter eskalerede det hurtigt til et fuldt udfald af hele siden,
+# ikke kun den nye Kommunepakke-funktion.
+COPY tenant-admin.js ./
+COPY tenant-session.js ./
+# server.js's GET /admin/dashboard læser denne fil direkte via
+# fs.readFileSync(STATIC_DIR, ...) ved hver request (samme mønster som
+# stats.html nedenfor) — mangler den, fejler ruten med ENOENT, men
+# crasher IKKE hele processen (læsningen sker i en try/catch, se ruten).
+COPY admin-dashboard.html ./
 COPY fetch_currents.py ./
 COPY dansk-overloeb-kort.html ./
 COPY badevand-risk.js ./
