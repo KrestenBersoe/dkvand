@@ -5719,8 +5719,13 @@ function updateWaterClipPath() {
       }
     }
   };
+  // RETTET (bruger-krav: strøm-animationen skal KUN vises i hav-/kystvande,
+  // ikke søer) — addFeatures(vp3SoeerRaw) fjernet. Særlig relevant efter
+  // fillNearestNeighbor() i server.js (se dens filhoved): den fylder NU
+  // ubetinget ethvert tomt gitterpunkt, inkl. søer/land, med nærmeste
+  // havmåling — denne clip-path er derfor den ENESTE ting, der forhindrer
+  // søer i at vise (fabrikeret) havstrøm.
   addFeatures(vp3KystvandeRaw);
-  addFeatures(vp3SoeerRaw);
   path.setAttribute('d', parts.join(' '));
 }
 

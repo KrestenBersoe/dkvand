@@ -44,7 +44,15 @@ var Windy = function (params) {
 	const MIN_TEMPERATURE_K_DEFAULT = 273.15; // 0°C
 	const MAX_TEMPERATURE_K_DEFAULT = 295.15; // 22°C
 	const MAX_PARTICLE_AGE = 120;                                                // RETTET: 90 → 120 (længere, mere synlige spor)
-	const PARTICLE_LINE_WIDTH = 3;                                               // RETTET: 1 → 3 (markant tykkere streger)
+	const PARTICLE_LINE_WIDTH = 4.5;                                             // RETTET: 3 → 4.5 (bruger-rapport: for spinkelt/lav kontrast, se PARTICLE_HALO_* nedenfor)
+	// RETTET (bruger-rapport: for lav kontrast mod det nye, lyse grå Skærmkort-
+	// basiskort, især zoomet ud) — en mørk, halvtransparent "halo" strøget
+	// BREDERE end og UNDER selve den farvede streg (se draw() nedenfor)
+	// garanterer synlighed uanset stregens egen farve/lyshed og uanset
+	// baggrundskortets aktuelle gråtone, i stedet for at skulle stole på at
+	// hver enkelt temperaturfarve i sig selv har nok kontrast.
+	const PARTICLE_HALO_LINE_WIDTH = PARTICLE_LINE_WIDTH + 3.5;
+	const PARTICLE_HALO_COLOR = 'rgba(10,20,35,0.55)';
 	const PARTICLE_MULTIPLIER = 1 / 60;                                          // RETTET: 1/200 → 1/60 (tættere partikelfelt)
 	const PARTICLE_REDUCTION = (Math.pow(window.devicePixelRatio,1/3) || 1.6);   // multiply particle count for mobiles by this amount
 	const FRAME_RATE = 15, FRAME_TIME = 1000 / FRAME_RATE;                       // desired frames per second
@@ -384,25 +392,34 @@ var Windy = function (params) {
 
 		function windTemperatureColorScale(minTemp, maxTemp) {
 
-			// Lyseblå (koldt) → mørkerød (varmt) — samme 15-trins skala som
-			// upstream wind-js-leaflet, blot genkalibreret til MIN/MAX_TEMPERATURE_K
-			// ovenfor (danske hav-/søtemperaturer i stedet for global wind-chill-range).
+			// Lyseblå (koldt) → mørkerød (varmt) — 15-trins skala, genkalibreret
+			// til MIN/MAX_TEMPERATURE_K ovenfor (danske hav-/søtemperaturer i
+			// stedet for global wind-chill-range).
+			// RETTET (bruger-rapport: for lav kontrast mod det lyse grå Skærmkort-
+			// basiskort) — upstreams midtertrin (indeks 2-6, den pastelagtige
+			// teal→gul-grøn overgang) var nær-hvide (fx "rgb(238,247,217)"),
+			// hvilket praktisk talt forsvandt oven på en lys grå baggrund — og
+			// netop DET interval rammes ofte, fordi danske sommer-havtemperaturer
+			// typisk clusterer midt i skalaen (se skalaens EGEN filhoved om
+          // "alle strømme er røde"-hændelsen). Alle midtertrin mørkere/mere
+			// mættede her, samme hue-progression, blot uden pastel-udvanding.
+			// Suppleres af PARTICLE_HALO_*-kontrastkanten i draw() nedenfor.
 			var result = [
-				"rgb(36,104, 180)",
-				"rgb(60,157, 194)",
-				"rgb(128,205,193 )",
-				"rgb(151,218,168 )",
-				"rgb(198,231,181)",
-				"rgb(238,247,217)",
-				"rgb(255,238,159)",
-				"rgb(252,217,125)",
-				"rgb(255,182,100)",
-				"rgb(252,150,75)",
-				"rgb(250,112,52)",
-				"rgb(245,64,32)",
-				"rgb(237,45,28)",
-				"rgb(220,24,32)",
-				"rgb(180,0,35)"
+				"rgb(33,102,172)",
+				"rgb(50,150,180)",
+				"rgb(45,175,160)",
+				"rgb(60,180,110)",
+				"rgb(130,190,70)",
+				"rgb(205,200,55)",
+				"rgb(235,195,50)",
+				"rgb(248,180,60)",
+				"rgb(255,150,60)",
+				"rgb(250,120,50)",
+				"rgb(245,90,40)",
+				"rgb(235,55,30)",
+				"rgb(220,35,28)",
+				"rgb(200,20,30)",
+				"rgb(160,0,35)"
 			]
 			result.indexFor = function (m) {  // map temperature to a style
 				return Math.max(0, Math.min((result.length - 1),
@@ -468,6 +485,7 @@ var Windy = function (params) {
 
 		var g = params.canvas.getContext("2d");
 		g.lineWidth = PARTICLE_LINE_WIDTH;
+		g.lineCap = 'round'; // RETTET: chunkigere/mere synlige partikel-endepunkter end standard 'butt'
 
 		function draw() {
 			// Fade existing particle trails.
@@ -478,18 +496,27 @@ var Windy = function (params) {
 			g.fillRect(bounds.x, bounds.y, bounds.width, bounds.height);
 			g.restore();
 
-			// Draw new particle trails.
+			// Draw new particle trails. Stien bygges ÉN gang pr. bucket, men
+			// strøges TO gange (halo, så farve) — se PARTICLE_HALO_*'s filhoved
+			// for hvorfor. moveTo/lineTo-koordinaterne opdaterer IKKE
+			// particle.x/y, så samme sti kan genbruges til begge strøg.
 			buckets.forEach(function (bucket, i) {
 				if (bucket.length > 0) {
 					g.beginPath();
-					g.strokeStyle = colorStyles[i];
 					bucket.forEach(function (particle) {
 						g.moveTo(particle.x, particle.y);
 						g.lineTo(particle.xt, particle.yt);
+					});
+					g.lineWidth = PARTICLE_HALO_LINE_WIDTH;
+					g.strokeStyle = PARTICLE_HALO_COLOR;
+					g.stroke();
+					g.lineWidth = PARTICLE_LINE_WIDTH;
+					g.strokeStyle = colorStyles[i];
+					g.stroke();
+					bucket.forEach(function (particle) {
 						particle.x = particle.xt;
 						particle.y = particle.yt;
 					});
-					g.stroke();
 				}
 			});
 		}
