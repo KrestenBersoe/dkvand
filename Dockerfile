@@ -123,6 +123,12 @@ COPY vp3_rbu_slim.geojson ./
 COPY vp3_soeer.geojson ./
 COPY vp3_vandlob.geojson ./
 
+# RETTET (404 i produktion — samme klasse fejl som rbu-lake-links.json m.fl.
+# nedenfor: hentes af frontend'en, fetch('denmark_land_simplified.geojson'),
+# men manglede i COPY-listen): Danmarks landpolygon, bruges til strøm-
+# animationens klip-maske (se denmarkLandRaw i dansk-overloeb-kort.html).
+COPY denmark_land_simplified.geojson ./
+
 # RETTET: disse to filer hentes af frontend'en (fetch('rbu-lake-links.json')
 # / fetch('id15-lake-matches.json')) men manglede i COPY-listen — uden denne
 # rettelse ville containeren køre fint, men søers RBU- og ID15-opstrøms-
