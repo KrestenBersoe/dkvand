@@ -1,0 +1,63 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# .dockerignore — reducerer build-context-uploaden til Depot-builderen
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Dockerfile'en COPY'er UDELUKKENDE navngivne enkeltfiler (aldrig `COPY . .`)
+# — hvad der reelt havner i imaget styres derfor 100% af Dockerfile'ens egne
+# COPY-linjer, ALDRIG af denne fil. Denne fil påvirker kun hvor meget der
+# uploades til builderen FØR selve build'et starter (Fly har advaret om en
+# 5,5 GB build-context på hver eneste deploy i dette repos historie).
+#
+# ⚠️ SIKKERHEDSTJEK FØR ÆNDRING: et mønster her kan ALDRIG matche en sti,
+# Dockerfile'en COPY'er — gør det, fejler selve `docker build` med en klar
+# "COPY failed: file not found"-fejl (opdages FØR deploy, i modsætning til
+# den manglende-COPY-linje-fejl fra 2026-08-14, som crashede produktion
+# EFTER en tilsyneladende vellykket deploy). Verificér med:
+#   grep -oP '^COPY \K[^ ]+' Dockerfile | sort
+# — INGEN af disse stier (server.js, tenant-admin.js, icons/, vp3_vandlob.
+# geojson, osv.) må optræde her. vp3_vandlob.geojson er et bevidst eksempel:
+# Fly's egen build-warning nævner den som en af de største stier i contexten,
+# men den ER COPY'et — skal ALDRIG ekskluderes, i modsætning til dens langt
+# større, ikke-COPY'ede søster-fil (vp3_vandlob_simplified.geojson, som IKKE
+# bruges af Dockerfile'en).
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Node-afhængigheder — Dockerfile'en installerer sin EGEN kopi via
+# `RUN npm install --omit=dev` fra package.json/package-lock.json. Den
+# lokale node_modules/ er derfor ren spildt upload, aldrig brugt.
+node_modules/
+
+# Data-pipeline-scripts (~4,1 GB) — offline forbehandling (fetch/build/
+# calibrate/id15-terrænmodel m.fl.), køres LOKALT af udvikleren for at
+# PRODUCERE de færdige JSON/geojson-filer Dockerfile'en rent faktisk
+# COPY'er (badevand-analyseresultater.json, id15-lake-matches.json, osv.)
+# — selve scripts-koden er aldrig en runtime-afhængighed for server.js.
+scripts/
+
+# Selvhostet tileserver-opsætning (~1,3 GB, mest cache-data under
+# tileserver/data/) — separat service/deploy, ikke en del af denne app.
+tileserver/
+
+# Retirerede engangs-diagnose-scripts — ikke en runtime-afhængighed.
+archive/
+
+# Versionsstyrings-metadata — aldrig brug for den i imaget.
+.git/
+.gitignore
+
+# Claude Code-projektindstillinger — lokalt udviklingsværktøj, ikke en
+# del af den kørende app (og kan indeholde lokale permission-noter, se
+# .gitignore's egen begrundelse for hvorfor denne fil aldrig committes).
+.claude/
+
+# NYT (produktionsudfald 2026-08-14 — se Dockerfile's tilsvarende
+# kommentar): denne mappe eksisterer kun for at badested-observations.js
+# kan oprette den RUNTIME på Fly-volumen (fs.mkdirSync(..., {recursive:
+# true})) — en lokalt eksisterende (evt. test-)version her må ALDRIG
+# bages ind i et frisk image, uafhængigt af build-context-størrelse.
+observation-photos/
+
+# Automatiske puls-data-backups (samme mønster/begrundelse som
+# .gitignore's egen regel for disse — tidsstemplet i filnavnet, ikke
+# kildedata, regenereres løbende af opdaterings-scripts).
+puls-data.bak-*.json
