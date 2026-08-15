@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Opret trial — internt</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  /* Samme farvepalet som stats.html/admin-dashboard.html — se dem for begrundelsen. */
+  :root {
+    --paper: #12202a; --card: #16283355; --ink: #f0ede6; --ink-soft: #9fb0bb;
+    --accent: #4fb8d6; --border: rgba(255,255,255,.08);
+    --ok: #3fa96a; --bad: #d1584a;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    background: linear-gradient(180deg, #0d1720, #12202a 40%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 480px; margin: 0 auto; }
+  h1 { font-size: 1.3rem; margin: 0 0 .3rem; }
+  .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
+  .card {
+    background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.1rem 1.3rem; margin-bottom: 1rem;
+  }
+  .field { margin-bottom: .9rem; }
+  .field label { display: block; font-size: .8rem; color: var(--ink-soft); margin-bottom: .3rem; }
+  .field input {
+    background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .5rem .6rem; border-radius: 6px; font-size: .9rem; font-family: inherit; width: 100%;
+  }
+  .field-note { font-size: .74rem; color: var(--ink-soft); margin-top: .25rem; }
+  button {
+    background: transparent; border: 1px solid var(--accent); color: var(--ink);
+    padding: .6rem 1.1rem; border-radius: 8px; font-size: .9rem; font-weight: 600; cursor: pointer; width: 100%;
+  }
+  button:hover { background: rgba(79,184,214,.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .result {
+    margin-top: 1rem; padding: .9rem 1rem; border-radius: 8px; font-size: .85rem;
+    background: rgba(63,169,106,.08); border: 1px solid rgba(63,169,106,.3);
+  }
+  .result-url {
+    display: block; margin-top: .5rem; padding: .5rem .6rem; background: rgba(0,0,0,.25);
+    border-radius: 6px; font-size: .82rem; word-break: break-all; user-select: all;
+  }
+  .err {
+    margin-top: 1rem; padding: .9rem 1rem; border-radius: 8px; font-size: .85rem; color: var(--bad);
+    background: rgba(209,88,74,.08); border: 1px solid rgba(209,88,74,.3);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏛 Opret kommune-trial</h1>
+  <div class="sub">Internt værktøj — genererer et trial-login til Kommunal Dashboard.</div>
+
+  <div class="card">
+    <form id="form" onsubmit="return submitForm(event)">
+      <div class="field">
+        <label for="f-name">Kommunens navn</label>
+        <input type="text" id="f-name" required placeholder="Fx: Furesø Kommune">
+        <div class="field-note">Skal matche kommune-feltet i badevandsdata (fx "Furesø Kommune") — ellers finder dashboardet ingen badesteder for kommunen.</div>
+      </div>
+      <div class="field">
+        <label for="f-days">Trial-længde (dage)</label>
+        <input type="number" id="f-days" required min="1" step="1" value="30">
+      </div>
+      <div class="field">
+        <label for="f-issued-by">Dit navn</label>
+        <input type="text" id="f-issued-by" required placeholder="Fx: Kresten">
+      </div>
+      <div class="field">
+        <label for="f-note">Note (valgfri, kun til internt brug)</label>
+        <input type="text" id="f-note" placeholder="Fx: sendt til jens@furesoe.dk">
+      </div>
+      <div class="field">
+        <label for="f-logo-url">Logo-URL (valgfri — vises i kommunens overstyrings-banner)</label>
+        <input type="url" id="f-logo-url" placeholder="https://...">
+      </div>
+      <button type="submit" id="submit-btn">Opret trial</button>
+    </form>
+    <div id="result"></div>
+  </div>
+</div>
+
+<script>
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+async function submitForm(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submit-btn');
+  const resultEl = document.getElementById('result');
+  const name = document.getElementById('f-name').value.trim();
+  const days = Number(document.getElementById('f-days').value);
+  const issuedBy = document.getElementById('f-issued-by').value.trim();
+  const note = document.getElementById('f-note').value.trim();
+  const logoUrl = document.getElementById('f-logo-url').value.trim();
+
+  btn.disabled = true;
+  btn.textContent = 'Opretter…';
+  resultEl.innerHTML = '';
+  try {
+    const resp = await fetch('/internal/api/create-trial', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name, days, issuedBy,
+        note: note || null,
+        logoUrl: logoUrl || null,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke oprette trial.')}</div>`;
+      return;
+    }
+    resultEl.innerHTML = `
+      <div class="result">
+        ✓ Trial oprettet for <strong>${escHtml(data.tenant.name)}</strong> — udløber ${new Date(data.tenant.trialExpiresAt).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' })}.
+        <br>Send login-linket herunder til kommunens kontakt (vises kun denne ene gang):
+        <span class="result-url">${escHtml(data.loginUrl)}</span>
+      </div>
+    `;
+    document.getElementById('form').reset();
+    document.getElementById('f-days').value = '30';
+  } catch (e) {
+    resultEl.innerHTML = '<div class="err">Kunne ikke oprette trial — tjek din forbindelse.</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Opret trial';
+  }
+  return false;
+}
+</script>
+</body>
+</html>

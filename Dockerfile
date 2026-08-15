@@ -84,6 +84,7 @@ COPY badested-override-logic.js ./
 COPY admin-dashboard.html ./
 COPY admin-oauth-setup.html ./
 COPY admin-login.html ./
+COPY internal-create-trial.html ./
 COPY fetch_currents.py ./
 COPY dansk-overloeb-kort.html ./
 # Vendoret (ikke CDN-loadet) windy.js-motor for strøm-visualiseringen — se

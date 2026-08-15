@@ -25,6 +25,7 @@ const path        = require('path');
 const https       = require('https');
 const fs          = require('fs');
 const zlib        = require('zlib');
+const crypto      = require('crypto');
 const webpush     = require('web-push');
 // NYT: portering af risikomodellen fra dansk-overloeb-kort.html, så
 // serveren selv kan evaluere overløbsrisiko UAFHÆNGIGT af om en klient har
@@ -440,6 +441,88 @@ app.get('/admin/trial/:token', async (req, res) => {
   } catch (e) {
     console.error('admin/trial: uventet fejl —', e.message);
     res.status(500).type('text/plain').send('Kunne ikke behandle login-linket lige nu.');
+  }
+});
+
+// ── Internt værktøj — selvbetjent trial-oprettelse for salg ────────────────
+// Erstatter det tidligere manuelle behov for at et driftsteam-medlem selv
+// skulle SSH'e ind og køre scripts/create-tenant-trial.js for hver eneste
+// trial (se den fils filhoved for den GAMLE arbejdsgang). Samme underlæggende
+// tenantAdmin.createTenant()/issueTrialLogin()-kald, blot bag en HTTP-rute
+// fremfor en CLI, så salgsmedarbejdere selv kan generere et login-link.
+//
+// BEVIDST simpel auth: ÉT delt kodeord (INTERNAL_ADMIN_PASSWORD, Fly secret),
+// tjekket via HTTP Basic Auth — IKKE et rigtigt personligt staff-login (der
+// findes stadig ingen web-baseret platform-admin-brugerdatabase, samme
+// bevidste "uden for scope" som tenant-admin.js's filhoved allerede
+// beskriver for selve CLI-scriptet). Tilstrækkeligt til at holde det UDE AF
+// offentlighedens rækkevidde uden at bygge et helt login-system for et lille,
+// betroet internt team — men giver INGEN person-specifik audit-log (kun
+// hvad brugeren selv skriver i "issued-by"-feltet, ikke verificeret).
+// Genovervej en rigtig intern login-løsning, hvis det behov opstår.
+function requireInternalAuth(req, res, next) {
+  const expected = process.env.INTERNAL_ADMIN_PASSWORD || '';
+  if (!expected) {
+    return res.status(503).type('text/plain').send('Internt værktøj er ikke konfigureret (INTERNAL_ADMIN_PASSWORD mangler som Fly secret).');
+  }
+  const authHeader = req.headers.authorization || '';
+  const [scheme, encoded] = authHeader.split(' ');
+  let providedPassword = '';
+  if (scheme === 'Basic' && encoded) {
+    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
+    const sepIdx = decoded.indexOf(':');
+    providedPassword = sepIdx >= 0 ? decoded.slice(sepIdx + 1) : decoded;
+  }
+  // RETTET: timingSafeEqual kaster hvis buffer-længderne ikke matcher (i
+  // stedet for blot at returnere false) — kræver derfor et eksplicit
+  // længde-tjek FØRST, ellers ville et forkert-langt kodeord crashe
+  // requesten i stedet for pænt at give 401.
+  const a = Buffer.from(providedPassword);
+  const b = Buffer.from(expected);
+  const match = a.length === b.length && crypto.timingSafeEqual(a, b);
+  if (!match) {
+    res.set('WWW-Authenticate', 'Basic realm="Internt vaerktoej"');
+    return res.status(401).type('text/plain').send('Login paakraevet.');
+  }
+  next();
+}
+
+app.get('/internal/create-trial', requireInternalAuth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.sendFile(path.join(STATIC_DIR, 'internal-create-trial.html'));
+});
+
+app.post('/internal/api/create-trial', requireInternalAuth, express.json(), async (req, res) => {
+  try {
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
+    const days = Number(req.body?.days);
+    const issuedBy = typeof req.body?.issuedBy === 'string' ? req.body.issuedBy.trim() : '';
+    const note = typeof req.body?.note === 'string' && req.body.note.trim() ? req.body.note.trim() : null;
+    const logoUrl = typeof req.body?.logoUrl === 'string' && req.body.logoUrl.trim() ? req.body.logoUrl.trim() : null;
+
+    if (!name) return res.status(400).json({ error: 'Kommunens navn mangler.' });
+    if (!Number.isFinite(days) || days <= 0) return res.status(400).json({ error: 'Trial-længde skal være et positivt antal dage.' });
+    if (!issuedBy) return res.status(400).json({ error: 'Dit navn mangler.' });
+
+    const tenant = await tenantAdmin.createTenant({
+      name, status: 'trial', trialDays: days, createdBy: issuedBy, logoUrl,
+    });
+    const rawToken = await tenantAdmin.issueTrialLogin({
+      tenantId: tenant.id, expiresAt: tenant.trial_expires_at, issuedBy, note,
+    });
+    const loginUrl = `${seoPages.SITE_URL}/admin/trial/${rawToken}`;
+
+    res.json({
+      tenant: { id: tenant.id, name: tenant.name, trialExpiresAt: tenant.trial_expires_at },
+      loginUrl,
+    });
+  } catch (e) {
+    if (e.code === 'VALIDATION') {
+      return res.status(400).json({ error: e.message });
+    }
+    console.error('internal/api/create-trial: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke oprette trial lige nu.' });
   }
 });
 
