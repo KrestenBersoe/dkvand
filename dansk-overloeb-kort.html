@@ -1933,7 +1933,7 @@
   <div id="tab-bar">
     <button class="tab-btn active" id="tab-btn-kort" onclick="switchTab('kort')">Kort</button>
     <button class="tab-btn" id="tab-btn-varsler" onclick="switchTab('varsler')">Varsler<span class="tab-badge zero" id="varsler-badge">0</span></button>
-    <button class="tab-btn" id="tab-btn-doc" onclick="switchTab('doc')">Om</button>
+    <button class="tab-btn" id="tab-btn-doc" onclick="openDocTab()">Om</button>
   </div>
   <div class="spacer"></div>
   <span id="status-dot" class="blink" title="Tjenesten kører"></span>
@@ -8576,6 +8576,15 @@ function trackTabView(name) {
   });
 }
 
+// SEO-rettelse (se server.js's getSsrShellHtml()) — badested/soe-sider
+// serverer en shell hvor #tab-doc er tømt (Om-panelet flyttet til sin egen
+// /om-side), og sætter window.__DOC_PANEL_STRIPPED__ som signal herom. '/'
+// sætter aldrig dette flag, så knappen opfører sig uændret dér.
+function openDocTab() {
+  if (window.__DOC_PANEL_STRIPPED__) { location.href = '/om'; return; }
+  switchTab('doc');
+}
+
 function switchTab(name) {
   document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -10492,6 +10501,13 @@ function handleSsrRoute() {
   }
   if (route.type === 'soe' && route.navn) {
     openSoeFromSsr(route.navn);
+    return true;
+  }
+  // /om (se server.js's /om-route) — #tab-doc er her den FULDE, ubeskårne
+  // shell (modsat badested/soe-siderne, se getSsrShellHtml()), så et almindeligt
+  // switchTab('doc') er nok, ingen data-afventning nødvendig.
+  if (route.type === 'doc') {
+    switchTab('doc');
     return true;
   }
   return false;

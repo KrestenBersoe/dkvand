@@ -286,6 +286,11 @@ const STATIC_DIR = __dirname;
 // nødvendig (kilde-filerne ændres kun via den offline update-all-data.sh-
 // pipeline). Bruges af /badested/:slug, /soe/:slug og /sitemap.xml nedenfor.
 const { badestedSlugToInfo, idToBadestedSlug, soeSlugToInfo, navnToSoeSlug, kommuneKeyToBadesteder } = slugIndex.buildSlugIndex(STATIC_DIR);
+// NYT (bruger-ønske 2026-08-17 — "Badesteder i nærheden" på /badested/:slug):
+// badestedSlugToInfo's værdier bærer ikke selve slug'et (kun kortets nøgle
+// gør) — bygget ÉN gang her (samme livscyklus som slug-index selv), ikke
+// pr. request, se nearestBadesteder()'s kaldested.
+const allBadestederWithSlug = [...badestedSlugToInfo.entries()].map(([slug, v]) => ({ slug, navn: v.navn, lat: v.lat, lng: v.lng }));
 
 // PULS data: changes once a year → cache aggressively
 app.get('/puls-data.json', (req, res) => {
@@ -384,6 +389,47 @@ function getCompressedHtml() {
   _htmlCompressedCache = { mtimeMs: stat.mtimeMs, raw, gzip, brotli };
   console.log(`HTML forkomprimeret: ${raw.length} B → gzip ${gzip.length} B (${Math.round(100*gzip.length/raw.length)}%), brotli ${brotli.length} B (${Math.round(100*brotli.length/raw.length)}%)`);
   return _htmlCompressedCache;
+}
+
+// SEO-rettelse (bruger-rapporteret 2026-08-17 — Google indekserer ikke de
+// fleste /badested/:slug-sider, GSC: "Duplicate, Google chose different
+// canonical than user"): roden er at ALLE badested/soe-sider deler den
+// SAMME 612KB app-shell som '/' — inkl. #tab-doc's fulde "Om"-panel
+// (Formål/Datakilder/Kortlag/Risikomodel/.../Referencer), som er skjult via
+// en CSS-klasse, ikke fjernet fra DOM'en. Målt: ~58.560 tegn synlig tekst,
+// identisk på ALLE ~2.000 sider, mod kun ~200-400 tegns reelt unikt indhold
+// pr. side (buildSsrContent()) — det forhold er hvad der får Google til at
+// klynge siderne som næsten-duplikater og se bort fra hver sides i øvrigt
+// korrekte, selv-refererende canonical-tag.
+//
+// Løsning: #tab-doc udelades HELT fra den shell badested/soe-siderne
+// bruger (denne funktion) og flyttes til sin egen, selvstændigt
+// indekserbare /om-side (se /om-routen nedenfor), som genbruger den
+// UBESKÅRNE getCompressedHtml().raw. '/' og /udloeb/:id er upåvirkede — de
+// bruger fortsat getCompressedHtml() direkte.
+let _ssrShellCache = null; // { mtimeMs, html }
+function getSsrShellHtml() {
+  const filePath = path.join(STATIC_DIR, 'dansk-overloeb-kort.html');
+  const stat = fs.statSync(filePath);
+  if (_ssrShellCache && _ssrShellCache.mtimeMs === stat.mtimeMs) return _ssrShellCache.html;
+  const full = getCompressedHtml().raw.toString('utf8');
+  // Ankret til BEGGE ender (åbnings-tag + den eksplicitte afslutnings-
+  // kommentar, se dansk-overloeb-kort.html:2135/2593) — et rent
+  // start-tag-match ville også kunne ramme forkert ved en fremtidig
+  // ombygning af selve panelet.
+  const stripped = full.replace(
+    /<div class="tab-panel" id="tab-doc">[\s\S]*?<\/div><!-- \/tab-doc -->/,
+    '<div class="tab-panel" id="tab-doc"></div><!-- /tab-doc -->'
+  );
+  if (stripped === full) {
+    console.warn('getSsrShellHtml: #tab-doc-blokken blev IKKE fundet/fjernet — falder tilbage til den fulde shell (badested/soe-sider vil fortsat indeholde Om-panelet).');
+  }
+  // Signalerer til klienten (se #tab-btn-doc's openDocTab() i dansk-
+  // overloeb-kort.html) at #tab-doc er tom her, og "Om"-knappen derfor skal
+  // navigere til /om i stedet for at skifte fane lokalt.
+  const html = stripped.replace('</body>', '<script>window.__DOC_PANEL_STRIPPED__=true;</script></body>');
+  _ssrShellCache = { mtimeMs: stat.mtimeMs, html };
+  return html;
 }
 
 app.get(['/', '/dansk-overloeb-kort.html'], (req, res) => {
@@ -1102,7 +1148,25 @@ app.get('/robots.txt', (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function baseAppHtml() {
-  return getCompressedHtml().raw.toString('utf8');
+  return getSsrShellHtml();
+}
+
+// NYT (bruger-ønske 2026-08-17) — fælles afstands-sorterings-/afskærings-
+// logik for de to "andre badesteder"-lister på /badested/:slug (se
+// seo-pages.js's buildNearbyListHtml()). `candidates` er allerede den
+// relevante kandidat-liste fra kaldestedet (enten hele badestedSlugToInfo
+// for "i nærheden", eller kommuneKeyToBadesteder.get(key) for kommune-
+// listen) — denne funktion filtrerer/sorterer/afkorter blot.
+function nearestBadesteder(fromInfo, candidates, excludeSlug, maxKm, cap) {
+  const out = [];
+  for (const b of candidates) {
+    if (b.slug === excludeSlug || b.lat == null || b.lng == null) continue;
+    const distKm = badevandRisk.haversineM(fromInfo.lat, fromInfo.lng, b.lat, b.lng) / 1000;
+    if (maxKm != null && distKm > maxKm) continue;
+    out.push({ slug: b.slug, navn: b.navn, distKm });
+  }
+  out.sort((a, b) => a.distKm - b.distKm);
+  return out.slice(0, cap);
 }
 
 app.get('/badested/:slug', (req, res) => {
@@ -1121,6 +1185,19 @@ app.get('/badested/:slug', (req, res) => {
   const kommune = info.kommune ? info.kommune.replace(/\s*kommune\s*$/i, '').trim() : null;
   const title = `${info.navn} badevand – aktuel risiko | Dit Badevand`;
   const description = `${info.navn}${kommune ? ' i ' + kommune : ''}: ${text}`;
+
+  // NYT (bruger-ønske 2026-08-17) — to adskilte "andre badesteder"-lister:
+  // fysisk nærhed (på tværs af kommunegrænser, ≤20km — undgår meningsløse
+  // links i tyndt befolkede områder) og kommune-tilhørsforhold (samme
+  // administrative gruppering som tenant-badesteder.js allerede bruger).
+  // Overlap mellem de to er forventet og fint — de svarer på to forskellige
+  // spørgsmål ("hvad er tæt på" vs. "hvad hører administrativt sammen").
+  const nearbyDistance = nearestBadesteder(info, allBadestederWithSlug, req.params.slug, 20, 6);
+  const kommuneKey = info.kommune ? slugIndex.normalizeKommuneKey(info.kommune) : null;
+  const nearbyKommune = kommuneKey
+    ? nearestBadesteder(info, kommuneKeyToBadesteder.get(kommuneKey) || [], req.params.slug, null, 8)
+    : [];
+  const vurderingCount30d = vurderingCount30dCache.get(String(info.id)) || 0;
 
   let html = seoPages.injectHead(baseAppHtml(), {
     title, description,
@@ -1146,6 +1223,9 @@ app.get('/badested/:slug', (req, res) => {
     // applyLiveOverridesToCache() allerede har patchet med overrideInfo
     // (se server.js's cascade-cyklus). Rent gennemstik, ingen ekstra opslag.
     overrideInfo: entry?.overrideInfo || null,
+    lat: info.lat, lng: info.lng,
+    nearbyDistance, nearbyKommune,
+    vurderingCount30d,
   });
   // RETTET (bruger-rapporteret 2026-08-10 — /badested/:slug-siden viste
   // permanent kun det statiske SSR-indhold, aldrig den rigtige app): denne
@@ -1210,6 +1290,23 @@ app.get('/soe/:slug', (req, res) => {
   res.send(html);
 });
 
+// /om — selvstændig, indekserbar side for #tab-doc's fulde "Om"-panel (se
+// getSsrShellHtml()'s filhoved for hvorfor det IKKE længere ligger inline på
+// hver badested/soe-side). Genbruger BEVIDST getCompressedHtml().raw direkte
+// (ikke getSsrShellHtml()) — dette er netop den ene side, panelet SKAL være
+// til stede på.
+app.get('/om', (req, res) => {
+  let html = seoPages.injectHead(getCompressedHtml().raw.toString('utf8'), {
+    title: 'Om · Formål, datakilder & risikomodel | Dit Badevand',
+    description: 'Formål, datakilder, kortlag, risikomodel og begrænsninger bag Dit Badevands forureningsrisiko-estimater for badesteder, søer og kystvande i Danmark.',
+    canonicalPath: '/om',
+  });
+  html = seoPages.injectBodyContent(html, seoPages.buildSsrRouteScript({ type: 'doc' }));
+  res.set('Cache-Control', 'no-store');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
 // Tier 3 — bevidst INGEN data-forudfyldning server-side (se planen: "kan
 // forblive rent client-side renderet"), kun robots/canonical injiceret.
 // Holder de ~21.000 sider billige at servere.
@@ -1248,6 +1345,7 @@ app.get('/udloeb/:id', (req, res) => {
 // hverken må stå her eller disallowes i robots.txt (noindex alene, via
 // meta-taggen ovenfor, er den korrekte mekanisme).
 const _sitemapXml = seoPages.buildSitemapXml([
+  { loc: `${seoPages.SITE_URL}/om` },
   ...[...badestedSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/badested/${slug}` })),
   ...[...soeSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/soe/${slug}` })),
 ]);
@@ -1729,6 +1827,18 @@ function getBadevandIdCoordIndex() {
 let riskScoresCache = { ts: 0, points: [] };
 // NYT: se badevand-risk.js — { ts, lakes, kystvande, badevand }
 let badevandRiskCache = { ts: 0, lakes: {}, kystvande: {}, badevand: [] };
+// NYT (bruger-ønske 2026-08-17 — "Badestedsvurdering"-sektionen på
+// /badested/:slug, se seo-pages.js's buildSsrContent()): badested_id (streng)
+// -> antal vurderinger seneste 30 dage. Bevidst PRÆ-BEREGNET og genopfrisket
+// periodisk (se refreshVurderingCount30dCache()/VURDERING_COUNT_REFRESH_MS
+// nedenfor), IKKE et pr.-request DB-opslag — /badested/:slug-routen er i
+// dag fuldt synkron og læser kun in-memory caches, og bliver crawlet på
+// tværs af ~2.000 URL'er; at hænge et Postgres-kald på hver af de requests
+// ville lægge en uforsvarlig, burst-agtig belastning på den delte
+// forbindelses-pool (se db.js), præcis når en re-indekserings-crawl kører.
+// Tom Map indtil første opfriskning er kørt (se Promise.all-blokken
+// nederst i filen) — badesteder viser da 0 vurderinger, aldrig en fejl.
+let vurderingCount30dCache = new Map();
 // NYT (bruger-ønske 2026-08-10 — /badested/:slug m.fl.): badevandRiskCache.badevand
 // er et ARRAY (1.039 elementer) — de nye path-baserede sider slår et enkelt
 // badested op PR. CRAWL-HIT, så et O(1)-Map-opslag er værd at holde ved siden
@@ -2068,6 +2178,21 @@ setTimeout(() => warmCache()
 setInterval(() => warmCache()
   .then(() => evaluatePushNotifications())
   .catch(e => console.warn('warmCache (interval):', e.message)), WEATHER_CHECK_INTERVAL_MS);
+
+// NYT (bruger-ønske 2026-08-17) — se vurderingCount30dCache's filhoved for
+// hvorfor dette er præ-beregnet fremfor et pr.-request DB-kald. Time-cadence
+// (ikke WEATHER_CHECK_INTERVAL_MS's 15 minutter) er rigeligt — et 30-dages
+// rullende tal ændrer sig ikke mærkbart inden for en time. Kaldt fra
+// Promise.all-blokken nederst i filen (efter badestedObs.ready), samme
+// begrundelse som runDailyStatsSnapshotJob dér: kræver badested_vurderinger-
+// skemaet, må ikke køre før det er klar.
+async function refreshVurderingCount30dCache() {
+  const rows = await badestedObs.getVurderingCounts30dGrouped();
+  const next = new Map();
+  for (const r of rows) next.set(String(r.badested_id), r.count);
+  vurderingCount30dCache = next;
+}
+const VURDERING_COUNT_REFRESH_MS = 60 * 60 * 1000;
 
 // NYT: leverer den server-beregnede risiko for alle PULS-punkter som ét,
 // kompakt JSON-svar — se riskScoresCache (bygget i evaluatePushNotifications())
@@ -3812,6 +3937,8 @@ Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, badestedOve
     // /stats' grafer mangle dagens punkt i op til et helt døgn.
     runDailyStatsSnapshotJob().catch(e => console.warn('runDailyStatsSnapshotJob (opstart) fejl:', e.message));
     setInterval(() => runDailyStatsSnapshotJob().catch(e => console.warn('runDailyStatsSnapshotJob fejl:', e.message)), DAILY_STATS_SNAPSHOT_INTERVAL_MS);
+    refreshVurderingCount30dCache().catch(e => console.warn('refreshVurderingCount30dCache (opstart) fejl:', e.message));
+    setInterval(() => refreshVurderingCount30dCache().catch(e => console.warn('refreshVurderingCount30dCache fejl:', e.message)), VURDERING_COUNT_REFRESH_MS);
   })
   .catch(e => {
     console.error('Kunne ikke klargøre Postgres-skema ved opstart — serveren starter IKKE:', e.message);

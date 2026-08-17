@@ -183,7 +183,36 @@ function buildOverrideBannerHtml(overrideInfo) {
  * den eksisterende, JS-vedligeholdte #badevand-panel-DOM. Klienten skjuler
  * denne blok, når det rigtige panel åbnes (se dansk-overloeb-kort.html).
  */
-function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets, confidenceText, overrideInfo }) {
+// Kommune- og afstands-baserede "andre badesteder"-lister (bruger-ønske
+// 2026-08-17, samme SEO-rettelse som getSsrShellHtml() — se dens filhoved):
+// begge peger på /badested/:slug og er derfor ægte, crawlbare interne links
+// (samme begrundelse som buildSitelinksHtml(), blot synlige her i stedet
+// for skjulte) — IKKE et forsøg på at duplikere selve kortets nabo-søgning,
+// kun en tekst-liste. `items` er allerede filtreret/sorteret/afkortet af
+// kaldestedet (server.js) — denne funktion formaterer blot.
+function buildNearbyListHtml(heading, items) {
+  if (!items || !items.length) return '';
+  const li = items.map(b => `<li><a href="/badested/${escHtml(b.slug)}">${escHtml(b.navn)}</a></li>`).join('');
+  return `<h2>${escHtml(heading)}</h2><ul>${li}</ul>`;
+}
+
+// Lokation/rutevejledning (bruger-ønske 2026-08-17) — samme keyless
+// Google Maps-URL-mønster som klienten allerede bruger to steder
+// (dansk-overloeb-kort.html's mapsLink/deep-links til "Åbn i Google Maps"),
+// bevidst genbrugt fremfor Maps Embed API — intet API-nøgle-/GCP-setup at
+// vedligeholde. output=embed er uofficiel men mangeårig og bredt brugt.
+function buildLocationHtml(lat, lng) {
+  if (lat == null || lng == null) return '';
+  const q = `${lat},${lng}`;
+  return `
+  <h2>Lokation</h2>
+  <p style="border:1px solid #d7dee3;border-radius:10px;overflow:hidden;line-height:0">
+    <iframe src="https://maps.google.com/maps?q=${encodeURIComponent(q)}&z=15&output=embed" width="100%" height="280" style="border:0" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Kort over ${escHtml(q)}"></iframe>
+  </p>
+  <p><a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(q)}" target="_blank" rel="noopener">Få rutevejledning →</a></p>`;
+}
+
+function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets, confidenceText, overrideInfo, lat, lng, nearbyKommune, nearbyDistance, vurderingCount30d }) {
   // NYT (ustabil-id-rettelse — se server.js's loadPulsPointsFull()):
   // bruger outfallId (stabil GUID) i stedet for o.id (rækkeindekset) til
   // selve linket — dette er server-renderet, crawlbart HTML, indekseret af
@@ -202,6 +231,14 @@ function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets, confiden
       ? `<li><a href="/udloeb/${escHtml(o.outfallId || o.id)}">${escHtml(o.name || `Udløb ${o.id}`)}</a></li>`
       : `<li>${escHtml(o.name || 'Opstrøms kilde')}</li>`
   ).join('');
+  // Badestedsvurdering (bruger-ønske 2026-08-17) — kun vist når > 0 (se
+  // server.js's vurderingCount30dCache-filhoved for hvorfor): en "0
+  // vurderinger"-sætning ville selv blive en ny, boilerplate-agtig sætning
+  // gentaget på tværs af de fleste lav-trafik badesteder, stik imod hele
+  // formålet med denne rettelse.
+  const vurderingHtml = vurderingCount30d > 0
+    ? `<h2>Badestedsvurdering</h2><p>${vurderingCount30d} ${vurderingCount30d === 1 ? 'vurdering' : 'vurderinger'} fra besøgende de seneste 30 dage.</p>`
+    : '';
   return `
 <div id="ssr-content" style="max-width:640px;margin:0 auto;padding:2rem 1.2rem;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1a2733">
   ${buildOverrideBannerHtml(overrideInfo)}
@@ -210,6 +247,10 @@ function buildSsrContent({ navn, kommune, riskText, updatedAt, outlets, confiden
   ${confidenceText ? `<p style="color:#5a6b78;font-size:.85rem">${escHtml(confidenceText)}</p>` : ''}
   <p style="color:#5a6b78;font-size:.85rem">Sidst opdateret: ${escHtml(updatedAt)}</p>
   ${outletLinks ? `<h2>Udløb der påvirker dette sted</h2><ul>${outletLinks}</ul>` : ''}
+  ${vurderingHtml}
+  ${buildLocationHtml(lat, lng)}
+  ${buildNearbyListHtml('Badesteder i nærheden', nearbyDistance)}
+  ${buildNearbyListHtml(kommune ? `Andre badesteder i ${kommune}` : 'Andre badesteder i kommunen', nearbyKommune)}
 </div>`;
 }
 

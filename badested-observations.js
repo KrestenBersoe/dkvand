@@ -486,6 +486,26 @@ async function getVurderingStatsForBadestedIds(badestedIds) {
   return rows[0];
 }
 
+// NYT (bruger-ønske 2026-08-17 — "Badestedsvurdering"-sektionen på
+// /badested/:slug, se seo-pages.js's buildSsrContent()): i modsætning til
+// getVurderingStatsForBadestedIds() ovenfor (ÉT aggregeret tal på tværs af
+// en liste af id'er, til kommune-dashboardets sum) skal denne PR. badested,
+// til alle ~1.039 badesteder på én gang — GROUP BY, ikke et filter i WHERE.
+// Bevidst ÉN forespørgsel for ALLE sites (kaldes fra en periodisk
+// cache-opfriskning i server.js, ALDRIG pr. request — se dens filhoved for
+// hvorfor et pr.-request-DB-kald pr. af de ~2.000 crawlede SSR-sider ville
+// være uforsvarligt belastende for den delte forbindelses-pool, se db.js).
+async function getVurderingCounts30dGrouped() {
+  const since30d = Date.now() - 30 * 24 * 3600 * 1000;
+  const { rows } = await query(`
+    SELECT badested_id, COUNT(*)::int AS count
+    FROM badested_vurderinger
+    WHERE created_at > $1
+    GROUP BY badested_id
+  `, [since30d]);
+  return rows;
+}
+
 // NYT (samme modul) — dags-optalt antal vurderinger for kommunens badesteder,
 // til udviklingsgrafen i Kommune-dashboardet. created_at er BIGINT ms (ikke
 // en DATE-kolonne), så dato udledes her via to_timestamp(...)::date — samme
@@ -510,6 +530,7 @@ module.exports = {
   getObservationSummary,
   getVurderingStats,
   getVurderingStatsForBadestedIds,
+  getVurderingCounts30dGrouped,
   getVurderingTrendForBadestedIds,
   hashIp,
   PHOTOS_DIR,
