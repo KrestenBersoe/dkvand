@@ -1104,6 +1104,164 @@ app.get('/admin/api/stats', tenantAdmin.requireTenantSession, async (req, res) =
   }
 });
 
+// ── Kommune-benchmark-rapporten (bruger-ønske) ──────────────────────────────
+// Sammenlignende ranking på tværs af ALLE kommuner med mindst ét matchet
+// badested (kommuneKeyToBadesteder, se slug-index.js) — IKKE kun den
+// indloggede tenants egen, se sikkerhedsnoten ved selve ruten nedenfor.
+// Tre hovedmetrikker (varsler/lukkedage/badestedsvurderinger), indekseret
+// pr. antal badesteder for at korrigere for at kommuner med bedre
+// overvågning naturligt registrerer FLERE hændelser (se planens
+// "Kendt metodisk risiko") — samt en fjerde, SEPARAT datakvalitets-liste
+// (andel udløbspunkter med reelt målt PULS-data), bevidst IKKE vægtet ind i
+// samlet rang.
+const KOMMUNE_BENCHMARK_MIN_BADESTEDER = 3; // bruger-bekræftet lav-n-grænse
+
+async function computeKommuneBenchmark({ fromDate, toDate }) {
+  const fromMs = new Date(fromDate + 'T00:00:00.000Z').getTime();
+  const toMs   = new Date(toDate   + 'T23:59:59.999Z').getTime();
+
+  const [alertCounts, alertDays, lukketIntervals, vurderingRows] = await Promise.all([
+    appMetrics.getAlertCountsGroupedByBadestedId(PUSH_SEND_TYPES.RISIKOVARSEL, fromDate, toDate),
+    appMetrics.getAlertDaysGroupedByBadestedId(PUSH_SEND_TYPES.RISIKOVARSEL, fromDate, toDate),
+    badestedOverrides.getLukketIntervalsInRange(fromDate, toDate),
+    badestedObs.getVurderingCountsGrouped(fromMs, toMs),
+  ]);
+
+  const vurderingCounts = new Map();
+  for (const r of vurderingRows) vurderingCounts.set(r.badested_id, r.count);
+
+  // Ekspanderer 'lukket'-intervaller (badested_overrides, ægte historik, se
+  // getLukketIntervalsInRange()'s filhoved) til pr.-badested dato-sæt,
+  // klippet til [fromDate, toDate] — samme dato-streng-format som
+  // alertDays, så de to kan forenes med Set-union nedenfor til KPI 2.
+  const lukketDaysByBadested = new Map(); // badested_id -> Set<'YYYY-MM-DD'>
+  const clipDate = (d, lo, hi) => (d < lo ? lo : (d > hi ? hi : d));
+  for (const iv of lukketIntervals) {
+    const start = clipDate(new Date(iv.created_at).toISOString().slice(0, 10), fromDate, toDate);
+    const end   = clipDate(new Date(iv.revoked_at || iv.expires_at).toISOString().slice(0, 10), fromDate, toDate);
+    if (!lukketDaysByBadested.has(iv.badested_id)) lukketDaysByBadested.set(iv.badested_id, new Set());
+    const set = lukketDaysByBadested.get(iv.badested_id);
+    for (let d = new Date(start + 'T00:00:00Z'); d.toISOString().slice(0, 10) <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+      set.add(d.toISOString().slice(0, 10));
+    }
+  }
+
+  // ── Pr.-kommune aggregering (KPI 1-3) ──────────────────────────────────
+  const rows = [];
+  for (const badesteder of kommuneKeyToBadesteder.values()) {
+    if (badesteder.length === 0) continue;
+    // kommuneKeyToBadesteder's elementer bærer ikke selve kommune-navnet
+    // (kun badested-info, se slug-index.js:141) — slås op via
+    // badestedSlugToInfo, samme normaliserede visningsform som resten af
+    // appen (fx server.js's /badested/:slug-route) allerede bruger.
+    const kommuneNavn = (badestedSlugToInfo.get(badesteder[0].slug)?.kommune || badesteder[0].navn)
+      .replace(/\s*kommune\s*$/i, '').trim();
+
+    let varslerRaw = 0, vurderingerRaw = 0;
+    const affectedDays = new Set();
+    for (const b of badesteder) {
+      const id = String(b.id);
+      varslerRaw += alertCounts.get(id) || 0;
+      for (const d of (alertDays.get(id) || [])) affectedDays.add(d);
+      for (const d of (lukketDaysByBadested.get(id) || [])) affectedDays.add(d);
+      vurderingerRaw += vurderingCounts.get(id) || 0;
+    }
+
+    rows.push({
+      kommuneNavn,
+      badestedCount: badesteder.length,
+      varslerRaw,
+      varslerIndekseret: varslerRaw / badesteder.length,
+      lukkedageRaw: affectedDays.size,
+      lukkedageIndekseret: affectedDays.size / badesteder.length,
+      vurderingerRaw,
+      vurderingerIndekseret: vurderingerRaw / badesteder.length,
+    });
+  }
+
+  const hovedranking = rows.filter(r => r.badestedCount >= KOMMUNE_BENCHMARK_MIN_BADESTEDER);
+  const lavN = rows.filter(r => r.badestedCount < KOMMUNE_BENCHMARK_MIN_BADESTEDER)
+    .sort((a, b) => a.kommuneNavn.localeCompare(b.kommuneNavn, 'da'));
+
+  // Rangering: LAVEST indekseret = bedst (rang 1) for varsler/lukkedage,
+  // HØJEST = bedst for vurderinger (mere borgerengagement er positivt —
+  // modsat retning end de to andre, se planens formel-afsnit).
+  function assignRanks(list, key, rangKey, direction) {
+    [...list].sort((a, b) => direction * (a[key] - b[key])).forEach((r, i) => { r[rangKey] = i + 1; });
+  }
+  assignRanks(hovedranking, 'varslerIndekseret', 'rangVarsler', 1);
+  assignRanks(hovedranking, 'lukkedageIndekseret', 'rangLukkedage', 1);
+  assignRanks(hovedranking, 'vurderingerIndekseret', 'rangVurderinger', -1);
+  for (const r of hovedranking) {
+    r.samletRang = (r.rangVarsler + r.rangLukkedage + r.rangVurderinger) / 3; // ligevægtet, bruger-bekræftet
+  }
+  hovedranking.sort((a, b) => a.samletRang - b.samletRang);
+
+  // ── Datakvalitet (KPI 5) — separat, periode-uafhængig, INGEN lav-n-udelukkelse ──
+  // Læses direkte fra loadPulsPointsFull() (municipality + dataQuality
+  // allerede pr. punkt, se dens filhoved) — kræver INGEN badevand-risk-
+  // cascade-matching, da dette måler udløbenes EGEN kommune, ikke hvilke
+  // badesteder de påvirker.
+  const pulsPoints = loadPulsPointsFull();
+  const dqByKommune = new Map(); // normaliseret nøgle -> {navn, total, maalt}
+  for (const p of pulsPoints) {
+    if (!p.municipality || p.municipality === '—') continue;
+    const key = slugIndex.normalizeKommuneKey(p.municipality);
+    if (!dqByKommune.has(key)) {
+      dqByKommune.set(key, { navn: p.municipality.replace(/\s*kommune\s*$/i, '').trim(), total: 0, maalt: 0 });
+    }
+    const entry = dqByKommune.get(key);
+    entry.total++;
+    if (p.dataQuality === 0) entry.maalt++; // se planens "Definitions-valg" — kun kode 0 ("reelle data") tæller som reelt målt
+  }
+  const datakvalitet = [...dqByKommune.values()]
+    .map(e => ({ kommuneNavn: e.navn, udloebPunkter: e.total, reeltMaalt: e.maalt, andel: e.total > 0 ? e.maalt / e.total : 0 }))
+    .sort((a, b) => b.andel - a.andel);
+
+  return { fromDate, toDate, hovedranking, lavN, datakvalitet };
+}
+
+// NYT — se computeKommuneBenchmark()'s filhoved for KPI-definitionerne.
+// Periode: enten et preset (samme som /admin/api/badested-alert-stats'
+// today|7d|month|quarter|year, via computeAlertStatsRange()) ELLER en helt
+// fri ?from=&to= (bruger-krav: "periodeafgrænsning er valgfri").
+//
+// ⚠ SIKKERHEDSNOTE (bevidst afvigelse, bruger-bekræftet: "fuld navngivet
+// sammenligning"): dette er den FØRSTE tenant-autentificerede route i
+// kodebasen, der returnerer aggregerede tal for ANDRE kommuner end den
+// indloggede tenants egen — resten af /admin/api/* er strengt tenant-
+// scopet via resolveTenantBadesteder() (se fx ruterne ovenfor). Kun
+// AGGREGEREDE tæller/indekser/andele eksponeres her, ALDRIG rå
+// operationelle data (overstyringers beskeder/set_by, abonnenttal,
+// individuelle badested-navne ud over selve kommunenavnet) — se
+// getLukketIntervalsInRange()'s filhoved for samme forbehold ved kilden.
+app.get('/admin/api/kommune-benchmark', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    let range;
+    if (typeof req.query.from === 'string' && typeof req.query.to === 'string') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(req.query.from) || !/^\d{4}-\d{2}-\d{2}$/.test(req.query.to)) {
+        return res.status(400).json({ error: "Ugyldigt from/to-format, forventede 'YYYY-MM-DD'." });
+      }
+      range = { from: req.query.from, to: req.query.to };
+    } else {
+      const period = typeof req.query.period === 'string' ? req.query.period : '';
+      if (!VALID_ALERT_PERIODS.has(period)) {
+        return res.status(400).json({ error: `Ugyldig period — skal være én af: ${[...VALID_ALERT_PERIODS].join(', ')}, eller angiv ?from=&to=.` });
+      }
+      const monthParam = typeof req.query.month === 'string' ? req.query.month : null;
+      range = computeAlertStatsRange(period, monthParam);
+      if (!range) return res.status(400).json({ error: "Ugyldigt month-format, forventede 'YYYY-MM'." });
+    }
+
+    const result = await computeKommuneBenchmark({ fromDate: range.from, toDate: range.to });
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (e) {
+    console.error('admin/api/kommune-benchmark: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke beregne kommune-benchmark lige nu.' });
+  }
+});
+
 // Service worker: never cache (must update immediately)
 app.get('/overloeb-sw.js', (req, res) => {
   res.set('Cache-Control', 'no-cache');
@@ -1745,6 +1903,10 @@ function loadPulsPointsFull() {
         // bruges af badevandRisk.computeBadevandRiskCascade() til at
         // udelukke bekræftede regnvandsudløb fra bakteriel/viral-risikoen.
         isWastewater: derived.isWastewater,
+        // NYT (bruger-ønske — kommune-benchmark-rapportens datakvalitets-KPI,
+        // se computeKommuneBenchmark()): qualityCode fra PULS-grunddata,
+        // se derivePulsFields()'s filhoved.
+        dataQuality: derived.dataQuality,
       };
     });
     console.log(`loadPulsPointsFull: ${_pulsPointsFull.length} PULS-punkter indlæst til push-evaluering`);

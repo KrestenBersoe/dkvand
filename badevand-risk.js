@@ -360,7 +360,13 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
              // afgøre om et badesteds NULL bact/viral (efter afstands-/strøm-
              // filtrering) skyldes bekræftet regnvand (grøn) eller en anden,
              // reel datamangel (blå).
-             isWastewater: pt.isWastewater };
+             isWastewater: pt.isWastewater,
+             // NYT (bruger-ønske — kommune-benchmark-rapportens datakvalitets-
+             // KPI, se server.js's computeKommuneBenchmark()): ikke brugt af
+             // selve benchmark-beregningen (den læser direkte fra
+             // loadPulsPointsFull(), uden om denne outlet-matching), men
+             // medbragt for konsistens — samme mønster som isWastewater.
+             dataQuality: pt.dataQuality ?? null };
   }
   // Samler en Set af bidragende punkt-ID'er til en dedupliceret, klientklar
   // outlet-liste. Bruges ved sammenlægning af flere kilder pr. sø/kystvand.

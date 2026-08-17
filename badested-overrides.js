@@ -157,6 +157,36 @@ async function getActiveOverridesForBadestedIds(badestedIds) {
 }
 
 /**
+ * NYT (kommune-benchmark-rapporten, se server.js's computeKommuneBenchmark())
+ * — 'lukket'-intervaller der OVERLAPPER [fromDate, toDate], PÅ TVÆRS AF ALLE
+ * TENANTS (ingen tenant_id-filter — benchmarket sammenligner samtlige
+ * kommuner, ikke kun én). Dette er BEVIDST en afvigelse fra denne fils
+ * øvrige tenant-scopede forespørgsler (listActiveOverridesForTenant/
+ * getActiveOverridesForBadestedIds ovenfor) — se plan-dokumentets
+ * sikkerhedsnote: kun aggregerede badested_id/dato-intervaller eksponeres
+ * via denne vej, ALDRIG message/set_by/tenant-identitet.
+ *
+ * Modsat getActiveOverridesForBadestedIds() (kun NUVÆRENDE aktive rækker)
+ * inkluderer denne UDLØBNE og TILBAGEKALDTE rækker — tabellen er append-
+ * only historik (se filhovedet), og "lukket i perioden" skal fange enhver
+ * lukning der var aktiv PÅ ET TIDSPUNKT i intervallet, ikke kun lige nu.
+ * @param {string} fromDate 'YYYY-MM-DD'
+ * @param {string} toDate 'YYYY-MM-DD'
+ * @returns {Promise<{badested_id:string, created_at:Date, expires_at:Date, revoked_at:Date|null}[]>}
+ */
+async function getLukketIntervalsInRange(fromDate, toDate) {
+  const { rows } = await query(
+    `SELECT badested_id, created_at, expires_at, revoked_at
+     FROM badested_overrides
+     WHERE bucket = 'lukket'
+       AND created_at <= $2::date + interval '1 day'
+       AND COALESCE(revoked_at, expires_at) >= $1::date`,
+    [fromDate, toDate]
+  );
+  return rows;
+}
+
+/**
  * Patcher HELE cascade-resultatets badevand-array med aktive overstyringer
  * — se filhovedets "Injektionsprincip". Returnerer et NYT array (entries
  * uden en aktiv overstyring er SAMME reference som input, se
@@ -181,5 +211,6 @@ module.exports = {
   revokeOverride,
   listActiveOverridesForTenant,
   getActiveOverridesForBadestedIds,
+  getLukketIntervalsInRange,
   applyActiveOverrides,
 };

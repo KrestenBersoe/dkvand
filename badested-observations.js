@@ -506,6 +506,24 @@ async function getVurderingCounts30dGrouped() {
   return rows;
 }
 
+// NYT (kommune-benchmark-rapporten, se server.js's computeKommuneBenchmark())
+// — SAMME gruppering som getVurderingCounts30dGrouped() ovenfor, men med et
+// BRUGERVALGT interval i stedet for det faste 30-dages vindue (benchmark-
+// rapporten skal understøtte sæson/brugerdefineret periode, se planens
+// afsnit 2 "Periode"). Bevidst en SEPARAT funktion, ikke en parameterisering
+// af getVurderingCounts30dGrouped() — den bruges fra en periodisk, ikke-
+// parameteriseret cache-opfriskning (se dens eget filhoved) og skal forblive
+// uændret for det formål.
+async function getVurderingCountsGrouped(fromMs, toMs) {
+  const { rows } = await query(`
+    SELECT badested_id, COUNT(*)::int AS count
+    FROM badested_vurderinger
+    WHERE created_at > $1 AND created_at <= $2
+    GROUP BY badested_id
+  `, [fromMs, toMs]);
+  return rows;
+}
+
 // NYT (samme modul) — dags-optalt antal vurderinger for kommunens badesteder,
 // til udviklingsgrafen i Kommune-dashboardet. created_at er BIGINT ms (ikke
 // en DATE-kolonne), så dato udledes her via to_timestamp(...)::date — samme
@@ -531,6 +549,7 @@ module.exports = {
   getVurderingStats,
   getVurderingStatsForBadestedIds,
   getVurderingCounts30dGrouped,
+  getVurderingCountsGrouped,
   getVurderingTrendForBadestedIds,
   hashIp,
   PHOTOS_DIR,

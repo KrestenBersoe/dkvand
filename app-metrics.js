@@ -530,6 +530,45 @@ async function getAlertRowsForBadestedIds(badestedIds) {
   return rows;
 }
 
+// NYT (kommune-benchmark-rapporten, se server.js's computeKommuneBenchmark())
+// — samme aggregat som getAlertCountsForBadestedIds() ovenfor, men for ALLE
+// badesteder på én gang (ingen badestedIds-liste — benchmarket sammenligner
+// PÅ TVÆRS af samtlige kommuner, ikke kun én tenants egne) og filtreret til
+// ÉN varsels-type ('risikovarsel' — hverken 'ny-vurdering' eller
+// 'kommune-override' måler det samme som en model-baseret risikoadvarsel).
+// Samme INKLUSIVE datointerval-konvention som getAlertCountsForBadestedIds().
+async function getAlertCountsGroupedByBadestedId(type, fromDate, toDate) {
+  const { rows } = await query(`
+    SELECT badested_id, SUM(count)::int AS n
+    FROM badested_alert_daily
+    WHERE type = $1 AND date >= $2 AND date <= $3
+    GROUP BY badested_id
+  `, [type, fromDate, toDate]);
+  const result = new Map();
+  for (const r of rows) result.set(r.badested_id, r.n);
+  return result;
+}
+
+// NYT (kommune-benchmark-rapporten) — DAGE (ikke SUM) hvor et badested fik
+// mindst ét 'risikovarsel' sendt, i intervallet. Bruges til KPI 2 ("dage med
+// mindst ét ... varslet badested pr. kommune") som proxy for model-baseret
+// risikotilstand — se planens filhoved for hvorfor dette er en proxy
+// (kun badesteder med reelle push-abonnenter genererer overhovedet en
+// badested_alert_daily-række), ikke en fuldstændig historisk risikolog.
+async function getAlertDaysGroupedByBadestedId(type, fromDate, toDate) {
+  const { rows } = await query(`
+    SELECT DISTINCT badested_id, date
+    FROM badested_alert_daily
+    WHERE type = $1 AND count > 0 AND date >= $2 AND date <= $3
+  `, [type, fromDate, toDate]);
+  const result = new Map(); // badested_id -> Set<date>
+  for (const r of rows) {
+    if (!result.has(r.badested_id)) result.set(r.badested_id, new Set());
+    result.get(r.badested_id).add(r.date);
+  }
+  return result;
+}
+
 // ── Del 5: dagligt statistik-øjebliksbillede (til /stats' udviklingsgrafer) ─
 
 /**
@@ -592,6 +631,8 @@ module.exports = {
   recordBadestedAlertSent,
   getAlertCountsForBadestedIds,
   getAlertRowsForBadestedIds,
+  getAlertCountsGroupedByBadestedId,
+  getAlertDaysGroupedByBadestedId,
   recordDailyStatsSnapshot,
   getStatsHistory,
 };

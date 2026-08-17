@@ -135,6 +135,15 @@
   table.kstat-table td.n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; padding-left: .9rem; }
   table.kstat-table tr + tr td { border-top: 1px solid var(--border); }
 
+  /* NYT (bruger-ønske — kommune-benchmark-rapporten): egen kommune
+     fremhævet i de rangerede lister, samme kstat-table-basis som ovenfor
+     (genbruger td/n-stilene), kun tilføjer en synlig markering pr. række. */
+  .kb-own-row td { background: rgba(255,255,255,.05); font-weight: 700; }
+  .kb-subhead { font-size: .78rem; font-weight: 700; margin: 1.1rem 0 .15rem; color: var(--ink); }
+  .kb-unit-note { font-size: .72rem; color: var(--ink-soft); margin-bottom: .3rem; }
+  .kb-lav-n-list { font-size: .82rem; color: var(--ink-soft); }
+  #kb-custom-range input[type="date"] { margin-left: .4rem; }
+
   .trend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin: 1rem 0; }
   .trend-card { background: rgba(255,255,255,.02); border: 1px solid var(--border); border-radius: 8px; padding: .7rem .8rem; }
   .trend-card h2 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-soft); margin: 0 0 .4rem; font-weight: 600; display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; }
@@ -296,6 +305,34 @@ function render() {
     </div>
 
     <div class="card">
+      <h2>Kommune-benchmark</h2>
+      <div class="ov-intro">
+        Jeres kommunes håndtering af badevand/overløb sammenlignet med landets
+        øvrige deltagende kommuner. Rå hændelsestal er indekseret pr. antal
+        badesteder, for at korrigere for at bedre overvågning i sig selv
+        registrerer flere hændelser end dårligere overvågning — se
+        Datakvalitet nederst, som viser dette direkte.
+      </div>
+      <div class="stat-controls">
+        <label for="kb-period">Periode</label>
+        <select id="kb-period" onchange="onKbPeriodChange()">
+          <option value="today">I dag</option>
+          <option value="7d">Sidste 7 dage</option>
+          <option value="month">Måned</option>
+          <option value="quarter" selected>Sidste kvartal</option>
+          <option value="year">Sidste år</option>
+          <option value="custom">Brugerdefineret</option>
+        </select>
+        <input type="month" id="kb-month" value="${currentMonthStr()}" onchange="loadKommuneBenchmark()" style="display:none">
+        <span id="kb-custom-range" style="display:none">
+          <input type="date" id="kb-from" onchange="loadKommuneBenchmark()">
+          <input type="date" id="kb-to" onchange="loadKommuneBenchmark()">
+        </span>
+      </div>
+      <div id="kb-content">Indlæser…</div>
+    </div>
+
+    <div class="card">
       <h2>Rapporter</h2>
       <div class="report-buttons">
         <button type="button" disabled title="Kommer snart">📄 Myndighedsrapport</button>
@@ -311,6 +348,7 @@ function render() {
   loadOverrideBadesteder().then(loadActiveOverrides);
   loadKommuneStats();
   loadAlertStats();
+  loadKommuneBenchmark();
 }
 
 /**
@@ -580,6 +618,111 @@ async function loadKommuneStats() {
     renderTrendChart('kstat-trend-risikovarsel', data.trends.risikovarsel, { label: 'Risikovarsler' });
   } catch (e) {
     el.innerHTML = '<div class="err">Kunne ikke hente statistik — tjek din forbindelse.</div>';
+  }
+}
+
+// ── Kommune-benchmark-rapporten (bruger-ønske) ──────────────────────────────
+// Se server.js's computeKommuneBenchmark()/GET /admin/api/kommune-benchmark
+// for selve beregningen og KPI-definitionerne — denne sektion viser blot
+// det allerede-rangerede resultat. "Egen kommune" identificeres ved at
+// normalisere window.__TENANT__.name på SAMME måde som backend'ens
+// kommuneNavn (strip "kommune"-suffiks, trim), IKKE en streng byggeklods-
+// funktion som normalizeKommuneKey() (den findes kun server-side, se
+// slug-index.js) — kun til visuel fremhævelse her, ikke til opslag.
+function kbOwnKommuneNavn() {
+  return (window.__TENANT__?.name || '').replace(/\s*kommune\s*$/i, '').trim();
+}
+
+// NYT: "Måned" og "Brugerdefineret" viser deres respektive ekstra input(s);
+// øvrige presets henter med det samme, samme mønster som
+// onStatPeriodChange() ovenfor.
+function onKbPeriodChange() {
+  const period = document.getElementById('kb-period').value;
+  document.getElementById('kb-month').style.display = period === 'month' ? '' : 'none';
+  document.getElementById('kb-custom-range').style.display = period === 'custom' ? '' : 'none';
+  if (period !== 'custom') loadKommuneBenchmark();
+}
+
+function kbRankTable(title, unitNote, list, key, rangKey, ownNavn) {
+  const sorted = [...list].sort((a, b) => a[rangKey] - b[rangKey]);
+  const rowsHtml = sorted.map(r => `
+    <tr${r.kommuneNavn.toLowerCase() === ownNavn.toLowerCase() ? ' class="kb-own-row"' : ''}>
+      <td>#${r[rangKey]}</td><td>${escHtml(r.kommuneNavn)}</td>
+      <td class="n">${r[key].toFixed(2)}</td>
+    </tr>`).join('');
+  return `
+    <h3 class="kb-subhead">${escHtml(title)}</h3>
+    <div class="kb-unit-note">${escHtml(unitNote)}</div>
+    <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
+      <td>#</td><td>Kommune</td><td class="n">Indekseret</td>
+    </tr></thead><tbody>${rowsHtml}</tbody></table>`;
+}
+
+async function loadKommuneBenchmark() {
+  const el = document.getElementById('kb-content');
+  if (!el) return;
+  el.textContent = 'Indlæser…';
+
+  const period = document.getElementById('kb-period').value;
+  const qs = new URLSearchParams();
+  if (period === 'custom') {
+    const from = document.getElementById('kb-from').value;
+    const to   = document.getElementById('kb-to').value;
+    if (!from || !to) {
+      el.innerHTML = '<div class="hist-warning">Vælg både fra- og til-dato for en brugerdefineret periode.</div>';
+      return;
+    }
+    qs.set('from', from);
+    qs.set('to', to);
+  } else {
+    qs.set('period', period);
+    if (period === 'month') qs.set('month', document.getElementById('kb-month').value);
+  }
+
+  try {
+    const resp = await fetch(`/admin/api/kommune-benchmark?${qs.toString()}`, { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente kommune-benchmark.')}</div>`;
+      return;
+    }
+
+    const ownNavn = kbOwnKommuneNavn();
+    const own = data.hovedranking.find(r => r.kommuneNavn.toLowerCase() === ownNavn.toLowerCase());
+    const N   = data.hovedranking.length;
+
+    const summaryHtml = own
+      ? `<div class="kstat-grid"><div class="kstat-box">
+           <div class="kstat-label">Samlet placering</div>
+           <div class="kstat-value">#${Math.round(own.samletRang)} af ${N}</div>
+           <div class="kstat-note">${escHtml(own.kommuneNavn)} · ${own.badestedCount} badesteder · ligevægtet gennemsnit af de tre rangeringer nedenfor</div>
+         </div></div>`
+      : `<div class="hist-warning">Jeres kommune indgår ikke i hovedrangeringen for denne periode — enten under grænsen på 3 badesteder (se listen nederst), eller ingen matchende data endnu.</div>`;
+
+    const lavNHtml = data.lavN.length
+      ? `<h3 class="kb-subhead">For få badesteder til sammenligning (under 3)</h3>
+         <div class="kb-lav-n-list">${data.lavN.map(r => `${escHtml(r.kommuneNavn)} (${r.badestedCount})`).join(' · ')}</div>`
+      : '';
+
+    const dqRows = data.datakvalitet.map(d => `
+      <tr${d.kommuneNavn.toLowerCase() === ownNavn.toLowerCase() ? ' class="kb-own-row"' : ''}>
+        <td>${escHtml(d.kommuneNavn)}</td>
+        <td class="n">${Math.round(d.andel * 100)}%</td>
+        <td class="n">${d.reeltMaalt} / ${d.udloebPunkter}</td>
+      </tr>`).join('');
+
+    el.innerHTML = summaryHtml
+      + kbRankTable('Varsler', 'Risikovarsler pr. badested i perioden — færrest indekseret = bedst placering.', data.hovedranking, 'varslerIndekseret', 'rangVarsler', ownNavn)
+      + kbRankTable('Lukkedage', 'Dage med mindst ét lukket/varslet badested, pr. badested i perioden — færrest indekseret = bedst placering.', data.hovedranking, 'lukkedageIndekseret', 'rangLukkedage', ownNavn)
+      + kbRankTable('Badestedsvurderinger', 'Indsendte borger-vurderinger pr. badested i perioden — flest indekseret = bedst placering (modsat retning af de to ovenfor).', data.hovedranking, 'vurderingerIndekseret', 'rangVurderinger', ownNavn)
+      + lavNHtml
+      + `<h3 class="kb-subhead">Datakvalitet — andel udløbspunkter med reelt målt PULS-data</h3>
+         <div class="kb-unit-note">Vises SEPARAT, indgår ikke i samlet placering ovenfor — forklarer hvorfor kommuner med bedre overvågning kan have flere registrerede hændelser uden at det er et dårligere resultat.</div>
+         <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
+           <td>Kommune</td><td class="n">Andel</td><td class="n">Målt / i alt</td>
+         </tr></thead><tbody>${dqRows}</tbody></table>`;
+  } catch (e) {
+    el.innerHTML = '<div class="err">Kunne ikke hente kommune-benchmark — tjek din forbindelse.</div>';
   }
 }
 

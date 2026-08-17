@@ -208,6 +208,12 @@ function derivePulsFields(row) {
   const [lat, lng, name, authIdx, areaIdx, volumeM3, eventsPerYear] = row;
   const thresholdMm = row[13] ?? null;
   const sewerStructure = row[11] ?? null;
+  // NYT (bruger-ønske — kommune-benchmark-rapportens datakvalitets-KPI):
+  // qualityCode(7) — 0=reelle data, 1=verificeret nul, 2=estimeret,
+  // 3=ingen data, se update-puls.js's filhoved. Fandtes allerede i kilden,
+  // men blev aldrig udtrukket her — samme null-tolerante mønster som
+  // thresholdMm/sewerStructure ovenfor.
+  const dataQuality = row[7] ?? null;
   const ev  = eventsPerYear !== null ? eventsPerYear : 0;
   const vol = volumeM3 > 0 ? volumeM3 : 0;
   return {
@@ -216,6 +222,7 @@ function derivePulsFields(row) {
     overflowProbBase:   Math.min(ev / DK_RAINY_DAYS_YEAR, 1),
     thresholdMm,
     isWastewater: !PULS_NO_WASTEWATER_CODES.has(sewerStructure),
+    dataQuality,
   };
 }
 
