@@ -427,7 +427,23 @@ function getSsrShellHtml() {
   // Signalerer til klienten (se #tab-btn-doc's openDocTab() i dansk-
   // overloeb-kort.html) at #tab-doc er tom her, og "Om"-knappen derfor skal
   // navigere til /om i stedet for at skifte fane lokalt.
-  const html = stripped.replace('</body>', '<script>window.__DOC_PANEL_STRIPPED__=true;</script></body>');
+  //
+  // BUG (produktions-rapporteret 2026-08-17 — "Uncaught SyntaxError:
+  // Unexpected end of input" på /badested/farum-soe-doktorens-bugt-furesoe,
+  // reelt alle badested/soe-sider): .replace('</body>', …) er en STRENG,
+  // ikke en global regex, og rammer derfor kun den FØRSTE forekomst af
+  // "</body>" i hele filen — men print-skilt-funktionen (dansk-overloeb-
+  // kort.html:8924) bygger selv et HTML-dokument som en JS-template-streng,
+  // og DEN indeholder også teksten "</body>", TIDLIGERE i filen end sidens
+  // egen, rigtige lukke-tag (:11486). Indsættelsen landede derfor midt i
+  // den JS-streng, kløvede den, og gav ugyldig JS på ALLE badested/soe-
+  // sider. lastIndexOf() rammer i stedet altid den SIDSTE — og dermed
+  // reelt eneste rigtige — forekomst, uanset hvor mange "</body>"-agtige
+  // tekststumper der måtte findes tidligere inde i selve app-JS'en.
+  const bodyCloseIdx = stripped.lastIndexOf('</body>');
+  const html = bodyCloseIdx === -1
+    ? stripped
+    : stripped.slice(0, bodyCloseIdx) + '<script>window.__DOC_PANEL_STRIPPED__=true;</script>' + stripped.slice(bodyCloseIdx);
   _ssrShellCache = { mtimeMs: stat.mtimeMs, html };
   return html;
 }
