@@ -33,7 +33,19 @@
 
 var Windy = function (params) {
 
-	const VELOCITY_SCALE = 0.022 * (Math.pow(window.devicePixelRatio,1/3) || 1); // RETTET: 0.005 → 0.022 (bruger-rapport: næsten usynlig)
+	// RETTET (bruger-rapport 2026-08-17, med skærmbillede: tætte, statiske
+	// "prikker" i stedet for lange, flydende striber som i onaci/leaflet-
+	// velocitys eget referencebillede): hvert billedes segment-længde er
+	// vindstyrke(m/s) × VELOCITY_SCALE — upstreams egen 0.005-standard er
+	// tunet til VIND (typisk 2-15 m/s), men denne fil viser danske
+	// HAVSTRØMME (typisk 0,05-1 m/s), 10-30× langsommere fysisk. Den
+	// tidligere værdi (0,022, kun 4,4× upstreams standard) kompenserede
+	// derfor slet ikke nok for selve fartforskellen, endsige gav den ekstra
+	// visuelle forstørrelse en havstrøms-visualisering har brug for — hvert
+	// segment blev reelt kun et par pixel langt, hvilket ved
+	// PARTICLE_LINE_WIDTH+halo (se nedenfor) tegner som en rund klat, ikke
+	// en streg, uanset hvor længe TRAIL_FADE_ALPHA lader den hænge ved.
+	const VELOCITY_SCALE = 0.14 * (Math.pow(window.devicePixelRatio,1/3) || 1); // RETTET: 0.022 → 0.14
 	// RETTET (bruger-rapport: "alle strømme er røde" — midt-august havde ALLE
 	// danske vandtemperaturer ligget i den øverste tredjedel af en fast 0-22°C-
 	// skala, så farven næsten ikke varierede). Skalaen er nu RELATIV til det
@@ -44,16 +56,24 @@ var Windy = function (params) {
 	const MIN_TEMPERATURE_K_DEFAULT = 273.15; // 0°C
 	const MAX_TEMPERATURE_K_DEFAULT = 295.15; // 22°C
 	const MAX_PARTICLE_AGE = 120;                                                // RETTET: 90 → 120 (længere, mere synlige spor)
-	const PARTICLE_LINE_WIDTH = 4.5;                                             // RETTET: 3 → 4.5 (bruger-rapport: for spinkelt/lav kontrast, se PARTICLE_HALO_* nedenfor)
-	// RETTET (bruger-rapport: for lav kontrast mod det nye, lyse grå Skærmkort-
-	// basiskort, især zoomet ud) — en mørk, halvtransparent "halo" strøget
-	// BREDERE end og UNDER selve den farvede streg (se draw() nedenfor)
-	// garanterer synlighed uanset stregens egen farve/lyshed og uanset
-	// baggrundskortets aktuelle gråtone, i stedet for at skulle stole på at
-	// hver enkelt temperaturfarve i sig selv har nok kontrast.
-	const PARTICLE_HALO_LINE_WIDTH = PARTICLE_LINE_WIDTH + 3.5;
+	// RETTET (samme bruger-rapport som VELOCITY_SCALE ovenfor): 4,5 var
+	// tunet til at gøre en næsten usynlig, KORT klat mere synlig — med den
+	// nu markant længere segment-længde (VELOCITY_SCALE) skal stregen i
+	// stedet være TYND nok til at et langt segment reelt LÆSER som en
+	// streg/hale, ikke en tyk, sammenflydende korv. Halobredden følger med
+	// ned (samme +3.5-margin som før), stadig bredere end selve stregen for
+	// kontrast mod det lyse basiskort, blot mindre dominerende i sig selv.
+	const PARTICLE_LINE_WIDTH = 2;                                               // RETTET: 4.5 → 2
+	const PARTICLE_HALO_LINE_WIDTH = PARTICLE_LINE_WIDTH + 2.5;                  // RETTET: +3.5 → +2.5 (mindre dominerende ved den nye, tyndere kernestreg)
 	const PARTICLE_HALO_COLOR = 'rgba(10,20,35,0.55)';
-	const PARTICLE_MULTIPLIER = 1 / 60;                                          // RETTET: 1/200 → 1/60 (tættere partikelfelt)
+	// RETTET (samme bruger-rapport): 1/60 gav et SÅ tæt partikelfelt at de
+	// mange korte, overlappende klatter (se ovenfor) smeltede sammen til en
+	// ensartet "støjet" tekstur i stedet for adskilte, synlige striber —
+	// tættere partikeltæthed er kun en fordel, når hvert enkelt spor RENT
+	// FAKTISK ses som en diskret streg (som nu, efter VELOCITY_SCALE/
+	// PARTICLE_LINE_WIDTH-rettelserne ovenfor). Glesnet for at matche
+	// referencebilledernes tydeligt ADSKILTE striber.
+	const PARTICLE_MULTIPLIER = 1 / 110;                                         // RETTET: 1/60 → 1/110
 	const PARTICLE_REDUCTION = (Math.pow(window.devicePixelRatio,1/3) || 1.6);   // multiply particle count for mobiles by this amount
 	// RETTET (bruger-krav 2026-08-17: "forkert animation, se hvordan
 	// wind-js-leaflet/leaflet-velocity gør det, og gør halerne længere").
