@@ -29,6 +29,17 @@
   .wrap { max-width: 640px; margin: 0 auto; }
   h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
   .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
+
+  /* NYT (bruger-ønske — indholdsfortegnelse): dashboardet fik med tiden
+     flere kort end der er skærmhøjde til uden at scrolle (Status/Historik/
+     Badested-statistik/Kommunalt Varsel/Statistik/Kommune-benchmark/
+     Rapporter) — en simpel spring-liste øverst, ét link pr. kort. */
+  .dash-toc { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1.5rem; }
+  .dash-toc a {
+    color: var(--accent); background: rgba(255,255,255,.03); border: 1px solid var(--border);
+    border-radius: 999px; padding: .3rem .8rem; font-size: .78rem; text-decoration: none;
+  }
+  .dash-toc a:hover { background: rgba(255,255,255,.07); }
   .card {
     background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px;
     padding: 1.1rem 1.3rem; margin-bottom: 1rem;
@@ -226,14 +237,24 @@ function render() {
     <h1>🏛 ${escHtml(t.name)}</h1>
     <div class="sub">Kommune-dashboard — logget ind via ${t.authMethod === 'trial' ? 'trial-adgang' : 'kommunens eget OAuth-login'}</div>
 
-    <div class="card">
+    <nav class="dash-toc">
+      <a href="#card-status">Status</a>
+      <a href="#card-historik">Badevandshistorik</a>
+      <a href="#card-badested-stat">Badested-statistik</a>
+      <a href="#card-varsel">Kommunalt Varsel</a>
+      <a href="#card-statistik">Statistik</a>
+      <a href="#card-benchmark">Kommune-benchmark</a>
+      <a href="#card-rapporter">Rapporter</a>
+    </nav>
+
+    <div class="card" id="card-status">
       <h2>Status</h2>
       <div class="row"><span>Status</span><span>${statusBadge(t.status)}</span></div>
       ${t.status === 'trial' ? `<div class="row"><span>Trial udløber</span><span>${fmtDate(t.trialExpiresAt)}</span></div>` : ''}
       ${t.agreementSignedAt ? `<div class="row"><span>Aftale underskrevet</span><span>${fmtDate(t.agreementSignedAt)}</span></div>` : ''}
     </div>
 
-    <div class="card">
+    <div class="card" id="card-historik">
       <h2>Badevandshistorik</h2>
       <div class="hist-controls">
         <label for="f-month">Måned</label>
@@ -242,7 +263,7 @@ function render() {
       <div id="hist-content">Indlæser…</div>
     </div>
 
-    <div class="card">
+    <div class="card" id="card-badested-stat">
       <h2>Badested-statistik</h2>
       <div class="stat-controls">
         <label for="stat-period">Periode</label>
@@ -258,7 +279,7 @@ function render() {
       <div id="stat-content">Indlæser…</div>
     </div>
 
-    <div class="card">
+    <div class="card" id="card-varsel">
       <h2>Kommunalt Varsel</h2>
       <div class="ov-intro">
         Et banner på badestedets side og i push til abonnenter — ændrer
@@ -299,12 +320,12 @@ function render() {
       </form>
     </div>
 
-    <div class="card">
+    <div class="card" id="card-statistik">
       <h2>Statistik</h2>
       <div id="kstat-content">Indlæser…</div>
     </div>
 
-    <div class="card">
+    <div class="card" id="card-benchmark">
       <h2>Kommune-benchmark</h2>
       <div class="ov-intro">
         Jeres kommunes håndtering af badevand/overløb sammenlignet med landets
@@ -332,7 +353,7 @@ function render() {
       <div id="kb-content">Indlæser…</div>
     </div>
 
-    <div class="card">
+    <div class="card" id="card-rapporter">
       <h2>Rapporter</h2>
       <div class="report-buttons">
         <button type="button" disabled title="Kommer snart">📄 Myndighedsrapport</button>
