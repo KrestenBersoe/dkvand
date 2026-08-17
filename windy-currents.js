@@ -55,25 +55,34 @@ var Windy = function (params) {
 	const PARTICLE_HALO_COLOR = 'rgba(10,20,35,0.55)';
 	const PARTICLE_MULTIPLIER = 1 / 60;                                          // RETTET: 1/200 → 1/60 (tættere partikelfelt)
 	const PARTICLE_REDUCTION = (Math.pow(window.devicePixelRatio,1/3) || 1.6);   // multiply particle count for mobiles by this amount
-	// RETTET (bruger-krav: længere, mere synlige haler) — global udtonings-
-	// rate pr. billede, ÉN fælles hastighed for alle partikler. 0.16 → 0.06:
-	// ved 15 fps (FRAME_RATE) betyder det en synlig spor-levetid på ca.
-	// 1,2s → ca. 3,2s (tid til at falme til ~5% opacitet, 0.94^n = 0.05).
-	const TRAIL_FADE_ALPHA = 0.06;
-	// GENINDFØRT (bruger-krav 2026-08-17: "hale-længde skal afhænge af
-	// fart" — se evolve()/draw() nedenfor for selve mekanikken). Fjernet
-	// igen 2026-08-15 (commit "Fix currents showing over land; drop failed
-	// tail hack") efter bruger-rapport om at TRAIL_FADE_ALPHA-udtoningen
-	// ovenfor druknede den; multiplikatoren blev dengang allerede hævet
-	// 2,5→10 uden effekt. Denne gang bevidst kombineret MED den langsommere
-	// udtoning (0.06, uændret siden) i stedet for i stedet for den — de to
-	// er ikke gensidigt udelukkende: udtoningen giver et langt, blødt spor
-	// på tværs af billeder; denne konstant strækker DERUDOVER hvert enkelt
-	// billedes eget segment tilbage langs bevægelsesretningen, proportionalt
-	// med farten, så hurtig/langsom strøm adskiller sig tydeligt selv
-	// inden for ÉT billede, ikke kun via hvor mange udtonede spor der
-	// statistisk overlapper. 1 = intet ekstra (kun det naturlige segment).
-	const TAIL_LENGTH_MULTIPLIER = 10;
+	// RETTET (bruger-krav 2026-08-17: "forkert animation, se hvordan
+	// wind-js-leaflet/leaflet-velocity gør det, og gør halerne længere").
+	// Tjekket direkte i BEGGE referencer (danwild/wind-js-leaflet og
+	// onaci/leaflet-velocity, samme motor-slægt som denne fil): INGEN af
+	// dem har noget per-partikel hale-mekanisme overhovedet — begge tegner
+	// udelukkende ét kort segment pr. partikel pr. billede (particle.x/y →
+	// particle.xt/yt) og opnår HELE "lang hale"-indtrykket via netop denne
+	// tværbilled-udtoning alene. Upstream wind-js-leaflet sletter 16% pr.
+	// billede (kort hukommelse); onaci-forken bevarer ~97% pr. billede
+	// (destination-in, meget lang hukommelse) — ordnet efter SAMME opskrift
+	// som her, blot markant langsommere. Den tidligere TAIL_LENGTH_
+	// MULTIPLIER-tilføjelse (per-partikel segment-forlængelse inden for ét
+	// enkelt billede) findes IKKE i nogen af de to referencer og er fjernet
+	// igen — det er ikke bare en anden vej til samme resultat, det er en
+	// afvigelse fra selve teknikken, og gav et forkert, prikket/stribet
+	// udseende i stedet for glatte, flydende haler.
+	//
+	// Halelængden styres derfor UDELUKKENDE her: 0.16 (upstream-default) →
+	// 0.06 (forrige rettelse) → 0.03 nu — ved 15 fps (FRAME_RATE) giver det
+	// en synlig spor-levetid på ca. 6,5s (tid til at falme til ~5%
+	// opacitet, 0.97^n = 0.05), dobbelt så lang som forrige rettelse, og
+	// tættere på onaci-forkens ~97%-bevarelse pr. billede. Farten er
+	// STADIG synlig i halens længde uden nogen ekstra mekanisme — v[0]/v[1]
+	// (partiklens pixel-forskydning) er allerede proportional med farten,
+	// så en hurtig partikel dækker naturligt mere afstand pr. billede og
+	// får dermed en visuelt længere hale over samme udtonings-vindue end en
+	// langsom, præcis som i begge referencer.
+	const TRAIL_FADE_ALPHA = 0.03;
 	const FRAME_RATE = 15, FRAME_TIME = 1000 / FRAME_RATE;                       // desired frames per second
 
 	var NULL_WIND_VECTOR = [NaN, NaN, null];                                     // singleton for no wind in the form: [u, v, magnitude]
@@ -490,14 +499,6 @@ var Windy = function (params) {
 						// Path from (x,y) to (xt,yt) is visible, so add this particle to the appropriate draw bucket.
 						particle.xt = xt;
 						particle.yt = yt;
-						// GENINDFØRT (se TAIL_LENGTH_MULTIPLIER's filhoved) — halens
-						// STARTPUNKT trækkes tilbage langs samme retning som
-						// bevægelsen selv (v[0]/v[1]) — jo hurtigere strømmen, jo
-						// længere hale, uden at ændre selve partiklens reelle
-						// position (xt/yt, som stadig kun rykker ét naturligt
-						// skridt pr. billede).
-						particle.xs = x - (TAIL_LENGTH_MULTIPLIER - 1) * v[0];
-						particle.ys = y - (TAIL_LENGTH_MULTIPLIER - 1) * v[1];
 						buckets[colorStyles.indexFor(m)].push(particle);
 					}
 					else {
@@ -527,13 +528,14 @@ var Windy = function (params) {
 			// strøges TO gange (halo, så farve) — se PARTICLE_HALO_*'s filhoved
 			// for hvorfor. moveTo/lineTo-koordinaterne opdaterer IKKE
 			// particle.x/y, så samme sti kan genbruges til begge strøg.
-			// GENINDFØRT: moveTo fra particle.xs/ys (fart-strakt startpunkt,
-			// se TAIL_LENGTH_MULTIPLIER/evolve()), ikke particle.x/y selv.
+			// Ét kort segment pr. partikel pr. billede (particle.x/y →
+			// particle.xt/yt), præcis som BEGGE referencer (se TRAIL_FADE_
+			// ALPHA's filhoved) — al hale-længde kommer fra udtoningen alene.
 			buckets.forEach(function (bucket, i) {
 				if (bucket.length > 0) {
 					g.beginPath();
 					bucket.forEach(function (particle) {
-						g.moveTo(particle.xs, particle.ys);
+						g.moveTo(particle.x, particle.y);
 						g.lineTo(particle.xt, particle.yt);
 					});
 					g.lineWidth = PARTICLE_HALO_LINE_WIDTH;
