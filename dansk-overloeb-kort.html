@@ -4054,27 +4054,23 @@ async function renderBadestedExtras(p, latlng) {
       }
     }
   }
+  // NYT (bruger-ønske 2026-08-17 — fusion af de to "Badestedsvurdering"-
+  // paneler): 30-dages vurderingstallet vises nu i det EKSISTERENDE,
+  // altid-synlige "Badestedsvurdering"-panel (#bv-vurdering-panel) i
+  // stedet for sit eget separate kort her — se renderBadestedVurderingPanel().
+}
 
-  // Badestedsvurdering — antal borger-vurderinger seneste 30 dage (bruger-
-  // ønske 2026-08-17). Eneste sektion der KRÆVER en server-forespørgsel —
-  // vurderingCount30dCache (server.js) er ikke ellers tilgængelig client-
-  // side. Ét let, cache-baseret GET-kald pr. panelåbning — INTET DB-kald
-  // pr. request server-side, se server.js's /api/vurdering-count-30d/:id.
-  const vurderingCard = document.getElementById('bv-vurdering-card');
-  const vurderingEl   = document.getElementById('bv-vurdering-count');
-  if (vurderingCard) vurderingCard.style.display = 'none';
-  if (p.bathingwat && vurderingEl) {
-    try {
-      const resp = await fetch('/api/vurdering-count-30d/' + encodeURIComponent(p.bathingwat));
-      if (resp.ok) {
-        const { count } = await resp.json();
-        if (count > 0) {
-          vurderingEl.textContent = `${count} ${count === 1 ? 'vurdering' : 'vurderinger'} fra besøgende de seneste 30 dage.`;
-          vurderingCard.style.display = '';
-        }
-      }
-    } catch (e) { /* stille — ikke-kritisk indhold */ }
-  }
+// Dupliceret af server.js's /api/vurdering-count-30d/:id-opslag — se dens
+// filhoved. Kaldt fra renderBadestedVurderingPanel() (fusioneret
+// "Badestedsvurdering"-panel, bruger-ønske 2026-08-17).
+async function fetchVurderingCount30d(badestedId) {
+  if (!badestedId) return 0;
+  try {
+    const resp = await fetch('/api/vurdering-count-30d/' + encodeURIComponent(badestedId));
+    if (!resp.ok) return 0;
+    const { count } = await resp.json();
+    return count || 0;
+  } catch (e) { return 0; }
 }
 
 // NYT: klassificerer ét badevands-resultat (rå indgang fra
@@ -9622,14 +9618,24 @@ async function renderBadestedVurderingPanel(p) {
     return;
   }
 
+  // NYT (bruger-ønske 2026-08-17 — fusion af de to "Badestedsvurdering"-
+  // paneler til ét, placeret her hvor det oprindelige panel allerede sad):
+  // kørt PARALLELT med observation-summary-kaldet nedenfor, ikke
+  // sekventielt bagefter — to uafhængige, lette GET-kald.
+  const count30dPromise = fetchVurderingCount30d(badestedId);
+
   try {
     const resp = await fetch(`api/badested-observation/${encodeURIComponent(badestedId)}`);
     if (!resp.ok) {
       div.innerHTML = '<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Kunne ikke hente vurderinger lige nu.</div>';
       return;
     }
-    const summary = await resp.json();
-    const layer1  = summary.layer1 || {};
+    const summary  = await resp.json();
+    const layer1   = summary.layer1 || {};
+    const count30d = await count30dPromise;
+    const count30dHtml = count30d > 0
+      ? `<div style="font-size:.7rem;color:#5a6b78;margin-top:.3rem">${count30d} ${count30d === 1 ? 'vurdering' : 'vurderinger'} i alt de seneste 30 dage.</div>`
+      : '';
 
     // NYT (efter eksplicit ønske): ingen vurderinger endnu → tydelig
     // opfordring i stedet for et tomt/nul-fyldt diagram, som ellers ville
@@ -9641,11 +9647,17 @@ async function renderBadestedVurderingPanel(p) {
     // "ingen vurderinger endnu", fordi vægten decayer mod (men aldrig helt
     // til) 0, og AFRUNDINGEN gjorde den usynlig længe før den reelt var
     // uden betydning. Se badested-observations.js's filhoved.
+    //
+    // NYT (bruger-ønske 2026-08-17, fusionen): hasAnyReports' eget
+    // lookback-vindue (OBSERVATION_LOOKBACK_HOURS, default 8 dage — se
+    // badested-observations.js) er KORTERE end de 30 dage count30d dækker,
+    // så de to kan reelt være uenige (fx én vurdering for 15 dage siden:
+    // hasAnyReports=false, count30d=1) — "ingen endnu" ville da modsige
+    // "1 vurdering ... seneste 30 dage" lige under. Skelner derfor eksplicit.
     if (!summary.hasAnyReports) {
-      div.innerHTML = `
-        <div style="font-size:.8rem;color:#5a6b78;padding:.2rem 0 .8rem">Ingen borgervurderinger endnu for dette badested — vær den første.</div>
-        <button class="bv-btn primary" style="width:100%" onclick="openObservationPrompt(_currentBvFeature)">⭐ Badestedsvurdering</button>
-      `;
+      div.innerHTML = count30d > 0
+        ? `<div style="font-size:.8rem;color:#5a6b78;padding:.2rem 0 .4rem">Ingen nye vurderinger den seneste uge.</div>${count30dHtml}<button class="bv-btn primary" style="width:100%;margin-top:.6rem" onclick="openObservationPrompt(_currentBvFeature)">⭐ Badestedsvurdering</button>`
+        : `<div style="font-size:.8rem;color:#5a6b78;padding:.2rem 0 .8rem">Ingen borgervurderinger endnu for dette badested — vær den første.</div><button class="bv-btn primary" style="width:100%" onclick="openObservationPrompt(_currentBvFeature)">⭐ Badestedsvurdering</button>`;
       return;
     }
 
@@ -9660,6 +9672,7 @@ async function renderBadestedVurderingPanel(p) {
     if (alder) {
       html += `<div style="font-size:.7rem;color:#5a6b78;margin-top:.6rem">Seneste vurdering: ${escHtml(alder)}</div>`;
     }
+    html += count30dHtml;
     html += '<div style="font-size:.66rem;color:#5a6b78;margin-top:.3rem">Henfaldsvægtet (seneste vurderinger vejer mest) · påvirker ikke den officielle risikovurdering ovenfor</div>';
     div.innerHTML = html;
   } catch (e) {
@@ -9743,6 +9756,23 @@ async function submitAlgaeObservation() {
   }
 }
 
+// Bruger-ønske 2026-08-17 — "Udløb der påvirker badevandet" flyttet til
+// bunden af panelet og kollapset som standard; datakonfidensen
+// (#bv-outlets-conf) ligger UDEN FOR denne kollapsede del og påvirkes
+// derfor ikke af denne funktion, se HTML-kommentaren ved kortet.
+function toggleBvOutlets() {
+  const body  = document.getElementById('bv-outlets');
+  const icon  = document.getElementById('bv-outlets-toggle-icon');
+  const label = document.getElementById('bv-outlets-toggle-label');
+  const btn   = document.getElementById('bv-outlets-toggle');
+  if (!body) return;
+  const nowOpen = body.style.display === 'none';
+  body.style.display = nowOpen ? '' : 'none';
+  if (icon)  icon.textContent  = nowOpen ? '▴' : '▾';
+  if (label) label.textContent = nowOpen ? 'Skjul udløb' : 'Vis udløb';
+  if (btn)   btn.setAttribute('aria-expanded', String(nowOpen));
+}
+
 async function showBadevandPanel(feature, skipUrlPush) {
   _currentBvFeature = feature;
   const p    = feature.properties || {};
@@ -9757,6 +9787,15 @@ async function showBadevandPanel(feature, skipUrlPush) {
   document.getElementById('bv-subtitle').textContent =
     [p.komm_navn, p.ov_id].filter(Boolean).join(' · ');
   document.getElementById('bv-outlets').textContent  = 'Indlæser…';
+  // Bruger-ønske 2026-08-17 — udløbslisten skal starte kollapset ved HVER
+  // panelåbning (ikke kun ved første load), ellers ville en bruger, der
+  // havde udvidet den for ét badested, se den stå åben ved det NÆSTE — se
+  // toggleBvOutlets(). #bv-outlets-conf (datakonfidensen) er IKKE en del af
+  // det kollapsede, og nulstilles derfor ikke her.
+  document.getElementById('bv-outlets').style.display = 'none';
+  document.getElementById('bv-outlets-toggle-label').textContent = 'Vis udløb';
+  document.getElementById('bv-outlets-toggle-icon').textContent  = '▾';
+  document.getElementById('bv-outlets-toggle')?.setAttribute('aria-expanded', 'false');
   document.getElementById('bv-chart-wrap').innerHTML = '<div style="padding:.5rem 0;color:#5a6b78;font-size:.8rem">Indlæser vejrdata…</div>';
   document.getElementById('badevand-panel').classList.add('open');
   hideSsrContent(); // se dens filhoved — undgår dobbelt, redundant tekst når det rigtige panel har overtaget
@@ -9965,6 +10004,13 @@ async function showBadevandPanel(feature, skipUrlPush) {
   // ID15-matchede, opstrøms-sporede udløb; kun ved den rå radius-fallback
   // (ingen sø/kystvand fundet) vises den brede nærheds-liste.
   const outDiv = document.getElementById('bv-outlets');
+  // Bruger-ønske 2026-08-17 — datakonfidensen skal forblive synlig, selvom
+  // selve udløbslisten (#bv-outlets) er kollapset som standard, så den
+  // skrives nu i sin egen, ALTID synlige beholder uden for den kollapsede
+  // del (se toggleBvOutlets()) i stedet for at blive concateneret ind i
+  // #bv-outlets' egen innerHTML, som den hidtil har været i ALLE grene
+  // nedenfor.
+  const confDiv = document.getElementById('bv-outlets-conf');
   if (outDiv) {
     const listOutlets = _risk.outlets || [];
     // NYT (bruger-ønske — datakonfidens): forankret her, ikke i risikobjælkerne
@@ -9973,6 +10019,7 @@ async function showBadevandPanel(feature, skipUrlPush) {
     // allerede dækker. '' (tom streng) ved manglende tier (fx server-
     // utilgaengelig, hvor der intet grundlag er at vurdere tillid ud fra).
     const confBadge = confidenceBadgeHtml(_risk.dataConfidence);
+    if (confDiv) confDiv.innerHTML = confBadge;
     if (_risk.source === 'server-utilgaengelig') {
       // NYT: distinkt fra "ingen bekræftet forbindelse" — det ved vi
       // faktisk ikke noget om lige nu, fordi serveren ikke svarede/data
@@ -9986,7 +10033,7 @@ async function showBadevandPanel(feature, skipUrlPush) {
       // afgøres.
       if (_risk.geomMatchNoData) {
         const { type, navn } = _risk.geomMatchNoData;
-        outDiv.innerHTML = confBadge + `<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Lokationen ligger inden for ${escHtml(type)}en <strong>${escHtml(navn)}</strong>, men den har ikke selv nogen beregnet risikodata — sandsynligvis et navnematch-problem i den bagvedliggende model, ikke et geometri-problem med selve badestedet.</div>`;
+        outDiv.innerHTML = `<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Lokationen ligger inden for ${escHtml(type)}en <strong>${escHtml(navn)}</strong>, men den har ikke selv nogen beregnet risikodata — sandsynligvis et navnematch-problem i den bagvedliggende model, ikke et geometri-problem med selve badestedet.</div>`;
       } else {
         // RETTET (bruger-ønske 2026-07-25): viste tidligere en grå/neutral
         // "ingen data"-besked her — men al udløbs-matching (RBU/PULS/ID15)
@@ -9998,7 +10045,7 @@ async function showBadevandPanel(feature, skipUrlPush) {
         // formulering: dette er IKKE en aktiv ID15-terrænsporings-
         // verifikation (se 'ingen-bekraeftet'), blot fravær af data at
         // undersøge i første omgang.
-        outDiv.innerHTML = confBadge + '<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ Ingen registrerede udløb, som udleder til denne lokation.</div>';
+        outDiv.innerHTML = '<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ Ingen registrerede udløb, som udleder til denne lokation.</div>';
       }
     } else if (_risk.source === 'ingen-bekraeftet') {
       // NYT: tredje, adskilt kategori — se badevand-risk.js's
@@ -10011,7 +10058,7 @@ async function showBadevandPanel(feature, skipUrlPush) {
       // Ågerup/Vollerup Badebro/Svenstrup Overdrev/Saltbæk Badebro er alle
       // kystvande, ikke søer). Grøn/positiv formulering, adskilt fra både
       // den grå "ingen data"-besked og en almindelig lav-risiko-måling.
-      outDiv.innerHTML = confBadge + `<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ ${escHtml(confirmReasonDetailText(_risk.confirmReason))}</div>`;
+      outDiv.innerHTML = `<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ ${escHtml(confirmReasonDetailText(_risk.confirmReason))}</div>`;
     } else if (_risk.source === 'nedstroms-bekraeftet') {
       // NYT: fjerde kategori — se badevand-risk.js's allDownstreamKyst og
       // colorBadevandByRisk()'s tilsvarende rettelse. Kystvandet HAR kendte
@@ -10021,15 +10068,15 @@ async function showBadevandPanel(feature, skipUrlPush) {
       // ovenfor (som er en permanent geometrisk kendsgerning), kan denne
       // konklusion ændre sig med strømretningen.
       const navn = _risk.allDownstreamMatch?.navn;
-      outDiv.innerHTML = confBadge + `<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ Kendte udløb${navn ? ` i ${escHtml(navn)}` : ''} er lige nu strømbekræftet nedstrøms af badestedet (CMEMS-strømdata) — ingen aktuel forureningskilde peger hertil. Kan ændre sig med strømretningen.</div>`;
+      outDiv.innerHTML = `<div style="font-size:.8rem;color:#2d7d4f;padding:.5rem 0">✅ Kendte udløb${navn ? ` i ${escHtml(navn)}` : ''} er lige nu strømbekræftet nedstrøms af badestedet (CMEMS-strømdata) — ingen aktuel forureningskilde peger hertil. Kan ændre sig med strømretningen.</div>`;
     } else if (listOutlets.length === 0) {
-      outDiv.innerHTML = confBadge + '<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Bekræftet vandområde fundet, men ingen individuelle udløb kunne matches</div>';
+      outDiv.innerHTML = '<div style="font-size:.8rem;color:#5a6b78;padding:.5rem 0">Bekræftet vandområde fundet, men ingen individuelle udløb kunne matches</div>';
     } else {
       const sourceLabel = _risk.source === 'soe' ? 'Opstrøms-matchede udløb (ID15 + rejsetid)' :
                            _risk.source === 'kystvand' ? 'Opstrøms-matchede udløb (kystvand)' :
                            _risk.source === 'vandlob' ? 'Opstrøms-matchede udløb (vandløb, sikker retning)' :
                            'Opstrøms-matchede udløb (vandløb, usikker retning)';
-      outDiv.innerHTML = confBadge + `<div style="font-size:.72rem;color:#5a6b78;padding:0 0 .4rem 0">${escHtml(sourceLabel)}</div>` +
+      outDiv.innerHTML = `<div style="font-size:.72rem;color:#5a6b78;padding:0 0 .4rem 0">${escHtml(sourceLabel)}</div>` +
         [...listOutlets].sort((a, b) => (b.riskScore || 0) - (a.riskScore || 0)).slice(0, 15).map(pt => {
         const risk  = pt.riskScore || 0;
         const color = risk >= 0.6 ? '#c84b1f' : risk >= 0.2 ? '#d4a020' : '#2d7d4f';
@@ -11481,22 +11528,10 @@ document.addEventListener('visibilitychange', () => {
          denne knap) — se maybeShowObservationPrompt()/openObservationPrompt()
          i JS. -->
 
-    <!-- Udløb der påvirker badevandet -->
-    <div class="bv-card">
-      <div class="bv-card-title">Udløb der påvirker badevandet</div>
-      <div id="bv-outlets">Indlæser…</div>
-    </div>
-
-    <!-- Bruger-ønske 2026-08-17 — Lokation/nærheds-/vurderings-sektioner,
-         se renderBadestedExtras() (kaldt fra showBadevandPanel()). Alle
-         fire starter skjulte (enten fordi indholdet endnu ikke er beregnet,
-         eller fordi der reelt ikke er noget at vise for netop dette
-         badested) og vises kun når JS rent faktisk finder indhold. -->
-    <div class="bv-card" id="bv-vurdering-card" style="display:none">
-      <div class="bv-card-title">Badestedsvurdering</div>
-      <div id="bv-vurdering-count" style="font-size:.85rem"></div>
-    </div>
-
+    <!-- Bruger-ønske 2026-08-17 — Lokation/nærheds-sektioner, se
+         renderBadestedExtras() (kaldt fra showBadevandPanel()). Starter
+         skjulte (kun "Lokation" er altid vist — de to nærheds-lister kun
+         hvis der reelt er noget at vise for netop dette badested). -->
     <div class="bv-card">
       <div class="bv-card-title">Lokation</div>
       <div id="bv-location"></div>
@@ -11510,6 +11545,22 @@ document.addEventListener('visibilitychange', () => {
     <div class="bv-card" id="bv-nearby-kommune-card" style="display:none">
       <div class="bv-card-title" id="bv-nearby-kommune-title">Andre badesteder i kommunen</div>
       <div id="bv-nearby-kommune"></div>
+    </div>
+
+    <!-- Udløb der påvirker badevandet — bruger-ønske 2026-08-17: flyttet
+         til bunden af panelet og kollapset som standard (selve udløbs-
+         listen er lang og primært relevant for brugere, der aktivt vil
+         undersøge kilderne), mens datakonfidensen (#bv-outlets-conf) er en
+         central del af selve risikovurderingen og derfor ALTID synlig,
+         uden for den kollapsede del — se toggleBvOutlets() i JS. -->
+    <div class="bv-card">
+      <div class="bv-card-title">Udløb der påvirker badevandet</div>
+      <div id="bv-outlets-conf"></div>
+      <button type="button" id="bv-outlets-toggle" onclick="toggleBvOutlets()" aria-expanded="false"
+        style="display:flex;align-items:center;justify-content:space-between;width:100%;background:none;border:none;padding:.3rem 0;font:inherit;font-size:.8rem;font-weight:600;color:var(--accent);cursor:pointer">
+        <span id="bv-outlets-toggle-label">Vis udløb</span><span id="bv-outlets-toggle-icon">▾</span>
+      </button>
+      <div id="bv-outlets" style="display:none">Indlæser…</div>
     </div>
 
     <!-- Handlinger -->
