@@ -2389,6 +2389,19 @@ app.get('/api/badested-observation/:id', async (req, res) => {
   }
 });
 
+// NYT (bruger-ønske 2026-08-17 — "Badestedsvurdering"-kortet i det levende
+// badevand-panel, se dansk-overloeb-kort.html's renderBadestedExtras()):
+// LÆSER UDELUKKENDE den allerede præ-beregnede vurderingCount30dCache
+// (opfrisket hver time, se dens filhoved) — INTET Postgres-kald pr.
+// request, i modsætning til /api/badested-observation/:id ovenfor. Kaldes
+// ét let gang pr. panelåbning fra en rigtig besøgende, ikke pr. crawlet
+// /badested/:slug-side (den bruger vurderingCount30dCache direkte,
+// server-side, se app.get('/badested/:slug', …)).
+app.get('/api/vurdering-count-30d/:id', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ count: vurderingCount30dCache.get(String(req.params.id)) || 0 });
+});
+
 // Servér uploadede fotos — filnavne er altid server-genererede UUID'er (se
 // savePhoto() i badested-observations.js), aldrig klient-leverede, så der
 // er ingen path traversal-risiko ved direkte statisk servering.

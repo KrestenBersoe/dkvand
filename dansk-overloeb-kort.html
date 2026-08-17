@@ -3957,6 +3957,126 @@ async function loadBadevandAnalyseData() {
   }
 }
 
+// ── Lokation/nærheds-/vurderings-sektioner i det LEVENDE badested-panel ────
+// Bruger-rapporteret 2026-08-17: de tilsvarende sektioner i seo-pages.js's
+// buildSsrContent() (se server.js's getSsrShellHtml()-filhoved) løser Google-
+// indekseringsproblemet, men er USYNLIGE for rigtige besøgende — dels fordi
+// hideSsrContent() skjuler HELE #ssr-content, så snart panelet åbner (se dens
+// filhoved), dels fordi SSR-indholdet kun findes på /badested/:slug-URL'er
+// overhovedet — et #badevand=lat:lng-hash-link (kortets EGEN, langt mest
+// almindelige navigationsmåde) rammer '/'-routen, som ALDRIG injicerer det.
+// Beregnes derfor HELT client-side her, ud fra badevandAnalyseData — samme
+// kilde slug-index.js selv bruger server-side — og kaldes fra
+// showBadevandPanel() ved HVER åbning, uanset indgang.
+
+// Dupliceret af badevand-risk.js's haversineM (server, i meter) — samme
+// bevidst-adskilte duplikerings-princip som slugify() allerede bruger her.
+function haversineKmClient(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// Dupliceret af slug-index.js's normalizeKommuneKey() — se dens filhoved.
+function normalizeKommuneKeyClient(s) {
+  return String(s || '')
+    .replace(/\s*kommune\s*$/i, '')
+    .trim()
+    .toLowerCase()
+    .replace(/æ/g, 'ae').replace(/ø/g, 'oe').replace(/å/g, 'aa')
+    .normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function buildLokationCardHtml(lat, lng) {
+  const q = `${lat},${lng}`;
+  return `
+    <p style="border:1px solid #d7dee3;border-radius:10px;overflow:hidden;line-height:0;margin-bottom:.6rem">
+      <iframe src="https://maps.google.com/maps?q=${encodeURIComponent(q)}&z=15&output=embed" width="100%" height="200" style="border:0;display:block" loading="lazy" referrerpolicy="no-referrer-when-downgrade" title="Kort"></iframe>
+    </p>
+    <a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(q)}" target="_blank" rel="noopener" style="font-size:.82rem;font-weight:600;color:var(--accent);text-decoration:none">Få rutevejledning →</a>`;
+}
+
+function buildNearbyListHtmlClient(items) {
+  return items.map(b => `<a class="bv-outlet-row" href="/badested/${encodeURIComponent(b.slug)}" style="text-decoration:none;color:inherit">
+    <div style="flex:1"><div class="bv-outlet-name">${escHtml(b.navn)}</div><div class="bv-outlet-sub">${b.distKm.toFixed(1)} km</div></div>
+  </a>`).join('');
+}
+
+async function renderBadestedExtras(p, latlng) {
+  const locEl = document.getElementById('bv-location');
+  if (locEl && latlng) locEl.innerHTML = buildLokationCardHtml(latlng.lat, latlng.lng);
+
+  const distCard = document.getElementById('bv-nearby-distance-card');
+  const distList = document.getElementById('bv-nearby-distance');
+  const komCard  = document.getElementById('bv-nearby-kommune-card');
+  const komList  = document.getElementById('bv-nearby-kommune');
+  const komTitle = document.getElementById('bv-nearby-kommune-title');
+  if (distCard) distCard.style.display = 'none';
+  if (komCard)  komCard.style.display  = 'none';
+
+  if (latlng) {
+    if (!badevandAnalyseData) await loadBadevandAnalyseData();
+    if (badevandAnalyseData) {
+      const dkbwMatch = String(p.bathingwat || '').match(/(\d+)/);
+      const dkbw = dkbwMatch ? parseInt(dkbwMatch[1], 10) : null;
+      const selfEntry = dkbw != null ? badevandAnalyseData.get(dkbw) : null;
+      const all = [...badevandAnalyseData.values()].filter(e => e.lat != null && e.lng != null && e.dkbw !== dkbw);
+
+      const nearbyDistance = all
+        .map(e => ({ navn: e.navn, kommune: e.kommune, distKm: haversineKmClient(latlng.lat, latlng.lng, e.lat, e.lng) }))
+        .filter(e => e.distKm <= 20)
+        .sort((a, b) => a.distKm - b.distKm)
+        .slice(0, 6)
+        .map(e => ({ slug: slugify(e.navn, e.kommune), navn: e.navn, distKm: e.distKm }));
+      if (distList && nearbyDistance.length) {
+        distList.innerHTML = buildNearbyListHtmlClient(nearbyDistance);
+        distCard.style.display = '';
+      }
+
+      const selfKommuneKey = selfEntry?.kommune ? normalizeKommuneKeyClient(selfEntry.kommune) : null;
+      if (selfKommuneKey) {
+        const nearbyKommune = all
+          .filter(e => e.kommune && normalizeKommuneKeyClient(e.kommune) === selfKommuneKey)
+          .map(e => ({ navn: e.navn, kommune: e.kommune, distKm: haversineKmClient(latlng.lat, latlng.lng, e.lat, e.lng) }))
+          .sort((a, b) => a.distKm - b.distKm)
+          .slice(0, 8)
+          .map(e => ({ slug: slugify(e.navn, e.kommune), navn: e.navn, distKm: e.distKm }));
+        if (komList && nearbyKommune.length) {
+          const kommuneDisplay = selfEntry.kommune.replace(/\s*kommune\s*$/i, '').trim();
+          if (komTitle) komTitle.textContent = `Andre badesteder i ${kommuneDisplay}`;
+          komList.innerHTML = buildNearbyListHtmlClient(nearbyKommune);
+          komCard.style.display = '';
+        }
+      }
+    }
+  }
+
+  // Badestedsvurdering — antal borger-vurderinger seneste 30 dage (bruger-
+  // ønske 2026-08-17). Eneste sektion der KRÆVER en server-forespørgsel —
+  // vurderingCount30dCache (server.js) er ikke ellers tilgængelig client-
+  // side. Ét let, cache-baseret GET-kald pr. panelåbning — INTET DB-kald
+  // pr. request server-side, se server.js's /api/vurdering-count-30d/:id.
+  const vurderingCard = document.getElementById('bv-vurdering-card');
+  const vurderingEl   = document.getElementById('bv-vurdering-count');
+  if (vurderingCard) vurderingCard.style.display = 'none';
+  if (p.bathingwat && vurderingEl) {
+    try {
+      const resp = await fetch('/api/vurdering-count-30d/' + encodeURIComponent(p.bathingwat));
+      if (resp.ok) {
+        const { count } = await resp.json();
+        if (count > 0) {
+          vurderingEl.textContent = `${count} ${count === 1 ? 'vurdering' : 'vurderinger'} fra besøgende de seneste 30 dage.`;
+          vurderingCard.style.display = '';
+        }
+      }
+    } catch (e) { /* stille — ikke-kritisk indhold */ }
+  }
+}
+
 // NYT: klassificerer ét badevands-resultat (rå indgang fra
 // /api/badevand-risk, se loadBadevandRiskData()) som rød/gul/grøn/grå —
 // SAMME grænseværdier og positive nul-kategorier (ingen-bekraeftet/
@@ -9640,6 +9760,10 @@ async function showBadevandPanel(feature, skipUrlPush) {
   document.getElementById('bv-chart-wrap').innerHTML = '<div style="padding:.5rem 0;color:#5a6b78;font-size:.8rem">Indlæser vejrdata…</div>';
   document.getElementById('badevand-panel').classList.add('open');
   hideSsrContent(); // se dens filhoved — undgår dobbelt, redundant tekst når det rigtige panel har overtaget
+  // Bruger-ønske 2026-08-17 — se renderBadestedExtras()'s filhoved: kørt
+  // usynkroniseret (ikke awaited) med resten af panel-opstarten, samme
+  // "bloker ikke selve åbningen"-princip som vejr-/udløbsdataene nedenfor.
+  renderBadestedExtras(p, latlng).catch(e => console.warn('renderBadestedExtras fejl:', e.message));
 
   // RETTET (iOS Safari 2026-07-31): på visse iOS Safari-sessioner kunne
   // badested-detaljepanelet slet ikke åbnes ved klik. Årsagen: ALT
@@ -11361,6 +11485,31 @@ document.addEventListener('visibilitychange', () => {
     <div class="bv-card">
       <div class="bv-card-title">Udløb der påvirker badevandet</div>
       <div id="bv-outlets">Indlæser…</div>
+    </div>
+
+    <!-- Bruger-ønske 2026-08-17 — Lokation/nærheds-/vurderings-sektioner,
+         se renderBadestedExtras() (kaldt fra showBadevandPanel()). Alle
+         fire starter skjulte (enten fordi indholdet endnu ikke er beregnet,
+         eller fordi der reelt ikke er noget at vise for netop dette
+         badested) og vises kun når JS rent faktisk finder indhold. -->
+    <div class="bv-card" id="bv-vurdering-card" style="display:none">
+      <div class="bv-card-title">Badestedsvurdering</div>
+      <div id="bv-vurdering-count" style="font-size:.85rem"></div>
+    </div>
+
+    <div class="bv-card">
+      <div class="bv-card-title">Lokation</div>
+      <div id="bv-location"></div>
+    </div>
+
+    <div class="bv-card" id="bv-nearby-distance-card" style="display:none">
+      <div class="bv-card-title">Badesteder i nærheden</div>
+      <div id="bv-nearby-distance"></div>
+    </div>
+
+    <div class="bv-card" id="bv-nearby-kommune-card" style="display:none">
+      <div class="bv-card-title" id="bv-nearby-kommune-title">Andre badesteder i kommunen</div>
+      <div id="bv-nearby-kommune"></div>
     </div>
 
     <!-- Handlinger -->
