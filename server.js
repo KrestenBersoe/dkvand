@@ -666,6 +666,56 @@ app.post('/internal/api/tenants/:id/login-link', requireInternalAuth, express.js
   }
 });
 
+// NYT (bruger-ønske — dedikeret sales-portal): SAMME requireInternalAuth-
+// gate (Basic Auth, INTERNAL_ADMIN_PASSWORD) som resten af /internal/*
+// ovenfor — ingen ny adgangskontrol, kun en NY side der samler trial-
+// oprettelse + login-til-eksisterende-kommune (begge allerede byggede
+// ovenfor) med et NYT tredje kort: kommune-benchmark for ALLE kommuner,
+// uden at kræve en tenant-session. internal-sales.html er en SEPARAT fil
+// fra internal-create-trial.html (den forbliver uændret/virker stadig
+// standalone) — undgår at ændre et allerede fungerende værktøj, mens det
+// nye, bredere sales-flow bygges ved siden af.
+app.get('/internal/sales', requireInternalAuth, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.sendFile(path.join(STATIC_DIR, 'internal-sales.html'));
+});
+
+// NYT — SAMME computeKommuneBenchmark()/periode-parsing som GET /admin/api/
+// kommune-benchmark (se dens filhoved), men bag requireInternalAuth i
+// stedet for tenantAdmin.requireTenantSession — sales er ikke logget ind
+// som ÉN kommune, og skal netop kunne se ALLE på én gang (samme "fuld
+// navngivet sammenligning"-beslutning som allerede gælder for kommunernes
+// eget dashboard, se planens sikkerhedsnote for /admin/api/kommune-
+// benchmark — denne rute deler samme egenskab: kun aggregerede tal, aldrig
+// rå operationelle data).
+app.get('/internal/api/kommune-benchmark', requireInternalAuth, async (req, res) => {
+  try {
+    let range;
+    if (typeof req.query.from === 'string' && typeof req.query.to === 'string') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(req.query.from) || !/^\d{4}-\d{2}-\d{2}$/.test(req.query.to)) {
+        return res.status(400).json({ error: "Ugyldigt from/to-format, forventede 'YYYY-MM-DD'." });
+      }
+      range = { from: req.query.from, to: req.query.to };
+    } else {
+      const period = typeof req.query.period === 'string' ? req.query.period : '';
+      if (!VALID_ALERT_PERIODS.has(period)) {
+        return res.status(400).json({ error: `Ugyldig period — skal være én af: ${[...VALID_ALERT_PERIODS].join(', ')}, eller angiv ?from=&to=.` });
+      }
+      const monthParam = typeof req.query.month === 'string' ? req.query.month : null;
+      range = computeAlertStatsRange(period, monthParam);
+      if (!range) return res.status(400).json({ error: "Ugyldigt month-format, forventede 'YYYY-MM'." });
+    }
+
+    const result = await computeKommuneBenchmark({ fromDate: range.from, toDate: range.to });
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (e) {
+    console.error('internal/api/kommune-benchmark: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke beregne kommune-benchmark lige nu.' });
+  }
+});
+
 // Dashboard-placeholder — se admin-dashboard.html's filhoved. Tenant-data
 // injiceres server-side (samme "%%TOKEN%%".replace()-princip som seo-
 // pages.js's injectHead(), men lokalt her fremfor en delt hjælpefunktion,
