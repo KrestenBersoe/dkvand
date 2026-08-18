@@ -179,6 +179,31 @@
   .trend-tooltip .tt-date { color: var(--ink-soft); }
   .trend-tooltip .tt-value { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; margin-left: .4rem; }
   .trend-empty { color: var(--ink-soft); font-size: .8rem; padding: 1.5rem 0; text-align: center; }
+
+  /* NYT (bruger-ønske 2026-08-18) — borgervurderinger, kun læsning. Alger/
+     affald ('flagget' i JS'en) skal skille sig tydeligt visuelt ud, da de
+     kan udløse en besigtigelse — samme rav-toning som .badge-trial ovenfor,
+     men på hele rækken, ikke kun et lille badge. */
+  .vurd-list { display: flex; flex-direction: column; gap: .5rem; }
+  .vurd-row {
+    border: 1px solid var(--border); border-radius: 8px; padding: .6rem .8rem;
+    background: rgba(255,255,255,.02);
+  }
+  .vurd-row.vurd-flagged { border-color: rgba(212,160,32,.4); background: rgba(212,160,32,.07); }
+  .vurd-row-top { display: flex; justify-content: space-between; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+  .vurd-badested { font-weight: 600; font-size: .88rem; }
+  .vurd-badested a { color: var(--ink); text-decoration: none; }
+  .vurd-badested a:hover { text-decoration: underline; }
+  .vurd-time { color: var(--ink-soft); font-size: .74rem; white-space: nowrap; }
+  .vurd-types { display: flex; flex-wrap: wrap; gap: .35rem; margin-top: .45rem; }
+  .vurd-type-badge {
+    display: inline-flex; align-items: center; gap: .3rem; padding: .12rem .5rem;
+    border-radius: 999px; font-size: .74rem; background: rgba(255,255,255,.05);
+  }
+  .vurd-flag-note { color: var(--warn); font-size: .74rem; margin-top: .4rem; }
+  .vurd-photo-link { display: inline-block; margin-top: .5rem; font-size: .78rem; color: var(--accent); }
+  .vurd-photo-link img { display: block; max-width: 220px; max-height: 220px; border-radius: 6px; margin-top: .3rem; }
+  .vurd-empty { color: var(--ink-soft); font-size: .85rem; }
 </style>
 </head>
 <body>
@@ -243,6 +268,7 @@ function render() {
       <a href="#card-badested-stat">Badested-statistik</a>
       <a href="#card-varsel">Kommunalt Varsel</a>
       <a href="#card-statistik">Statistik</a>
+      <a href="#card-vurderinger">Borgervurderinger</a>
       <a href="#card-benchmark">Kommune-benchmark</a>
       <a href="#card-rapporter">Rapporter</a>
     </nav>
@@ -325,6 +351,27 @@ function render() {
       <div id="kstat-content">Indlæser…</div>
     </div>
 
+    <div class="card" id="card-vurderinger">
+      <h2>Borgervurderinger</h2>
+      <div class="ov-intro">
+        De enkelte badevandsvurderinger indsendt af borgere for jeres
+        badesteder — til læsning, ikke redigering. Alge- og affaldsrapporter
+        er markeret særskilt, da de kan betyde at badestedet bør besigtiges.
+      </div>
+      <div class="stat-controls">
+        <label for="vurd-filter">Vis</label>
+        <select id="vurd-filter" onchange="renderVurderinger()">
+          <option value="alle">Alle vurderinger</option>
+          <option value="prioritet">Kun alger &amp; affald</option>
+          <option value="alger_set">Kun alger</option>
+          <option value="affald">Kun affald</option>
+          <option value="uklart_vand">Kun uklart vand</option>
+          <option value="ser_fint_ud">Kun "ser fint ud"</option>
+        </select>
+      </div>
+      <div id="vurd-content">Indlæser…</div>
+    </div>
+
     <div class="card" id="card-benchmark">
       <h2>Kommune-benchmark</h2>
       <div class="ov-intro">
@@ -379,6 +426,7 @@ function render() {
   loadOverrideBadesteder().then(loadActiveOverrides);
   loadKommuneStats();
   loadAlertStats();
+  loadVurderinger();
   loadKommuneBenchmark();
 }
 
@@ -650,6 +698,85 @@ async function loadKommuneStats() {
   } catch (e) {
     el.innerHTML = '<div class="err">Kunne ikke hente statistik — tjek din forbindelse.</div>';
   }
+}
+
+// ── Borgervurderinger, kun læsning (bruger-ønske 2026-08-18) ────────────────
+// Meta portet 1:1 fra dansk-overloeb-kort.html's BV_VURDERING_LAYER1_META
+// (samme icon/farve/label), for at borgerens indsendelse og kommunens
+// visning heraf ser ens ud. 'alger_set' og 'affald' er FLAGGEDE typer — se
+// isFlagged() nedenfor — fordi de er dem der reelt kan udløse en fysisk
+// besigtigelse (bruger-krav), ikke en teknisk egenskab ved dataene.
+const VURD_TYPE_META = {
+  ser_fint_ud: { icon: '✓',  color: '#2d7d4f', label: 'Ser fint ud' },
+  alger_set:   { icon: '🌿', color: '#d4a020', label: 'Alger set' },
+  uklart_vand: { icon: '💧', color: '#c84b1f', label: 'Uklart vand' },
+  affald:      { icon: '🗑', color: '#5a6b78', label: 'Affald' },
+};
+const VURD_FLAGGED_TYPES = new Set(['alger_set', 'affald']);
+const VURD_ALGAE_LEVEL_LABELS = { ingen: 'Ingen', faa: 'Få', mange: 'Mange' };
+
+let _vurderingerCache = [];
+
+function isFlaggedVurdering(v) {
+  return v.types.some(t => VURD_FLAGGED_TYPES.has(t));
+}
+
+async function loadVurderinger() {
+  const el = document.getElementById('vurd-content');
+  if (!el) return;
+  el.textContent = 'Indlæser…';
+  try {
+    const resp = await fetch('/admin/api/vurderinger', { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente vurderinger.')}</div>`;
+      return;
+    }
+    _vurderingerCache = data.vurderinger || [];
+    renderVurderinger();
+  } catch (e) {
+    el.innerHTML = '<div class="err">Kunne ikke hente vurderinger — tjek din forbindelse.</div>';
+  }
+}
+
+function renderVurderinger() {
+  const el = document.getElementById('vurd-content');
+  if (!el) return;
+  const filter = document.getElementById('vurd-filter').value;
+  let list = _vurderingerCache;
+  if (filter === 'prioritet') list = list.filter(isFlaggedVurdering);
+  else if (filter !== 'alle') list = list.filter(v => v.types.includes(filter));
+
+  if (list.length === 0) {
+    el.innerHTML = '<div class="vurd-empty">Ingen vurderinger fundet for dette filter.</div>';
+    return;
+  }
+
+  el.innerHTML = `<div class="vurd-list">${list.map(v => {
+    const flagged = isFlaggedVurdering(v);
+    const badgesHtml = v.types.map(t => {
+      const meta = VURD_TYPE_META[t] || { icon: '•', color: 'var(--ink-soft)', label: t };
+      return `<span class="vurd-type-badge" style="color:${meta.color}">${meta.icon} ${escHtml(meta.label)}${t === 'alger_set' && v.algaeLevel ? ` (${escHtml(VURD_ALGAE_LEVEL_LABELS[v.algaeLevel] || v.algaeLevel)})` : ''}</span>`;
+    }).join('');
+    const nameHtml = v.badestedSlug
+      ? `<a href="/badested/${encodeURIComponent(v.badestedSlug)}" target="_blank" rel="noopener">${escHtml(v.badestedNavn)}</a>`
+      : escHtml(v.badestedNavn);
+    return `
+      <div class="vurd-row${flagged ? ' vurd-flagged' : ''}">
+        <div class="vurd-row-top">
+          <span class="vurd-badested">${nameHtml}</span>
+          <span class="vurd-time">${fmtDateTime(v.createdAt)}</span>
+        </div>
+        <div class="vurd-types">${badgesHtml}</div>
+        ${flagged ? '<div class="vurd-flag-note">⚠ Kan kræve besigtigelse</div>' : ''}
+        ${v.photoUrl ? `<a class="vurd-photo-link" href="${escHtml(v.photoUrl)}" target="_blank" rel="noopener">Se indsendt foto <img src="${escHtml(v.photoUrl)}" alt="Foto vedhæftet vurdering" loading="lazy"></a>` : ''}
+      </div>
+    `;
+  }).join('')}</div>`;
+}
+
+function fmtDateTime(ms) {
+  return new Date(ms).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
 // ── Kommune-benchmark-rapporten (bruger-ønske) ──────────────────────────────

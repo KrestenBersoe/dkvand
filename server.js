@@ -1232,6 +1232,48 @@ app.get('/admin/api/stats', tenantAdmin.requireTenantSession, async (req, res) =
   }
 });
 
+// ── Kommunepakke, modul 8 — læsning af borgerindsendte badestedsvurderinger ──
+// Bruger-ønske (2026-08-18): "kommunerne [skal] kunne læse de enkelte
+// badevandsvurderinger indsendt af borgerne. De skal ikke kunne rette dem,
+// blot læse dem. Især er det vigtigt med rapporter for alger og affald - da
+// det måske kræver at kommunen besigtiger stedet." Derfor KUN denne ene
+// GET-rute — ingen PUT/DELETE tilføjes, se badested-observations.js's
+// filhoved for hvorfor borgerobservationer aldrig må kunne rettes af nogen,
+// heller ikke af kommunen selv. Samme tre-trins mønster (getTenant →
+// resolveTenantBadesteder → scopet forespørgsel) som GET /admin/api/stats
+// ovenfor.
+app.get('/admin/api/vurderinger', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const badesteder = tenantBadesteder.resolveTenantBadesteder(tenant.name, kommuneKeyToBadesteder);
+    if (badesteder.length === 0) {
+      return res.json({ vurderinger: [] });
+    }
+    const navnById = new Map(badesteder.map(b => [String(b.id), b.navn]));
+    const slugById = new Map(badesteder.map(b => [String(b.id), b.slug]));
+    const rows = await badestedObs.getVurderingListForBadestedIds(badesteder.map(b => b.id), { limit: 300 });
+    const vurderinger = rows.map(r => ({
+      id: r.id,
+      badestedId: r.badested_id,
+      badestedNavn: navnById.get(String(r.badested_id)) || r.badested_id,
+      badestedSlug: slugById.get(String(r.badested_id)) || null,
+      createdAt: Number(r.created_at),
+      types: r.types || [],
+      algaeLevel: r.algae_level || null,
+      photoUrl: r.photo_path || null,
+    }));
+    res.set('Cache-Control', 'no-store');
+    res.json({ vurderinger });
+  } catch (e) {
+    console.error('admin/api/vurderinger: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente borgerindsendte vurderinger lige nu.' });
+  }
+});
+
 // ── Kommune-benchmark-rapporten (bruger-ønske) ──────────────────────────────
 // Sammenlignende ranking på tværs af ALLE kommuner med mindst ét matchet
 // badested (kommuneKeyToBadesteder, se slug-index.js) — IKKE kun den

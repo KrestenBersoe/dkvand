@@ -542,6 +542,33 @@ async function getVurderingTrendForBadestedIds(badestedIds, days = 90) {
   return rows;
 }
 
+// NYT (bruger-ønske 2026-08-18 — kommuner skal på Kommunal Dashboard kunne
+// LÆSE (ikke rette, se filhovedets § om at borgerobservationer aldrig må
+// kunne ændres af nogen) de enkelte borgerindsendte vurderinger, med særligt
+// henblik på alge-/affaldsrapporter der kan udløse en fysisk besigtigelse.
+// I modsætning til getObservationSummary() ovenfor (ÉT henfaldsvægtet
+// sammendrag pr. badested, til det offentlige panel) returnerer denne DE
+// ENKELTE indsendelser, nyeste først. Én række pr. vurdering (ikke pr.
+// observationstype) — de(n) valgte type(r)/algeniveau/foto for én vurdering
+// samles her via array_agg over badested_observations, koblet på samme
+// vurdering_id som insertVurderingTxn() satte ved selve indsendelsen.
+async function getVurderingListForBadestedIds(badestedIds, { limit = 300 } = {}) {
+  if (!Array.isArray(badestedIds) || badestedIds.length === 0) return [];
+  const { rows } = await query(`
+    SELECT v.id, v.badested_id, v.created_at,
+           array_remove(array_agg(DISTINCT o.observation_type), NULL) AS types,
+           (array_agg(o.algae_level)  FILTER (WHERE o.algae_level  IS NOT NULL))[1] AS algae_level,
+           (array_agg(o.photo_path)   FILTER (WHERE o.photo_path   IS NOT NULL))[1] AS photo_path
+    FROM badested_vurderinger v
+    LEFT JOIN badested_observations o ON o.vurdering_id = v.id
+    WHERE v.badested_id = ANY($1)
+    GROUP BY v.id, v.badested_id, v.created_at
+    ORDER BY v.created_at DESC
+    LIMIT $2
+  `, [badestedIds.map(String), limit]);
+  return rows;
+}
+
 module.exports = {
   ready,
   recordVurdering,
@@ -551,6 +578,7 @@ module.exports = {
   getVurderingCounts30dGrouped,
   getVurderingCountsGrouped,
   getVurderingTrendForBadestedIds,
+  getVurderingListForBadestedIds,
   hashIp,
   PHOTOS_DIR,
   OBSERVATION_TYPES,
