@@ -3919,6 +3919,21 @@ async function loadBadevandRiskData() {
     badevandRiskDataTs = data.ts || Date.now();
     console.info('badevand-risk: indlæst', map.size, 'badesteder,', Object.keys(lakesRiskData).length, 'søer,', Object.keys(kystvandeRiskData).length, 'kystvande, alder', Math.round((Date.now()-badevandRiskDataTs)/1000), 's');
     updateNationalSummary(data.badevand);
+    // RETTET (bruger-rapporteret 2026-08-18 — "stadig blå markører, men
+    // grøn når man klikker"): denne funktion kaldes hvert 5. minut (se
+    // setInterval(loadBadevandRiskData, ...) nedenfor) OG on-demand fra
+    // ensureFreshBadevandRiskData(), når et badested-panel åbnes — begge
+    // opdaterede badevandRiskData/lakesRiskData/kystvandeRiskData korrekt,
+    // men gentegnede ALDRIG selve kortmarkørerne, som kun genmales hvert
+    // 30. minut (refreshEverything()) eller ved visibilitychange. I det op
+    // til ~25 minutter lange mellemrum viste kortet derfor en FORÆLDET
+    // farve, mens et klik (som selv genberegner friskt) korrekt viste den
+    // opdaterede. colorKystvandByRisk() kalder allerede colorBadevandByRisk()
+    // internt (se dens filhoved) — kalder derfor kun de to øverste, ikke
+    // tre separate kald. Begge har egne defensive "layer findes endnu
+    // ikke"-tjek, sikre at kalde selv tidligt under boot.
+    colorSoeerByRisk();
+    colorKystvandByRisk();
   } catch(e) {
     console.warn('badevand-risk: kunne ikke hentes —', e.message, '— klienten viser server-utilgaengelig');
   }
