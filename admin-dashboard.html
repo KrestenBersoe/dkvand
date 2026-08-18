@@ -153,6 +153,17 @@
   .kb-subhead { font-size: .78rem; font-weight: 700; margin: 1.1rem 0 .15rem; color: var(--ink); }
   .kb-unit-note { font-size: .72rem; color: var(--ink-soft); margin-bottom: .3rem; }
   .kb-lav-n-list { font-size: .82rem; color: var(--ink-soft); }
+  /* NYT (bruger-ønske 2026-08-18) — den fulde kommune-rangering foldes ud på
+     klik, i stedet for altid at stå åben under Samlet placering-kortet. */
+  .kb-details { margin-top: .9rem; }
+  .kb-details summary {
+    cursor: pointer; font-size: .82rem; color: var(--accent); list-style: none;
+    display: inline-flex; align-items: center; gap: .35rem;
+  }
+  .kb-details summary::-webkit-details-marker { display: none; }
+  .kb-details summary::before { content: '▸'; font-size: .7rem; transition: transform .15s; }
+  .kb-details[open] summary::before { transform: rotate(90deg); }
+  .kb-details .kb-unit-note { margin-top: .6rem; }
   #kb-custom-range input[type="date"] { margin-left: .4rem; }
 
   .trend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1rem; margin: 1rem 0; }
@@ -204,6 +215,9 @@
   .vurd-photo-link { display: inline-block; margin-top: .5rem; font-size: .78rem; color: var(--accent); }
   .vurd-photo-link img { display: block; max-width: 220px; max-height: 220px; border-radius: 6px; margin-top: .3rem; }
   .vurd-empty { color: var(--ink-soft); font-size: .85rem; }
+  .vurd-pager { display: flex; align-items: center; justify-content: center; gap: .8rem; margin-top: .8rem; }
+  .vurd-pager button { font-size: .78rem; padding: .3rem .7rem; }
+  .vurd-pager-note { color: var(--ink-soft); font-size: .78rem; white-space: nowrap; }
 </style>
 </head>
 <body>
@@ -268,7 +282,7 @@ function render() {
       <a href="#card-badested-stat">Badested-statistik</a>
       <a href="#card-varsel">Kommunalt Varsel</a>
       <a href="#card-statistik">Statistik</a>
-      <a href="#card-vurderinger">Borgervurderinger</a>
+      <a href="#card-vurderinger">Borgerindberetninger</a>
       <a href="#card-benchmark">Kommune-benchmark</a>
       <a href="#card-rapporter">Rapporter</a>
     </nav>
@@ -352,15 +366,15 @@ function render() {
     </div>
 
     <div class="card" id="card-vurderinger">
-      <h2>Borgervurderinger</h2>
+      <h2>Borgerindberetninger</h2>
       <div class="ov-intro">
-        De enkelte badevandsvurderinger indsendt af borgere for jeres
+        De enkelte badevandsindberetninger indsendt af borgere for jeres
         badesteder — til læsning, ikke redigering. Alge- og affaldsrapporter
         er markeret særskilt, da de kan betyde at badestedet bør besigtiges.
       </div>
       <div class="stat-controls">
         <label for="vurd-filter">Vis</label>
-        <select id="vurd-filter" onchange="renderVurderinger()">
+        <select id="vurd-filter" onchange="onVurdFilterChange()">
           <option value="alle">Alle vurderinger</option>
           <option value="prioritet">Kun alger &amp; affald</option>
           <option value="alger_set">Kun alger</option>
@@ -387,7 +401,7 @@ function render() {
           <option value="samlet">Samlet placering</option>
           <option value="varsler">Varsler</option>
           <option value="lukkedage">Lukkedage</option>
-          <option value="vurderinger">Badestedsvurderinger</option>
+          <option value="vurderinger">Badestedsindberetninger</option>
           <option value="datakvalitet">Datakvalitet</option>
         </select>
         <span id="kb-period-controls">
@@ -629,7 +643,7 @@ function renderTrendChart(containerId, points, opts) {
 
 const KSTAT_PUSH_TYPE_LABELS = {
   'risikovarsel':     'Risikovarsler',
-  'ny-vurdering':     'Badestedsvurdering',
+  'ny-vurdering':     'Badestedsindberetning',
   'kommune-override': 'Kommunalt varsel',
 };
 
@@ -664,7 +678,7 @@ async function loadKommuneStats() {
     el.innerHTML = `
       <div class="kstat-grid">
         <div class="kstat-box">
-          <div class="kstat-label">Borger-vurderinger</div>
+          <div class="kstat-label">Borgerindberetninger</div>
           <div class="kstat-value">${data.vurderinger.total}</div>
           <div class="kstat-note">${data.vurderinger.last7d} seneste 7 dage · ${data.vurderinger.last30d} seneste 30 dage</div>
         </div>
@@ -684,7 +698,7 @@ async function loadKommuneStats() {
 
       <div class="trend-grid">
         <div class="trend-card">
-          <h2>Badestedsvurderinger over tid</h2>
+          <h2>Badestedsindberetninger over tid</h2>
           <div class="trend-chart-wrap" id="kstat-trend-vurderinger"></div>
         </div>
         <div class="trend-card">
@@ -693,7 +707,7 @@ async function loadKommuneStats() {
         </div>
       </div>
     `;
-    renderTrendChart('kstat-trend-vurderinger', data.trends.vurderinger, { label: 'Badestedsvurderinger' });
+    renderTrendChart('kstat-trend-vurderinger', data.trends.vurderinger, { label: 'Badestedsindberetninger' });
     renderTrendChart('kstat-trend-risikovarsel', data.trends.risikovarsel, { label: 'Risikovarsler' });
   } catch (e) {
     el.innerHTML = '<div class="err">Kunne ikke hente statistik — tjek din forbindelse.</div>';
@@ -714,8 +728,10 @@ const VURD_TYPE_META = {
 };
 const VURD_FLAGGED_TYPES = new Set(['alger_set', 'affald']);
 const VURD_ALGAE_LEVEL_LABELS = { ingen: 'Ingen', faa: 'Få', mange: 'Mange' };
+const VURD_PAGE_SIZE = 10; // bruger-ønske 2026-08-18 — kun 10 ad gangen, med forrige/næste
 
 let _vurderingerCache = [];
+let _vurdPage = 0; // 0-indekseret, nulstilles ved ny hentning eller filterskift
 
 function isFlaggedVurdering(v) {
   return v.types.some(t => VURD_FLAGGED_TYPES.has(t));
@@ -729,14 +745,29 @@ async function loadVurderinger() {
     const resp = await fetch('/admin/api/vurderinger', { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) {
-      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente vurderinger.')}</div>`;
+      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente indberetninger.')}</div>`;
       return;
     }
     _vurderingerCache = data.vurderinger || [];
+    _vurdPage = 0;
     renderVurderinger();
   } catch (e) {
-    el.innerHTML = '<div class="err">Kunne ikke hente vurderinger — tjek din forbindelse.</div>';
+    el.innerHTML = '<div class="err">Kunne ikke hente indberetninger — tjek din forbindelse.</div>';
   }
+}
+
+// NYT (bruger-ønske 2026-08-18): filterskift skal starte forfra på side 1 —
+// ellers kan man ende på en side der ligger ud over det nu-filtrerede
+// resultats længde, se clampingen i renderVurderinger() nedenfor (som ville
+// dække over det, men starter man alligevel forfra er det mindre overraskende).
+function onVurdFilterChange() {
+  _vurdPage = 0;
+  renderVurderinger();
+}
+
+function changeVurdPage(delta) {
+  _vurdPage += delta;
+  renderVurderinger();
 }
 
 function renderVurderinger() {
@@ -748,11 +779,16 @@ function renderVurderinger() {
   else if (filter !== 'alle') list = list.filter(v => v.types.includes(filter));
 
   if (list.length === 0) {
-    el.innerHTML = '<div class="vurd-empty">Ingen vurderinger fundet for dette filter.</div>';
+    el.innerHTML = '<div class="vurd-empty">Ingen indberetninger fundet for dette filter.</div>';
     return;
   }
 
-  el.innerHTML = `<div class="vurd-list">${list.map(v => {
+  const totalPages = Math.ceil(list.length / VURD_PAGE_SIZE);
+  _vurdPage = Math.max(0, Math.min(_vurdPage, totalPages - 1));
+  const start = _vurdPage * VURD_PAGE_SIZE;
+  const pageList = list.slice(start, start + VURD_PAGE_SIZE);
+
+  const rowsHtml = pageList.map(v => {
     const flagged = isFlaggedVurdering(v);
     const badgesHtml = v.types.map(t => {
       const meta = VURD_TYPE_META[t] || { icon: '•', color: 'var(--ink-soft)', label: t };
@@ -772,11 +808,16 @@ function renderVurderinger() {
         ${v.photoUrl ? `<a class="vurd-photo-link" href="${escHtml(v.photoUrl)}" target="_blank" rel="noopener">Se indsendt foto <img src="${escHtml(v.photoUrl)}" alt="Foto vedhæftet vurdering" loading="lazy"></a>` : ''}
       </div>
     `;
-  }).join('')}</div>`;
-}
+  }).join('');
 
-function fmtDateTime(ms) {
-  return new Date(ms).toLocaleString('da-DK', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const pagerHtml = totalPages > 1 ? `
+    <div class="vurd-pager">
+      <button type="button" onclick="changeVurdPage(-1)" ${_vurdPage === 0 ? 'disabled' : ''}>‹ Forrige</button>
+      <span class="vurd-pager-note">${start + 1}–${Math.min(start + VURD_PAGE_SIZE, list.length)} af ${list.length}</span>
+      <button type="button" onclick="changeVurdPage(1)" ${_vurdPage >= totalPages - 1 ? 'disabled' : ''}>Næste ›</button>
+    </div>` : '';
+
+  el.innerHTML = `<div class="vurd-list">${rowsHtml}</div>${pagerHtml}`;
 }
 
 // ── Kommune-benchmark-rapporten (bruger-ønske) ──────────────────────────────
@@ -902,20 +943,30 @@ async function loadKommuneBenchmark() {
         ? `<div class="kstat-grid"><div class="kstat-box">
              <div class="kstat-label">Samlet placering</div>
              <div class="kstat-value">#${Math.round(own.samletRang)} af ${N}</div>
-             <div class="kstat-note">${escHtml(own.kommuneNavn)} · ${own.badestedCount} badesteder · ligevægtet gennemsnit af Varsler/Lukkedage/Badestedsvurderinger</div>
+             <div class="kstat-note">${escHtml(own.kommuneNavn)} · ${own.badestedCount} badesteder · ligevægtet gennemsnit af Varsler/Lukkedage/Badestedsindberetninger</div>
            </div></div>`
         : `<div class="hist-warning">Jeres kommune indgår ikke i hovedrangeringen for denne periode — enten under grænsen på 3 badesteder (se listen nederst), eller ingen matchende data endnu.</div>`;
       const sorted = [...data.hovedranking].sort((a, b) => a.samletRang - b.samletRang);
+      // NYT (bruger-ønske 2026-08-18): total # indberetninger (RÅ tal, ikke
+      // indekseret pr. badested som rangVurderinger er) — vurderingerRaw
+      // findes allerede pr. række, se computeKommuneBenchmark() i server.js.
       const rowsHtml = sorted.map(r => `
         <tr${r.kommuneNavn.toLowerCase() === ownNavn.toLowerCase() ? ' class="kb-own-row"' : ''}>
           <td>#${Math.round(r.samletRang * 10) / 10}</td><td>${escHtml(r.kommuneNavn)}</td>
           <td class="n">#${r.rangVarsler}</td><td class="n">#${r.rangLukkedage}</td><td class="n">#${r.rangVurderinger}</td>
+          <td class="n">${r.vurderingerRaw}</td>
         </tr>`).join('');
+      // NYT (bruger-ønske 2026-08-18): den fulde rangeringstabel er kollapset
+      // som standard — "Samlet placering"-kortet ovenfor giver allerede egen
+      // kommunes tal, tabellen er kun for dem der vil sammenligne på tværs.
       el.innerHTML = summaryHtml
-        + `<div class="kb-unit-note">Ligevægtet gennemsnit af rangene i de tre rapporter til højre — lavest samlet tal er bedst.</div>
-           <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
-             <td>Samlet</td><td>Kommune</td><td class="n">Varsler</td><td class="n">Lukkedage</td><td class="n">Vurderinger</td>
-           </tr></thead><tbody>${rowsHtml}</tbody></table>`
+        + `<details class="kb-details">
+             <summary>Se fuld rangering (${N} kommuner)</summary>
+             <div class="kb-unit-note">Ligevægtet gennemsnit af rangene i de tre rapporter til højre — lavest samlet tal er bedst.</div>
+             <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
+               <td>Samlet</td><td>Kommune</td><td class="n">Varsler</td><td class="n">Lukkedage</td><td class="n">Indberetninger</td><td class="n">Total # indberetninger</td>
+             </tr></thead><tbody>${rowsHtml}</tbody></table>
+           </details>`
         + kbLavNHtml;
       return;
     }
@@ -923,7 +974,7 @@ async function loadKommuneBenchmark() {
     const REPORTS = {
       varsler:      ['Risikovarsler pr. badested i perioden — færrest indekseret = bedst placering.', 'varslerIndekseret', 'rangVarsler'],
       lukkedage:    ['Dage med mindst ét lukket/varslet badested, pr. badested i perioden — færrest indekseret = bedst placering.', 'lukkedageIndekseret', 'rangLukkedage'],
-      vurderinger:  ['Indsendte borger-vurderinger pr. badested i perioden — flest indekseret = bedst placering (modsat retning af Varsler/Lukkedage).', 'vurderingerIndekseret', 'rangVurderinger'],
+      vurderinger:  ['Indsendte borgerindberetninger pr. badested i perioden — flest indekseret = bedst placering (modsat retning af Varsler/Lukkedage).', 'vurderingerIndekseret', 'rangVurderinger'],
     };
     const [unitNote, key, rangKey] = REPORTS[report];
     el.innerHTML = kbRankTable(unitNote, data.hovedranking, key, rangKey, ownNavn);
