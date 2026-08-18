@@ -4368,6 +4368,14 @@ function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 function computeIntensityFactor(precipMM, thresholdMm) {
   const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : 25;
   const scale      = threshold / 5;
+  // RETTET (bruger-rapporteret 2026-08-18 — se risk-model.js's identiske
+  // rettelse, SKAL holdes i sync med denne, per filhovedets krav): scale
+  // bliver bogstaveligt 0 når thresholdMm===0 (en ægte værdi for 2.601 af
+  // 21.563 PULS-udløb) — ramp/sigmoid-leddene nedenfor dividerer begge med
+  // scale, hvilket giver 0/0=NaN når precipMM OGSÅ er 0 (hyppigt i tørre
+  // perioder). Et threshold på 0 er en veldefineret grænseværdi (al regn
+  // udløser fuld intensitet, ingen regn giver ingen), ikke en division-med-0.
+  if (scale <= 0) return precipMM > 0 ? 1 : 0;
   const ramp       = Math.min(Math.max(precipMM - scale * 1, 0) / (scale * 6), 1);
   return sigmoid((precipMM - threshold) / (scale * 4)) * ramp;
 }

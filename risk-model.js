@@ -73,6 +73,18 @@ function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 function computeIntensityFactor(precipMM, thresholdMm) {
   const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : 25;
   const scale      = threshold / 5;
+  // RETTET (bruger-rapporteret 2026-08-18 — "blå/ingen data" for mange
+  // badesteder trods fuldt tilstedeværende vejrdata): thresholdMm===0 er en
+  // ÆGTE, empirisk værdi (2.601 af 21.563 PULS-udløb) — betyder outlettet
+  // overløber ved den mindste regn. scale bliver da bogstaveligt 0, og BÅDE
+  // ramp- og sigmoid-leddet nedenfor dividerer med scale — giver 0/0=NaN,
+  // netop når precipMM OGSÅ er 0 (hyppigt i tørre perioder, herunder lige
+  // nu). NaN serialiserer stille til null i JSON-svaret, hvilket viste sig
+  // som "ingen data" (blå) i stedet for en reelt beregnet, lav risiko.
+  // Et threshold på 0 er en veldefineret grænseværdi, ikke en uendelig
+  // skarp division: al regn (precipMM>0) udløser fuld intensitet, ingen
+  // regn (precipMM===0) giver ingen intensitet.
+  if (scale <= 0) return precipMM > 0 ? 1 : 0;
   const ramp       = Math.min(Math.max(precipMM - scale * 1, 0) / (scale * 6), 1);
   return sigmoid((precipMM - threshold) / (scale * 4)) * ramp;
 }
