@@ -5961,6 +5961,26 @@ function activateCurrentsVelocity() {
     return;
   }
   if (!map.hasLayer(currentsCanvasLayer)) map.addLayer(currentsCanvasLayer);
+  // RETTET (bruger-rapporteret 2026-08-18 — "strøm smører sig ud over land
+  // ved aktivering, retter sig først ved en kort-resize"): leaflet-canvas-
+  // layer.js's onAdd() opretter canvas'et og tilføjer det til DOM'et, men
+  // POSITIONERER det ALDRIG — kun _onLayerDidMove() (bundet til map'ets
+  // 'moveend') gør det, via L.DomUtil.setPosition(). Har brugeren allerede
+  // panorereret kortet FØR "Strøm" aktiveres første gang, sidder det
+  // FRISKE canvas derfor stadig ved sin implicitte standardposition (ikke
+  // synkroniseret med kortets aktuelle pan-forskydning), mens
+  // onDrawCurrentsLayer() (kaldt synkront lige nedenfor) beregner klip-
+  // stien ud fra map.latLngToContainerPoint() — VIEWPORT-relative
+  // koordinater, som kun stemmer overens med canvas'ets EGET lokale
+  // koordinatsystem (clipPathUnits="userSpaceOnUse", se
+  // ensureWaterClipPath()) NÅR canvas'et rent faktisk ER positioneret
+  // korrekt. Et efterfølgende moveend (panorering/zoom/resize) retter det
+  // altid, fordi DÉR sker positionering FØR gentegning, i korrekt
+  // rækkefølge — men selve AKTIVERINGEN manglede det første skridt. Kalder
+  // nu canvas-lagets egen positionerings-metode eksplicit FØR klip-stien
+  // beregnes, så første aktivering er korrekt uden at afvente en tilfældig
+  // efterfølgende kort-hændelse.
+  if (currentsCanvasLayer._onLayerDidMove) currentsCanvasLayer._onLayerDidMove();
   const canvas = currentsCanvasLayer._canvas;
   canvas.style.clipPath = 'url(#currents-water-clip)';
   currentsWindy = new Windy({
