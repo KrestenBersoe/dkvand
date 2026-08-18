@@ -29,10 +29,12 @@
   }
   .field { margin-bottom: .9rem; }
   .field label { display: block; font-size: .8rem; color: var(--ink-soft); margin-bottom: .3rem; }
-  .field input {
+  .field input, .field select {
     background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
     padding: .5rem .6rem; border-radius: 6px; font-size: .9rem; font-family: inherit; width: 100%;
   }
+  .field select { color-scheme: dark; }
+  h2 { font-size: 1rem; margin: 0 0 .3rem; }
   .field-note { font-size: .74rem; color: var(--ink-soft); margin-top: .25rem; }
   button {
     background: transparent; border: 1px solid var(--accent); color: var(--ink);
@@ -60,11 +62,14 @@
   <div class="sub">Internt værktøj — genererer et trial-login til Kommunal Dashboard.</div>
 
   <div class="card">
+    <h2>Opret ny trial</h2>
     <form id="form" onsubmit="return submitForm(event)">
       <div class="field">
-        <label for="f-name">Kommunens navn</label>
-        <input type="text" id="f-name" required placeholder="Fx: Furesø Kommune">
-        <div class="field-note">Skal matche kommune-feltet i badevandsdata (fx "Furesø Kommune") — ellers finder dashboardet ingen badesteder for kommunen.</div>
+        <label for="f-name">Kommune</label>
+        <select id="f-name" required>
+          <option value="" disabled selected>Indlæser kommuner…</option>
+        </select>
+        <div class="field-note">Listen kommer direkte fra badevandsdataen, så det valgte navn altid matcher og finder kommunens badesteder.</div>
       </div>
       <div class="field">
         <label for="f-days">Trial-længde (dage)</label>
@@ -86,11 +91,138 @@
     </form>
     <div id="result"></div>
   </div>
+
+  <div class="card">
+    <h2>Log ind på en eksisterende kommune</h2>
+    <div class="sub" style="margin-bottom:.9rem">Genererer et nyt, tidsbegrænset login-link til en kommune der allerede findes — fx til en demo, support, eller fordi det oprindelige link er udløbet. Rører IKKE kommunens egne data eller status.</div>
+    <form id="tform" onsubmit="return submitTenantForm(event)">
+      <div class="field">
+        <label for="t-tenant">Kommune</label>
+        <select id="t-tenant" required>
+          <option value="" disabled selected>Indlæser kommuner…</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="t-days">Linket er gyldigt i (dage)</label>
+        <input type="number" id="t-days" required min="1" step="1" value="7">
+      </div>
+      <div class="field">
+        <label for="t-issued-by">Dit navn</label>
+        <input type="text" id="t-issued-by" required placeholder="Fx: Kresten">
+      </div>
+      <div class="field">
+        <label for="t-note">Note (valgfri, kun til internt brug)</label>
+        <input type="text" id="t-note" placeholder="Fx: demo til salgsmøde">
+      </div>
+      <button type="submit" id="tsubmit-btn">Generér login-link</button>
+    </form>
+    <div id="tresult"></div>
+  </div>
 </div>
 
 <script>
 function escHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// NYT (bruger-ønske — kommune-vælger i stedet for fri tekst): henter den
+// samme kanoniske liste som server.js's GET /internal/api/kommuner bygger
+// fra kommuneKeyToBadesteder (se dens filhoved for hvorfor DENNE kilde,
+// ikke den rå PULS-liste, er valgt). Basic Auth er allerede givet af
+// browseren for denne side (samme oprindelse/sti-realm), så dette fetch-
+// kald genbruger den automatisk, ligesom det eksisterende POST til
+// /internal/api/create-trial nedenfor allerede gjorde.
+async function loadKommuneOptions() {
+  const sel = document.getElementById('f-name');
+  try {
+    const resp = await fetch('/internal/api/kommuner');
+    const list = await resp.json();
+    if (!resp.ok || !Array.isArray(list) || list.length === 0) {
+      sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+      return;
+    }
+    sel.innerHTML = list.map(k => `<option value="${escHtml(k.name)}">${escHtml(k.name)} (${k.badestedCount} badested${k.badestedCount === 1 ? '' : 'er'})</option>`).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+  }
+}
+
+// NYT (bruger-ønske — salgsteamets adgang til eksisterende kommuner): samme
+// mønster som loadKommuneOptions() ovenfor, men fra GET /internal/api/
+// tenants (tenantAdmin.listTenants(), se dens filhoved) — INGEN status-
+// filter server-side, status vises derfor her i selve valgmuligheden, så
+// en suspenderet/udløbet kommune stadig kan vælges bevidst, ikke ved et
+// uheld.
+function tenantStatusLabel(t) {
+  if (t.status === 'active') return 'aktiv';
+  if (t.status === 'suspended') return 'suspenderet';
+  const expires = t.trial_expires_at ? new Date(t.trial_expires_at).toLocaleDateString('da-DK') : '?';
+  return `trial, udløber ${expires}`;
+}
+async function loadTenantOptions() {
+  const sel = document.getElementById('t-tenant');
+  try {
+    const resp = await fetch('/internal/api/tenants');
+    const list = await resp.json();
+    if (!resp.ok || !Array.isArray(list) || list.length === 0) {
+      sel.innerHTML = '<option value="" disabled selected>Ingen kommuner fundet</option>';
+      return;
+    }
+    sel.innerHTML = list.map(t => `<option value="${escHtml(t.id)}">${escHtml(t.name)} — ${escHtml(tenantStatusLabel(t))}</option>`).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+  }
+}
+loadKommuneOptions();
+loadTenantOptions();
+
+// NYT (bruger-ønske — salgsteamets adgang til eksisterende kommuner): et
+// almindeligt confirm() FØR selve kaldet — Basic Auth er den reelle
+// adgangskontrol her (se requireInternalAuth i server.js), dette er
+// udelukkende en UX-sikkerhedsnet mod at fejlvælge kommune i en dropdown,
+// givet at linket giver adgang til en LEVENDE kundes dashboard.
+async function submitTenantForm(e) {
+  e.preventDefault();
+  const sel = document.getElementById('t-tenant');
+  const selectedName = sel.options[sel.selectedIndex]?.textContent || '';
+  if (!confirm(`Generér et nyt login-link til "${selectedName}"?`)) return false;
+
+  const btn = document.getElementById('tsubmit-btn');
+  const resultEl = document.getElementById('tresult');
+  const tenantId = sel.value;
+  const days = Number(document.getElementById('t-days').value);
+  const issuedBy = document.getElementById('t-issued-by').value.trim();
+  const note = document.getElementById('t-note').value.trim();
+
+  btn.disabled = true;
+  btn.textContent = 'Genererer…';
+  resultEl.innerHTML = '';
+  try {
+    const resp = await fetch(`/internal/api/tenants/${encodeURIComponent(tenantId)}/login-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days, issuedBy, note: note || null }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke generere login-link.')}</div>`;
+      return;
+    }
+    resultEl.innerHTML = `
+      <div class="result">
+        ✓ Nyt login-link til <strong>${escHtml(data.tenant.name)}</strong> — gyldigt til ${new Date(data.tenant.trialExpiresAt).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' })}.
+        <span class="result-url">${escHtml(data.loginUrl)}</span>
+      </div>
+    `;
+    document.getElementById('t-issued-by').value = '';
+    document.getElementById('t-note').value = '';
+  } catch (e) {
+    resultEl.innerHTML = '<div class="err">Kunne ikke generere login-link — tjek din forbindelse.</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generér login-link';
+  }
+  return false;
 }
 
 async function submitForm(e) {

@@ -181,6 +181,21 @@ async function getTenant(tenantId) {
   return rows[0] || null;
 }
 
+// NYT (bruger-ønske — salgsteamets adgang til EKSISTERENDE kommuner, se
+// server.js's GET /internal/api/tenants): den eneste plads i denne fil, der
+// nogensinde har haft brug for at se ALLE tenants på én gang — getTenant()
+// ovenfor kræver allerede et id, hvilket er præcis det, en sales-medarbejder
+// IKKE har for en kommune de ikke selv oprettede. Ingen status-filter — en
+// suspenderet/udløbet kommune skal stadig kunne findes og gives et nyt
+// login-link til, blot tydeligt markeret som sådan i UI'en (se kaldestedet).
+async function listTenants() {
+  const { rows } = await query(
+    `SELECT id, name, status, trial_expires_at, created_at
+     FROM tenants ORDER BY name`
+  );
+  return rows;
+}
+
 // ── OAuth-konfiguration (Kommunepakke, modul 2) ─────────────────────────────
 // Selvbetjent flow: en ALLEREDE logget ind tenant (i dag udelukkende via
 // trial, se filhovedet) gemmer selv deres permanente OAuth/OIDC-udbyder-
@@ -480,6 +495,7 @@ module.exports = {
   issueTrialLogin,
   consumeTrialLogin,
   getTenant,
+  listTenants,
   // OAuth-konfiguration (modul 2)
   fetchDiscoveryDocument,
   validateDiscoveryUrl,

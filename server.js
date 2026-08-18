@@ -588,6 +588,84 @@ app.post('/internal/api/create-trial', requireInternalAuth, express.json(), asyn
   }
 });
 
+// NYT (bruger-ønske — kommune-vælger til trial-formularen i stedet for fri
+// tekst, se internal-create-trial.html's filhoved): kilden er BEVIDST
+// kommuneKeyToBadesteder (slug-index.js), IKKE puls-data.json's rå
+// auths-liste — det er PRÆCIS den samme kilde normalizeKommuneKey(tenant.
+// name) senere slås op imod alle andre steder i appen (fx
+// resolveTenantBadesteder(), computeKommuneBenchmark()), så et navn valgt
+// her er GARANTERET at finde badesteder senere. Den rå PULS-liste har
+// derimod bekræftede datakvalitetsproblemer (inkonsistent store/små
+// bogstaver, en udgået "LEJRE KOMMUNE (Udgået 31-08-2007)"-post — fundet
+// under kommune-benchmark-arbejdet, se computeKommuneBenchmark()'s
+// datakvalitets-gruppering), som ville sende sales-medarbejdere direkte i
+// samme fælde som den frie tekst-indtastning allerede advarede imod.
+// Ingen DB-forespørgsel — rent in-memory opslag, samme "kilde allerede i
+// module scope" som computeKommuneBenchmark() selv bruger.
+app.get('/internal/api/kommuner', requireInternalAuth, (req, res) => {
+  const list = [...kommuneKeyToBadesteder.entries()]
+    .filter(([, badesteder]) => badesteder.length > 0)
+    .map(([, badesteder]) => ({
+      name: (badestedSlugToInfo.get(badesteder[0].slug)?.kommune || badesteder[0].navn)
+        .replace(/\s*kommune\s*$/i, '').trim(),
+      badestedCount: badesteder.length,
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'da'));
+  res.set('Cache-Control', 'no-store');
+  res.json(list);
+});
+
+// NYT (bruger-ønske — salgsteamets adgang til EKSISTERENDE kommuner): liste
+// til vælgeren i internal-create-trial.html's nye kort. Ingen status-filter
+// (se listTenants()'s filhoved) — status vises i selve UI'en i stedet.
+app.get('/internal/api/tenants', requireInternalAuth, async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json(await tenantAdmin.listTenants());
+  } catch (e) {
+    console.error('internal/api/tenants: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente kommuneliste lige nu.' });
+  }
+});
+
+// NYT (bruger-ønske — salgsteamets adgang til EKSISTERENDE kommuner): SAMME
+// tenantAdmin.issueTrialLogin()-kald som POST /internal/api/create-trial
+// ovenfor bruger, blot UDEN det forudgående createTenant() — se
+// issueTrialLogin()'s filhoved (tenant-admin.js): funktionen er allerede
+// fuldt generisk over for tenant.status (rører den slet ikke), og det
+// udstedte link er genbrugeligt-indtil-udløb, ikke engangsbrug, så den
+// fungerer identisk godt til "giv mig adgang til en kommune der allerede
+// findes" som til en frisk trial. Svarformen matcher BEVIDST /internal/
+// api/create-trial's (samme tenant/loginUrl-felter), så klienten kan
+// genbruge samme visnings-kode for begge.
+app.post('/internal/api/tenants/:id/login-link', requireInternalAuth, express.json(), async (req, res) => {
+  try {
+    const days = Number(req.body?.days);
+    const issuedBy = typeof req.body?.issuedBy === 'string' ? req.body.issuedBy.trim() : '';
+    const note = typeof req.body?.note === 'string' && req.body.note.trim() ? req.body.note.trim() : null;
+
+    if (!Number.isFinite(days) || days <= 0) return res.status(400).json({ error: 'Gyldighed skal være et positivt antal dage.' });
+    if (!issuedBy) return res.status(400).json({ error: 'Dit navn mangler.' });
+
+    const tenant = await tenantAdmin.getTenant(req.params.id);
+    if (!tenant) return res.status(404).json({ error: 'Kommunen findes ikke.' });
+
+    const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000);
+    const rawToken = await tenantAdmin.issueTrialLogin({
+      tenantId: tenant.id, expiresAt, issuedBy, note,
+    });
+    const loginUrl = `${seoPages.SITE_URL}/admin/trial/${rawToken}`;
+
+    res.json({
+      tenant: { id: tenant.id, name: tenant.name, trialExpiresAt: expiresAt },
+      loginUrl,
+    });
+  } catch (e) {
+    console.error('internal/api/tenants/:id/login-link: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke generere login-link lige nu.' });
+  }
+});
+
 // Dashboard-placeholder — se admin-dashboard.html's filhoved. Tenant-data
 // injiceres server-side (samme "%%TOKEN%%".replace()-princip som seo-
 // pages.js's injectHead(), men lokalt her fremfor en delt hjælpefunktion,
