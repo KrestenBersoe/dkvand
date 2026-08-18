@@ -1383,15 +1383,6 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
     if (bact === null && viral === null && !annotated.some(a => a.isWastewater !== false)) {
       return { bact: null, viral: null, algae: null, forecast: null, source: 'ingen-bekraeftet', confirmReason: 'all-stormwater', outlets: [] };
     }
-    // MIDLERTIDIG DIAGNOSTIK (bruger-rapport 2026-08-18 — 37 blå "ingen
-    // data"-badesteder trods udfyldte vejrceller): logger de tilfælde hvor
-    // bact/viral ender null TIL TRODS FOR at mindst ét annoteret udløb har
-    // en ikke-null riskScore/viralScore — det bør per koden ovenfor være
-    // umuligt (Math.max-sporingen ville have samlet den værdi op). Fjern
-    // igen når årsagen er fundet.
-    if (bact === null && viral === null && annotated.some(a => a.riskScore !== null || a.viralScore !== null)) {
-      console.warn('DIAG kystvand-null-uoverensstemmelse:', kyst.ov_id, kyst.navn, JSON.stringify(annotated.map(a => ({ name: a.name, riskScore: a.riskScore, viralScore: a.viralScore, isWastewater: a.isWastewater, upstream: a.upstream, dist: a.dist }))));
-    }
     // Alge/prognose beholder kystvandets fælles værdi — samme begrundelse
     // som søerne (ingen etableret afstandsmodel for disse to felter).
     annotated.sort((a, b) => (b.riskScore ?? -1) - (a.riskScore ?? -1));

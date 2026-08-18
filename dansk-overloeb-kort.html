@@ -7766,7 +7766,24 @@ function showLakeLoadPanel(navn, _startTs) {
   const mfs = lakeMfsLoadData ? lakeMfsLoadData[navn] : null;
 
   if (!sub && !mfs) {
-    body.innerHTML = `<div class="dbg-group"><div class="dbg-row"><span style="color:#8a97a3">Ingen stofbelastningsdata for denne sø — filerne kunne ikke hentes.</span></div></div>`;
+    // RETTET (bruger-rapporteret 2026-08-18 — "flere søer mangler filer med
+    // stofbelastning fra spildevand"): de to tilfælde blev tidligere vist
+    // med SAMME "filerne kunne ikke hentes"-besked, men er reelt vidt
+    // forskellige. Selve filerne (lakeSubstanceLoadData/lakeMfsLoadData)
+    // fejler KUN at hente ved et ægte netværks-/404-problem — når de ER
+    // hentet (ikke-null), men denne SPECIFIKKE sø mangler en post, skyldes
+    // det at aggregate-lake-substance-load.js (se dens filhoved) bevidst
+    // SPRINGER søer med tomt pulsPoints-array over: ID15-terrænsporingen
+    // (match-lakes-via-id15.js) fandt reelt INGEN opstrøms PULS-udløb for
+    // søen — en POSITIV konklusion (intet at summere, ikke en fejl),
+    // bekræftet for 333 af de 336 "manglende" søer. Samme sondring som
+    // badestedernes "confirmedNoOutlet"/'ingen-bekraeftet' (grøn) allerede
+    // laver — denne besked var den ENESTE plads i appen, der stadig
+    // fejlagtigt fremstillede det positive fund som en teknisk fejl.
+    const filesLoaded = lakeSubstanceLoadData !== null || lakeMfsLoadData !== null;
+    body.innerHTML = filesLoaded
+      ? `<div class="dbg-group"><div class="dbg-row"><span style="color:#2d7d4f">✅ Ingen kendte spildevandsudledninger fundet opstrøms for denne sø (ID15-terrænsporing) — intet at vise.</span></div></div>`
+      : `<div class="dbg-group"><div class="dbg-row"><span style="color:#8a97a3">Ingen stofbelastningsdata for denne sø — filerne kunne ikke hentes.</span></div></div>`;
     return;
   }
 
