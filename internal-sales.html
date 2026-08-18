@@ -36,6 +36,14 @@
     padding: .5rem .6rem; border-radius: 6px; font-size: .9rem; font-family: inherit; width: 100%;
   }
   .field select { color-scheme: dark; }
+  /* RETTET (bruger-rapporteret 2026-08-18 — hvid baggrund i dropdown):
+     samme fix som admin-dashboard.html allerede bruger — :root's
+     color-scheme:dark alene respekteres IKKE af alle Chromium-udgaver for
+     selve popup-listen, kun for elementets egen lukkede tilstand. Kræver
+     eksplicit background/color på selve <option>-elementerne. */
+  .field select option, .stat-controls select option {
+    background: var(--paper); color: var(--ink);
+  }
   .field-note { font-size: .74rem; color: var(--ink-soft); margin-top: .25rem; }
   button {
     background: transparent; border: 1px solid var(--accent); color: var(--ink);
@@ -60,7 +68,10 @@
     background: rgba(212,160,32,.08); border: 1px solid rgba(212,160,32,.3); color: #e0b84a;
   }
   .stat-controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: .8rem; }
-  .stat-controls select, .stat-controls input { width: auto; }
+  .stat-controls select, .stat-controls input {
+    width: auto; background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .35rem .5rem; border-radius: 6px; font-size: .85rem; font-family: inherit; color-scheme: dark;
+  }
   table.kstat-table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .3rem; }
   table.kstat-table td { padding: .3rem 0; }
   table.kstat-table td.n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; padding-left: .9rem; }
@@ -158,7 +169,9 @@
         <label for="t-note">Note (valgfri, kun til internt brug)</label>
         <input type="text" id="t-note" placeholder="Fx: demo til salgsmøde">
       </div>
-      <button type="submit" id="tsubmit-btn">Generér login-link</button>
+      <button type="button" id="tlogin-btn" onclick="loginNowAsTenant()">🔑 Log ind nu som denne kommune</button>
+      <div style="height:.5rem"></div>
+      <button type="submit" id="tsubmit-btn" style="opacity:.8">Generér login-link (uden selv at logge ind)</button>
     </form>
     <div id="tresult"></div>
   </div>
@@ -315,30 +328,48 @@ async function loadTenantOptions() {
 loadKommuneOptions();
 loadTenantOptions();
 
+// NYT (bruger-ønske 2026-08-18 — direkte login uden at skulle kopiere/åbne
+// et link separat): udtrukket fælles kald, genbrugt af BÅDE
+// submitTenantForm() (viser linket som tekst — til at SENDE videre) og
+// loginNowAsTenant() (navigerer selv til det med det samme — til at LOGGE
+// IND som kommunen HER OG NU). Begge bruger PRÆCIS samme underliggende
+// /internal/api/tenants/:id/login-link — kun hvad der sker med det
+// returnerede loginUrl adskiller de to.
+async function fetchTenantLoginLink({ tenantId, days, issuedBy, note }) {
+  const resp = await fetch(`/internal/api/tenants/${encodeURIComponent(tenantId)}/login-link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days, issuedBy, note: note || null }),
+  });
+  const data = await resp.json();
+  return { ok: resp.ok, data };
+}
+
+function readTenantFormFields() {
+  const sel = document.getElementById('t-tenant');
+  return {
+    sel,
+    selectedName: sel.options[sel.selectedIndex]?.textContent || '',
+    tenantId: sel.value,
+    days: Number(document.getElementById('t-days').value),
+    issuedBy: document.getElementById('t-issued-by').value.trim(),
+    note: document.getElementById('t-note').value.trim(),
+  };
+}
+
 async function submitTenantForm(e) {
   e.preventDefault();
-  const sel = document.getElementById('t-tenant');
-  const selectedName = sel.options[sel.selectedIndex]?.textContent || '';
+  const { selectedName, tenantId, days, issuedBy, note } = readTenantFormFields();
   if (!confirm(`Generér et nyt login-link til "${selectedName}"?`)) return false;
 
   const btn = document.getElementById('tsubmit-btn');
   const resultEl = document.getElementById('tresult');
-  const tenantId = sel.value;
-  const days = Number(document.getElementById('t-days').value);
-  const issuedBy = document.getElementById('t-issued-by').value.trim();
-  const note = document.getElementById('t-note').value.trim();
-
   btn.disabled = true;
   btn.textContent = 'Genererer…';
   resultEl.innerHTML = '';
   try {
-    const resp = await fetch(`/internal/api/tenants/${encodeURIComponent(tenantId)}/login-link`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ days, issuedBy, note: note || null }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
+    const { ok, data } = await fetchTenantLoginLink({ tenantId, days, issuedBy, note });
+    if (!ok) {
       resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke generere login-link.')}</div>`;
       return;
     }
@@ -354,9 +385,44 @@ async function submitTenantForm(e) {
     resultEl.innerHTML = '<div class="err">Kunne ikke generere login-link — tjek din forbindelse.</div>';
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Generér login-link';
+    btn.textContent = 'Generér login-link (uden selv at logge ind)';
   }
   return false;
+}
+
+// NYT (bruger-ønske 2026-08-18): type="button", IKKE en form-submit — kalder
+// derfor selv form.reportValidity() for at genbruge SAMME native HTML5-
+// validering (required-felter osv.) som "Generér login-link" ellers ville
+// have fået gratis via <form onsubmit>. På succes navigeres BROWSEREN selv
+// direkte til loginUrl'et — /admin/trial/:token forbruger tokenet og
+// redirecter til /admin/dashboard, samme mekanisme som en kommune selv
+// ville opleve ved klik på et tilsendt link, blot uden mellemtrinnet med
+// at skulle kopiere/åbne linket separat.
+async function loginNowAsTenant() {
+  const form = document.getElementById('tform');
+  if (!form.reportValidity()) return;
+  const { selectedName, tenantId, days, issuedBy, note } = readTenantFormFields();
+  if (!confirm(`Log ind nu som "${selectedName}"? Du forlader sales-portalen og lander på kommunens eget dashboard.`)) return;
+
+  const btn = document.getElementById('tlogin-btn');
+  const resultEl = document.getElementById('tresult');
+  btn.disabled = true;
+  btn.textContent = 'Logger ind…';
+  resultEl.innerHTML = '';
+  try {
+    const { ok, data } = await fetchTenantLoginLink({ tenantId, days, issuedBy, note });
+    if (!ok) {
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke logge ind.')}</div>`;
+      btn.disabled = false;
+      btn.textContent = '🔑 Log ind nu som denne kommune';
+      return;
+    }
+    window.location.href = data.loginUrl;
+  } catch (e) {
+    resultEl.innerHTML = '<div class="err">Kunne ikke logge ind — tjek din forbindelse.</div>';
+    btn.disabled = false;
+    btn.textContent = '🔑 Log ind nu som denne kommune';
+  }
 }
 
 async function submitForm(e) {

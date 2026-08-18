@@ -34,6 +34,13 @@
     padding: .5rem .6rem; border-radius: 6px; font-size: .9rem; font-family: inherit; width: 100%;
   }
   .field select { color-scheme: dark; }
+  /* RETTET (bruger-rapporteret 2026-08-18, samme fejl fundet på internal-
+     sales.html — hvid baggrund i dropdown): samme fix som admin-
+     dashboard.html allerede bruger — :root's color-scheme:dark alene
+     respekteres IKKE af alle Chromium-udgaver for selve popup-listen, kun
+     for elementets egen lukkede tilstand. Kræver eksplicit background/
+     color på selve <option>-elementerne. */
+  .field select option { background: var(--paper); color: var(--ink); }
   h2 { font-size: 1rem; margin: 0 0 .3rem; }
   .field-note { font-size: .74rem; color: var(--ink-soft); margin-top: .25rem; }
   button {
