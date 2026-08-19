@@ -292,10 +292,18 @@
   }
   .ovl-embed-box .copy-note { font-size: .74rem; color: var(--ok); margin-top: .3rem; min-height: 1em; }
 
-  /* NYT — fuldskærm: Leaflet-kortet skal fylde HELE skærmen, ikke kun sin
-     normale kort-højde, når #ovl-map selv er :fullscreen-elementet. */
-  #ovl-map:fullscreen { height: 100vh; }
-  #ovl-map:-webkit-full-screen { height: 100vh; }
+  /* RETTET — fuldskærm: fuldskærms-MÅLET er nu #ovl-map-fs-wrap (se HTML-
+     kommentaren ved den), ikke #ovl-map selv, så #ovl-udlob-panel (en
+     søskende til #ovl-map, begge efterkommere af wrapperen) er en del af
+     samme fuldskærms-"top layer" og kan vises ovenpå kortet. */
+  .ovl-map-fs-wrap:fullscreen,
+  .ovl-map-fs-wrap:-webkit-full-screen {
+    height: 100vh; display: flex;
+  }
+  .ovl-map-fs-wrap:fullscreen #ovl-map,
+  .ovl-map-fs-wrap:-webkit-full-screen #ovl-map {
+    flex: 1; height: 100%;
+  }
 
   /* NYT (bruger-ønske 2026-08-19) — kortvælger-flyout, samme mønster som
      dkvand's #lag-btn/#lag-body men egne id'er/klasser. */
@@ -447,20 +455,28 @@ function render() {
           <button type="button" onclick="toggleOvlFullscreen()" style="margin-left:auto">⛶ Fuld skærm</button>
         </div>
 
-        <div id="ovl-map" class="ovl-map"></div>
+        <!-- RETTET (bruger-rapporteret — detaljepanelet åbnede "under
+             kortet" i fuldskærm): Fullscreen API'ens "top layer" viser KUN
+             det element der selv blev gjort fuldskærm, plus dets EGNE
+             efterkommere — noget udenfor det (heller ikke en søskende med
+             høj z-index) kan tegnes ovenpå. #ovl-udlob-panel lå tidligere
+             som søskende til #ovl-map (uden for det), og forsvandt derfor
+             visuelt bag kortet, så snart kortet selv gik i fuldskærm.
+             #ovl-map-fs-wrap ombryder nu BEGGE, og er selve elementet der
+             gøres fuldskærm (se toggleOvlFullscreen()) — panelet er dermed
+             en efterkommer af fuldskærms-elementet og vises korrekt ovenpå. -->
+        <div id="ovl-map-fs-wrap" class="ovl-map-fs-wrap">
+          <div id="ovl-map" class="ovl-map"></div>
+          <div class="ovl-panel-overlay" id="ovl-udlob-panel" onclick="if (event.target === this) closeOvlUdlobPanel()">
+            <div class="ovl-panel-sheet" id="ovl-panel-sheet"></div>
+          </div>
+        </div>
         <div class="ovl-map-legend">
           <span><span class="ovl-legend-dot" style="background:#2d7d4f"></span>Grøn</span>
           <span><span class="ovl-legend-dot" style="background:#d4a020"></span>Gul</span>
           <span><span class="ovl-legend-dot" style="background:#c84b1f"></span>Rød</span>
           <span><span class="ovl-legend-ring"></span>Aktiv varselsring (udløb)</span>
         </div>
-      </div>
-
-      <!-- NYT (bruger-ønske 2026-08-19) — udløbs-detaljepanel, fast
-           bundpanel (se .ovl-panel-overlay-CSS'en), skjult indtil et udløb
-           klikkes på kortet. -->
-      <div class="ovl-panel-overlay" id="ovl-udlob-panel" onclick="if (event.target === this) closeOvlUdlobPanel()">
-        <div class="ovl-panel-sheet" id="ovl-panel-sheet"></div>
       </div>
 
       <div class="card" id="card-overloeb-varsler">
@@ -1081,17 +1097,21 @@ async function loadOverloebPrioriteret() {
   }
 }
 
-// NYT — fuldskærm: #ovl-map selv er :fullscreen-elementet (se CSS'en for
-// #ovl-map:fullscreen), ikke hele kortets card — Leaflet skal blot
-// genberegne sin egen containerstørrelse (invalidateSize()), samme
+// RETTET (bruger-rapporteret — detaljepanelet åbnede under kortet i
+// fuldskærm) — fuldskærms-MÅLET er nu #ovl-map-fs-wrap, IKKE #ovl-map selv:
+// Fullscreen API'ens "top layer" viser kun det fuldskærmsgjorte element og
+// dets EGNE efterkommere, aldrig en søskende (uanset z-index) — #ovl-udlob-
+// panel skal derfor være en efterkommer af samme element som #ovl-map, for
+// at kunne vises ovenpå kortet mens det er fuldskærm. Leaflet skal stadig
+// blot genberegne sin egen containerstørrelse (invalidateSize()), samme
 // nødvendighed som ved fane-skift (se switchDashTab()).
 function toggleOvlFullscreen() {
-  const mapEl = document.getElementById('ovl-map');
-  if (!mapEl) return;
+  const wrapEl = document.getElementById('ovl-map-fs-wrap');
+  if (!wrapEl) return;
   if (document.fullscreenElement) {
     document.exitFullscreen();
   } else {
-    (mapEl.requestFullscreen || mapEl.webkitRequestFullscreen)?.call(mapEl);
+    (wrapEl.requestFullscreen || wrapEl.webkitRequestFullscreen)?.call(wrapEl);
   }
 }
 document.addEventListener('fullscreenchange', () => { if (ovlMap) setTimeout(() => ovlMap.invalidateSize(), 50); });
