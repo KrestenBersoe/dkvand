@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Kommune-dashboard — Badevandsvarsel</title>
 <meta name="robots" content="noindex, nofollow">
+<!-- NYT (Kommune Dashboard-udvidelse, "Overløb"-fanen) — samme Leaflet-
+     version (CDN, ikke vendoret) som dansk-overloeb-kort.html allerede
+     bruger, til det nye live overløbskort. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <style>
   /* Samme farvepalet/tema som stats.html — se den for begrundelsen. */
   :root {
@@ -218,6 +223,57 @@
   .vurd-pager { display: flex; align-items: center; justify-content: center; gap: .8rem; margin-top: .8rem; }
   .vurd-pager button { font-size: .78rem; padding: .3rem .7rem; }
   .vurd-pager-note { color: var(--ink-soft); font-size: .78rem; white-space: nowrap; }
+
+  /* NYT (bruger-ønske 2026-08-19) — to-fane-struktur (Overløb/Badevand).
+     Portet mønster fra dansk-overloeb-kort.html's switchTab() (.tab-panel/
+     .tab-btn + map.invalidateSize() ved fane-skift), tilpasset denne sides
+     kort-baserede visuelle sprog i stedet for genbrugt 1:1. */
+  .tab-bar { display: flex; gap: .5rem; margin-bottom: 1.2rem; }
+  .tab-btn {
+    flex: 1; background: rgba(255,255,255,.03); border: 1px solid var(--border); color: var(--ink-soft);
+    padding: .6rem 1rem; border-radius: 10px; font-size: .92rem; font-weight: 600; cursor: pointer;
+  }
+  .tab-btn.active { background: rgba(79,184,214,.14); border-color: var(--accent); color: var(--ink); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* NYT — "Overløb"-fanen. Præfiks "ovl-" (ikke "ov-") bevidst valgt for at
+     UNDGÅ kollision med det eksisterende "ov-" præfiks (ov-field/ov-intro/
+     ov-active-row m.fl.), som allerede betyder "override" (Kommunalt
+     Varsel-kortet) andetsteds i denne fil. 3-total-baren er en klon af
+     dansk-overloeb-kort.html's .national-summary/.ns-red/.ns-yellow/
+     .ns-green-farver (samme hex). */
+  .ovl-totals { display: flex; gap: .6rem; margin-bottom: .5rem; }
+  .ovl-total { flex: 1; text-align: center; border-radius: 10px; padding: .7rem .5rem; border: 1px solid var(--border); background: rgba(255,255,255,.02); }
+  .ovl-total-value { display: block; font-size: 1.6rem; font-weight: 700; line-height: 1.1; }
+  .ovl-total-label { display: block; font-size: .7rem; color: var(--ink-soft); margin-top: .25rem; text-transform: uppercase; letter-spacing: .05em; }
+  .ovl-total-red    .ovl-total-value { color: #e2694f; }
+  .ovl-total-yellow .ovl-total-value { color: #d4a020; }
+  .ovl-total-green  .ovl-total-value { color: #4fbf7f; }
+  .ovl-nodata-note { font-size: .74rem; color: var(--ink-soft); margin-bottom: .6rem; min-height: 1em; }
+
+  .ovl-horizon-toggle { display: inline-flex; gap: .3rem; }
+  .ovl-horizon-btn { padding: .3rem .8rem; font-size: .8rem; }
+  .ovl-horizon-btn.active { background: rgba(79,184,214,.15); border-color: var(--accent); color: var(--ink); }
+
+  .ovl-map { height: 380px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); margin-top: .7rem; background: #0d1720; }
+  .ovl-map-legend { display: flex; flex-wrap: wrap; gap: .9rem; margin-top: .6rem; font-size: .74rem; color: var(--ink-soft); align-items: center; }
+  .ovl-legend-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: .35rem; vertical-align: middle; }
+  .ovl-legend-ring { display: inline-block; width: 11px; height: 11px; border-radius: 50%; border: 2px dashed #d4a020; margin-right: .35rem; vertical-align: middle; }
+
+  /* Udløbs-alarmlisten — samme farvesprog som .alarm-card/.chip i dansk-
+     overloeb-kort.html's Varsler-fane (venstrekant + chip), egne klassenavne
+     for ikke at kollidere med den fil (separat side/kontekst). */
+  .ovl-alert-row { border-left: 3px solid var(--border); border-radius: 6px; padding: .5rem .7rem; margin-bottom: .5rem; background: rgba(255,255,255,.02); font-size: .86rem; }
+  .ovl-alert-row.risk-roed { border-left-color: #c84b1f; }
+  .ovl-alert-row.risk-gul  { border-left-color: #d4a020; }
+  .ovl-alert-top { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; flex-wrap: wrap; }
+  .ovl-alert-name { font-weight: 600; }
+  .ovl-alert-chip { font-size: .74rem; padding: .1rem .55rem; border-radius: 999px; font-weight: 700; white-space: nowrap; }
+  .ovl-alert-chip.risk-roed { background: rgba(200,75,31,.18); color: #e2694f; }
+  .ovl-alert-chip.risk-gul  { background: rgba(212,160,32,.18); color: #d4a020; }
+  .ovl-alert-meta { color: var(--ink-soft); font-size: .76rem; margin-top: .25rem; }
+  .ovl-alert-empty { color: var(--ink-soft); font-size: .85rem; }
 </style>
 </head>
 <body>
@@ -276,6 +332,49 @@ function render() {
     <h1>🏛 ${escHtml(t.name)}</h1>
     <div class="sub">Kommune-dashboard — logget ind via ${t.authMethod === 'trial' ? 'trial-adgang' : 'kommunens eget OAuth-login'}</div>
 
+    <!-- NYT (bruger-ønske 2026-08-19) — to faner: "Overløb" (drifts-
+         dashboard, default-aktiv) og "Badevand" (al tidligere eksisterende
+         rapportering, flyttet uændret ind i sit eget tab-panel nedenfor). -->
+    <div class="tab-bar">
+      <button type="button" class="tab-btn active" data-tab="overloeb" onclick="switchDashTab('overloeb')">Overløb</button>
+      <button type="button" class="tab-btn" data-tab="badevand" onclick="switchDashTab('badevand')">Badevand</button>
+    </div>
+
+    <div class="tab-panel active" id="tab-overloeb">
+      <div class="card" id="card-overloeb-map">
+        <h2>Overløb lige nu</h2>
+        <div class="ovl-totals">
+          <div class="ovl-total ovl-total-red"><span class="ovl-total-value" id="ovl-t-roed">–</span><span class="ovl-total-label">Røde overløb</span></div>
+          <div class="ovl-total ovl-total-yellow"><span class="ovl-total-value" id="ovl-t-gul">–</span><span class="ovl-total-label">Gule overløb</span></div>
+          <div class="ovl-total ovl-total-green"><span class="ovl-total-value" id="ovl-t-groen">–</span><span class="ovl-total-label">Grønne overløb</span></div>
+        </div>
+        <div class="ovl-nodata-note" id="ovl-nodata-note"></div>
+
+        <div class="stat-controls">
+          <label>Prognose</label>
+          <div class="ovl-horizon-toggle" id="ovl-horizon-toggle">
+            <button type="button" class="ovl-horizon-btn active" data-horizon="nu" onclick="setOverloebHorizon('nu')">Nu</button>
+            <button type="button" class="ovl-horizon-btn" data-horizon="24h" onclick="setOverloebHorizon('24h')">24h</button>
+            <button type="button" class="ovl-horizon-btn" data-horizon="72h" onclick="setOverloebHorizon('72h')">72h</button>
+          </div>
+        </div>
+
+        <div id="ovl-map" class="ovl-map"></div>
+        <div class="ovl-map-legend">
+          <span><span class="ovl-legend-dot" style="background:#2d7d4f"></span>Grøn</span>
+          <span><span class="ovl-legend-dot" style="background:#d4a020"></span>Gul</span>
+          <span><span class="ovl-legend-dot" style="background:#c84b1f"></span>Rød</span>
+          <span><span class="ovl-legend-ring"></span>Aktiv varselsring (udløb)</span>
+        </div>
+      </div>
+
+      <div class="card" id="card-overloeb-varsler">
+        <h2>Udløb med aktive varsler</h2>
+        <div id="ovl-varsler-content">Indlæser…</div>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-badevand">
     <nav class="dash-toc">
       <a href="#card-status">Status</a>
       <a href="#card-historik">Badevandshistorik</a>
@@ -432,6 +531,7 @@ function render() {
       </div>
       <div class="placeholder-note">Bygges i de næste moduler.</div>
     </div>
+    </div>
 
     <button onclick="location.href='/admin/settings/oauth'">⚙️ OAuth-opsætning</button>
     <button onclick="logout()">Log ud</button>
@@ -442,6 +542,165 @@ function render() {
   loadAlertStats();
   loadVurderinger();
   loadKommuneBenchmark();
+  loadOverloebStatus();
+  connectOverloebStream();
+}
+
+// ── Fane-skift (bruger-ønske 2026-08-19) ────────────────────────────────────
+// Portet mønster fra dansk-overloeb-kort.html's switchTab() — invalidateSize()
+// er nødvendigt, fordi Leaflet beregner kortstørrelsen ud fra containerens
+// synlige dimensioner PÅ INITIALISERINGSTIDSPUNKTET; et kort der findes inde
+// i et display:none-panel (som Badevand-fanen er, når man starter på
+// Overløb) renderer forkert/klippet, hvis man ikke tvinger den til at
+// genberegne sin størrelse, når panelet bliver synligt igen.
+function switchDashTab(tab) {
+  document.querySelectorAll('.tab-panel').forEach(el => el.classList.toggle('active', el.id === `tab-${tab}`));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
+  if (tab === 'overloeb' && ovlMap) setTimeout(() => ovlMap.invalidateSize(), 50);
+}
+
+// ── "Overløb"-fanen (bruger-ønske 2026-08-19) ───────────────────────────────
+// Live kort + varselsliste for kommunens egne overløb (samtlige PULS-
+// punkter, kloak+regnvand) og badesteder — se server.js's GET /admin/api/
+// overloeb-status og overloeb-status.js for selve beregningen. Al kommune-
+// scoping/bucketing sker server-side; denne kode renderer udelukkende det
+// færdige resultat, samme server-autoritative princip som resten af appen.
+let ovlMap = null, ovlBadestedLayer = null, ovlUdloebLayer = null;
+let ovlHorizon = 'nu';
+let ovlEventSource = null;
+let ovlBoundsFitted = false;
+
+// groen/gul/roed/ingen-data matcher risk-model.js's riskBucket()-strenge
+// 1:1 — lukket dækker en aktiv kommune-override med bucket 'lukket' (se
+// badested-override-logic.js's OVERRIDE_BUCKETS), som kun badesteder (ikke
+// udløb) kan have.
+const OVL_BUCKET_COLOR = { roed: '#c84b1f', gul: '#d4a020', groen: '#2d7d4f', lukket: '#3a3a3a', 'ingen-data': '#1a6faf' };
+const OVL_BUCKET_LABEL = { roed: 'Rød', gul: 'Gul', groen: 'Grøn', lukket: 'Lukket', 'ingen-data': 'Ingen data' };
+
+// NYT: samme selv-hostede, kun-Danmark tileserver som dansk-overloeb-
+// kort.html allerede bruger (se dens filhoved for hvorfor: uautentificerede
+// tredjeparts-tile-CDN'er er gentagne gange blevet strammet uden varsel).
+const OVL_TILE_SERVER_URL = 'https://tiles.ditbadevand.dk/styles/basic/{z}/{x}/{y}.png';
+
+function ensureOvlMap() {
+  if (ovlMap) return;
+  ovlMap = L.map('ovl-map', { scrollWheelZoom: false }).setView([56.0, 10.5], 8);
+  L.tileLayer(OVL_TILE_SERVER_URL, {
+    attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19,
+    maxNativeZoom: 14, // se dansk-overloeb-kort.html's tilsvarende kommentar — fliserne findes kun til zoom 14
+  }).addTo(ovlMap);
+  ovlBadestedLayer = L.layerGroup().addTo(ovlMap);
+  ovlUdloebLayer = L.layerGroup().addTo(ovlMap);
+}
+
+function setOverloebHorizon(h) {
+  if (h === ovlHorizon) return;
+  ovlHorizon = h;
+  document.querySelectorAll('#ovl-horizon-toggle .ovl-horizon-btn').forEach(b => b.classList.toggle('active', b.dataset.horizon === h));
+  loadOverloebStatus();
+}
+
+async function loadOverloebStatus() {
+  ensureOvlMap();
+  try {
+    const resp = await fetch(`/admin/api/overloeb-status?horizon=${encodeURIComponent(ovlHorizon)}`, { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      document.getElementById('ovl-varsler-content').innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente overløbsstatus.')}</div>`;
+      return;
+    }
+    renderOverloeb(data);
+  } catch (e) {
+    document.getElementById('ovl-varsler-content').innerHTML = '<div class="err">Kunne ikke hente overløbsstatus — tjek din forbindelse.</div>';
+  }
+}
+
+function renderOverloeb(data) {
+  document.getElementById('ovl-t-roed').textContent  = data.totals.roed;
+  document.getElementById('ovl-t-gul').textContent   = data.totals.gul;
+  document.getElementById('ovl-t-groen').textContent = data.totals.groen;
+  document.getElementById('ovl-nodata-note').textContent = data.totals.ingenData > 0
+    ? `${data.totals.ingenData} udløb uden vejrdata lige nu — ikke talt med ovenfor.`
+    : '';
+
+  ovlBadestedLayer.clearLayers();
+  ovlUdloebLayer.clearLayers();
+  const bounds = [];
+
+  for (const b of data.badesteder) {
+    if (b.lat == null || b.lng == null) continue;
+    bounds.push([b.lat, b.lng]);
+    const color = OVL_BUCKET_COLOR[b.bucket] || OVL_BUCKET_COLOR['ingen-data'];
+    L.circleMarker([b.lat, b.lng], {
+      radius: 8, fillColor: color, color: '#fff', weight: 2, fillOpacity: 0.9,
+    }).bindTooltip(
+      `<strong>🏖 ${escHtml(b.navn)}</strong><br>${escHtml(OVL_BUCKET_LABEL[b.bucket] || b.bucket)}`,
+      { sticky: true }
+    ).addTo(ovlBadestedLayer);
+  }
+
+  for (const u of data.udloeb) {
+    if (u.lat == null || u.lng == null) continue;
+    bounds.push([u.lat, u.lng]);
+    const color = OVL_BUCKET_COLOR[u.bucket] || OVL_BUCKET_COLOR['ingen-data'];
+    const typeLabel = u.isWastewater ? 'Kloak' : 'Regnvand';
+    const riskPct = u.risk != null ? Math.round(u.risk * 100) + '%' : 'ingen data';
+    L.circleMarker([u.lat, u.lng], {
+      radius: 4, fillColor: color, color: 'rgba(255,255,255,.4)', weight: 1, fillOpacity: 0.85,
+    }).bindTooltip(
+      `<strong>🚰 ${escHtml(u.navn)}</strong><br>${escHtml(typeLabel)} · ${escHtml(OVL_BUCKET_LABEL[u.bucket] || u.bucket)} (${riskPct})`,
+      { sticky: true }
+    ).addTo(ovlUdloebLayer);
+
+    // NYT: to-trins varselsring (gul/rød) — hovedkortets tilsvarende ring
+    // (dansk-overloeb-kort.html) findes KUN for rød (foreRisk>.55), ingen
+    // gul tærskel findes der i dag. Samme L.circleMarker-mønster
+    // (fillOpacity:0, dashArray), blot med to tærskler i stedet for én.
+    if (u.bucket === 'gul' || u.bucket === 'roed') {
+      L.circleMarker([u.lat, u.lng], {
+        radius: 12, fillOpacity: 0, weight: 2, dashArray: '4,4',
+        color: u.bucket === 'roed' ? '#ff6040' : '#f0c040',
+      }).addTo(ovlUdloebLayer);
+    }
+  }
+
+  if (!ovlBoundsFitted && bounds.length > 0) {
+    ovlMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 12 });
+    ovlBoundsFitted = true;
+  }
+
+  const varslerEl = document.getElementById('ovl-varsler-content');
+  if (data.varsler.length === 0) {
+    varslerEl.innerHTML = '<div class="ovl-alert-empty">Ingen aktive gul/rød-varsler for kommunens overløb lige nu.</div>';
+  } else {
+    varslerEl.innerHTML = data.varsler.map(u => {
+      const typeLabel = u.isWastewater ? 'Kloak' : 'Regnvand';
+      const riskPct = u.risk != null ? Math.round(u.risk * 100) : null;
+      return `
+        <div class="ovl-alert-row risk-${u.bucket}">
+          <div class="ovl-alert-top">
+            <span class="ovl-alert-name">${escHtml(u.navn)}</span>
+            <span class="ovl-alert-chip risk-${u.bucket}">${escHtml(OVL_BUCKET_LABEL[u.bucket])}${riskPct != null ? ' · ' + riskPct + '%' : ''}</span>
+          </div>
+          <div class="ovl-alert-meta">${escHtml(typeLabel)} · prognose ${(u.forecastMM ?? 0).toFixed(1)} mm · observeret ${(u.todayMM ?? 0).toFixed(1)} mm</div>
+        </div>
+      `;
+    }).join('');
+  }
+}
+
+// NYT (bruger-krav: "live med en socketforbindelse ... automatisk
+// opdateres hver gang der er en opdatering af overløbenes status") —
+// EventSource, se server.js's GET /admin/api/overloeb-stream for hvorfor
+// Server-Sent Events blev valgt frem for en WebSocket-pakke. Sender kun en
+// let ping; selve gendataet genhentes altid via loadOverloebStatus(), som
+// respekterer den aktuelt valgte horisont. EventSource genopretter selv
+// forbindelsen ved fejl/afbrydelse — ingen manuel reconnect-logik her.
+function connectOverloebStream() {
+  if (ovlEventSource) return;
+  ovlEventSource = new EventSource('/admin/api/overloeb-stream');
+  ovlEventSource.addEventListener('overloeb-updated', () => loadOverloebStatus());
 }
 
 /**

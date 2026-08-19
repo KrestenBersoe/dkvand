@@ -76,6 +76,11 @@ COPY tenant-badesteder.js ./
 # produktionsudfald-kommentar ovenfor for hvorfor dette tjekkes hver gang.
 COPY badested-overrides.js ./
 COPY badested-override-logic.js ./
+# NYT: Kommune Dashboard, "Overløb"-fanen — server.js kræver nu også
+# (require('./overloeb-status')) dette modul ved opstart, samme "crasher
+# øjeblikkeligt uden denne linje"-fælde som de øvrige lokale moduler i
+# denne fil.
+COPY overloeb-status.js ./
 # server.js's GET /admin/dashboard, GET /admin/settings/oauth og
 # GET /admin/login læser disse filer direkte via fs.readFileSync(STATIC_DIR,
 # ...) ved hver request (samme mønster som stats.html nedenfor) — mangler

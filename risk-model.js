@@ -313,10 +313,24 @@ function estimateLastEventAge(hourlyWeek) {
   return hoursAgo / 24; // omregnet til dage, samme enhed som lastEventAge altid har brugt
 }
 
+// NYT (Kommune Dashboard-udvidelse, "Overløb"-fanen) — delt rød/gul/grøn-
+// bucketing af en 0..1-risikoscore, samme tærskler som klientens
+// `riskLabel()`/`riskStyle()` (dansk-overloeb-kort.html) allerede bruger
+// (r>=.6 høj/rød, r>=.2 moderat/gul, ellers lav/grøn). REQUIRED-SYNCED med
+// dem, samme princip som computeIntensityFactor() ovenfor — ændres den ene,
+// skal den anden ændres med, ellers kan kortets farver og dashboardets
+// totaltal komme til at afvige fra hinanden.
+function riskBucket(r) {
+  if (r === null || r === undefined) return 'ingen-data';
+  if (r >= 0.6) return 'roed';
+  if (r >= 0.2) return 'gul';
+  return 'groen';
+}
+
 module.exports = {
   sigmoid, seasonalTau, seasonalTauViral, cellKey, computeRisk, computeForecastRisk,
   computeViralRisk, computeForecastViralRisk, derivePulsFields, estimateLastEventAge,
-  accumulateDecayed, computeIntensityFactor,
+  accumulateDecayed, computeIntensityFactor, riskBucket,
   GRID_DEG, TAU_BASE_DAYS, Q10, SEDIMENT_REBOUND, DK_RAINY_DAYS_YEAR, DK_WATER_TEMP, DK_DAYLIGHT_HRS,
   LAST_EVENT_TRIGGER_MM, HOURLY_DECAY_TAU_DAYS, TAU_VIRAL_BASE, Q10_VIRAL,
 };

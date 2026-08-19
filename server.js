@@ -48,6 +48,10 @@ const badestedOverrides = require('./badested-overrides');
 // badested-digest) — se modulets eget filhoved for begrundelsen bag
 // persisteret løbende gennemsnit frem for in-memory-akkumulering.
 const appMetrics   = require('./app-metrics');
+// NYT (Kommune Dashboard-udvidelse, "Overløb"-fanen) — ren beregningsfunktion,
+// se modulets eget filhoved for hvorfor kommune-scoping/bucketing er isoleret
+// her i stedet for direkte i selve ruterne nedenfor.
+const overloebStatus = require('./overloeb-status');
 // NYT (bruger-ønske 2026-08-10 — URL-arkitektur/SEO): navn-kommune-slugs for
 // Tier 1/2 (/badested/:slug, /soe/:slug) + sitemap.xml — se modulets eget
 // filhoved for hvorfor slug-skemaet er bekræftet mod reelle data (0
@@ -1274,6 +1278,65 @@ app.get('/admin/api/vurderinger', tenantAdmin.requireTenantSession, async (req, 
   }
 });
 
+// ── Kommunepakke, modul 9 — "Overløb"-fanen (bruger-ønske 2026-08-19) ───────
+// Live kort + varselsliste for kommunens EGNE overløb (samtlige PULS-
+// punkter, kloak+regnvand — ikke kun dem koblet til et badested) plus
+// badestedernes aktuelle status. Al kommune-scoping/bucketing sker i
+// overloeb-status.js (ren funktion, se dens filhoved) — denne rute læser
+// udelukkende de allerede cachede riskScoresCache/badevandRiskCache, ingen
+// live-genberegning pr. request, samme cache-filosofi som resten af appen.
+const OVERLOEB_HORIZONS = new Set(['nu', '24h', '72h']);
+app.get('/admin/api/overloeb-status', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const horizon = OVERLOEB_HORIZONS.has(req.query.horizon) ? req.query.horizon : 'nu';
+    const tenantBadestederList = tenantBadesteder.resolveTenantBadesteder(tenant.name, kommuneKeyToBadesteder);
+    const result = overloebStatus.computeOverloebStatusForTenant({
+      tenant,
+      horizon,
+      riskScoresPoints: riskScoresCache.points,
+      badevandList: badevandRiskCache.badevand,
+      tenantBadesteder: tenantBadestederList,
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (e) {
+    console.error('admin/api/overloeb-status: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente overløbsstatus lige nu.' });
+  }
+});
+
+// NYT — se broadcastOverloebUpdate()'s filhoved (module-scope, tæt på
+// riskScoresCache/badevandRiskCache) for hvorfor Server-Sent Events blev
+// valgt frem for en WebSocket-pakke. requireTenantSession virker uændret
+// her, fordi EventSource sender den eksisterende session-cookie automatisk
+// for samme origin, ganske som en almindelig fetch() ville.
+app.get('/admin/api/overloeb-stream', tenantAdmin.requireTenantSession, (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no', // undgår proxy-buffering af SSE-strømmen
+  });
+  res.write(': forbundet\n\n');
+  overloebStreamClients.add(res);
+  // NYT: ~30s kommentar-heartbeat — forhindrer at Fly.io's proxy (eller en
+  // browser/mellemled) lukker forbindelsen som "idle" mellem de 15-minutters
+  // rigtige opdateringer.
+  const heartbeat = setInterval(() => {
+    try { res.write(': keep-alive\n\n'); }
+    catch (e) { /* fanges af 'close' nedenfor */ }
+  }, 30000);
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    overloebStreamClients.delete(res);
+  });
+});
+
 // ── Kommune-benchmark-rapporten (bruger-ønske) ──────────────────────────────
 // Sammenlignende ranking på tværs af ALLE kommuner med mindst ét matchet
 // badested (kommuneKeyToBadesteder, se slug-index.js) — IKKE kun den
@@ -1815,7 +1878,12 @@ function fetchOpenMeteo(lat, lng) {
       // variable. wind_speed_unit=ms sikrer samme enhed (m/s) som
       // strømdataen (CMEMS uo/vo), så de to kan sammenlignes direkte i UI'en.
       `&hourly=precipitation,temperature_2m,windspeed_10m,winddirection_10m` +
-      `&wind_speed_unit=ms&past_days=7&forecast_days=2` +
+      // RETTET (Kommune Dashboard-udvidelse, "Overløb"-fanens 72h-prognose):
+      // forecast_days var tidligere 2 (nok til den eksisterende 24h-sum,
+      // forecastMM nedenfor) — hævet til 4 for at have nok rå prognosetimer
+      // til også at kunne summere en 72h-prognose (forecastMM72h). Den
+      // eksisterende 24h-sum er UÆNDRET af dette, kun mere data hentes.
+      `&wind_speed_unit=ms&past_days=7&forecast_days=4` +
       `&models=best_match&timezone=Europe%2FCopenhagen`;
     https.get(url, resp => {
       if (resp.statusCode !== 200) {
@@ -1861,7 +1929,7 @@ function computeMetrics(json) {
   const now    = Date.now();
   const MS_HOUR = 3600 * 1000;
   const TAU    = 3.0;
-  let todayMM = 0, forecastMM = 0, totalRain7d = 0;
+  let todayMM = 0, forecastMM = 0, forecastMM72h = 0, totalRain7d = 0;
   const hourlyObs = [], hourlyFore = [], hourlyWeek = [];
   // Luft-temperatur — TO ADSKILTE FORMÅL, der tidligere delte samme tal:
   //   1) recentAirTempAvg (72h glidende gennemsnit): bruges INTERNT til at
@@ -1923,6 +1991,12 @@ function computeMetrics(json) {
       if (hasTemp && diffMs < 72 * MS_HOUR) { tempSum72h += temp; tempCount72h++; }
     } else {
       if (-diffMs <= 24 * MS_HOUR) { forecastMM += mm; hourlyFore.push(mm); }
+      // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanens 72h-prognose) —
+      // parallel 72h-sum ved siden af den eksisterende 24h-sum ovenfor,
+      // IKKE en erstatning for den (badested-kaskaden/hovedrisikoen bruger
+      // fortsat forecastMM/24h uændret). Kræver forecast_days=4 ovenfor for
+      // at have rå prognosetimer nok til at nå 72h frem.
+      if (-diffMs <= 72 * MS_HOUR) { forecastMM72h += mm; }
     }
   });
   const recentAirTempAvg = tempCount72h > 0 ? tempSum72h / tempCount72h : null;
@@ -1937,7 +2011,7 @@ function computeMetrics(json) {
   const decayedSeries = riskModel.accumulateDecayed(hourlyWeek, TAU);
   const antecedentMM  = decayedSeries.length ? decayedSeries[decayedSeries.length - 1] : 0;
   return {
-    antecedentMM, todayMM, forecastMM, totalRain7d, hourlyObs, hourlyFore, hourlyWeek,
+    antecedentMM, todayMM, forecastMM, forecastMM72h, totalRain7d, hourlyObs, hourlyFore, hourlyWeek,
     recentAirTempAvg, todayMaxAirTemp, hourlyTempWeek,
     currentWindSpeed, currentWindDir,
   };
@@ -2175,6 +2249,23 @@ function getBadevandIdCoordIndex() {
 let riskScoresCache = { ts: 0, points: [] };
 // NYT: se badevand-risk.js — { ts, lakes, kystvande, badevand }
 let badevandRiskCache = { ts: 0, lakes: {}, kystvande: {}, badevand: [] };
+
+// NYT (Kommune Dashboard-udvidelse, "Overløb"-fanen, bruger-krav: "live med
+// en socketforbindelse ... automatisk opdateres hver gang der er en
+// opdatering af overløbenes status") — Server-Sent Events, ikke en rå
+// WebSocket/`ws`-pakke: kræver ingen ny npm-afhængighed, virker over den
+// eksisterende cookie-session (EventSource sender cookies automatisk for
+// samme origin), og har indbygget gen-forbindelse i browseren. Sender KUN
+// en let ping (intet payload) — klienten genhenter selv GET /admin/api/
+// overloeb-status med sin AKTUELT valgte horisont (nu/24h/72h), så push og
+// visning aldrig kan komme til at afvige fra hinanden.
+const overloebStreamClients = new Set();
+function broadcastOverloebUpdate() {
+  for (const res of overloebStreamClients) {
+    try { res.write('event: overloeb-updated\ndata: {}\n\n'); }
+    catch (e) { overloebStreamClients.delete(res); }
+  }
+}
 // NYT (bruger-ønske 2026-08-17 — "Badestedsvurdering"-sektionen på
 // /badested/:slug, se seo-pages.js's buildSsrContent()): badested_id (streng)
 // -> antal vurderinger seneste 30 dage. Bevidst PRÆ-BEREGNET og genopfrisket
@@ -2328,6 +2419,13 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     const nowViralRisk   = riskModel.computeViralRisk(riskInput);
     const foreRisk        = riskModel.computeForecastRisk(riskInput);
     const foreViralRisk   = riskModel.computeForecastViralRisk(riskInput);
+    // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanens 72h-prognose) —
+    // samme computeForecastRisk()-funktion, blot fodret med den 72h-summede
+    // nedbørsprognose (w.forecastMM72h, se computeMetrics() ovenfor) i
+    // stedet for den 24h-summede. Kun bakteriel (ikke viral) — matcher
+    // præcis den eksisterende konvention for udløbs-varselsringe på
+    // hovedkortet, som også kun bruger foreRisk (bakteriel), aldrig viral.
+    const foreRisk72h = riskModel.computeForecastRisk({ ...riskInput, forecastMM: w.forecastMM72h ?? null });
     // NYT: sat DIREKTE på selve punktet (ikke kun i allPointRisks/
     // pointRisks nedenfor), så badevandRisk.computeBadevandRiskCascade()
     // kan bruge SAMME `points`-array uden at genopbygge det — det array
@@ -2389,9 +2487,15 @@ async function _evaluatePushNotificationsInner(testThresholds) {
       riskScore: nowResult.risk,   // null hvis noData
       viralScore: nowViralRisk,
       algaeScore,  // NYT: se risk-model.js's computeAlgaeRisk() — tidligere kun beregnet klient-side
-      foreRisk, foreViralRisk,
+      foreRisk, foreViralRisk, foreRisk72h,
       noData: nowResult.noData,
       isWater: waterFlagsCache?.get(pt.id),  // NYT: undefined hvis cachen ikke kunne bygges — klienten falder tilbage til lokal beregning i så fald
+      // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanen) — lat/lng/
+      // municipality/isWastewater/name var tidligere IKKE med her (kun i
+      // pointRisks/riskEntry ovenfor) — tilføjet så overloeb-status.js kan
+      // kommune-scope og plotte punkterne direkte fra denne allerede
+      // cachede liste, uden selv at skulle genindlæse loadPulsPointsFull().
+      lat: pt.lat, lng: pt.lng, municipality: pt.municipality, isWastewater: pt.isWastewater, name: pt.name,
     });
 
     if ((foreRisk || 0) > minRisk) {
@@ -2444,6 +2548,12 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     // for at slette god data. Klienten falder under alle omstændigheder
     // tilbage til lokal beregning, hvis cachen mangler/er forældet.
   }
+
+  // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanen) — riskScoresCache
+  // (udløbenes risiko) er ALTID frisk her uanset om kaskaden ovenfor lykkedes,
+  // så broadcastes uafhængigt af try/catch'en — kommune-dashboards skal ikke
+  // gå glip af en udløbs-opdatering blot fordi badested-kaskaden fejlede.
+  broadcastOverloebUpdate();
 
   const diagnostics = { cellMatched, cellMissing, maxForecastMMSeen, maxTodayMMSeen, maxForeRiskSeen };
   _latestDiagnostics = diagnostics; // se /api/push/evaluate-now, hvor dette rapporteres tilbage i testMode
