@@ -303,7 +303,15 @@
   .ovl-lag-body {
     display: none; position: absolute; top: 100%; left: 0; margin-top: .3rem;
     background: var(--paper); border: 1px solid var(--border); border-radius: 8px;
-    padding: .5rem; z-index: 10; flex-direction: column; gap: .3rem; min-width: 180px;
+    padding: .5rem;
+    /* RETTET (bruger-rapporteret — "kortlag vælger virker ikke"): var
+       z-index:10 — Leaflet's egne panes (#ovl-map's tile-/marker-/tooltip-
+       lag) ligger på z-index 200-700, OG .leaflet-container etablerer IKKE
+       selv en ny stacking context (kun position:relative, intet z-index) —
+       de to konkurrerer derfor direkte i samme forælder-stacking-context.
+       Panelet blev dermed tegnet (og modtog klik) BAG kortet, usynligt for
+       brugeren, selvom .open-klassen blev sat korrekt. */
+    z-index: 1000; flex-direction: column; gap: .3rem; min-width: 180px;
     box-shadow: 0 6px 18px rgba(0,0,0,.4);
   }
   .ovl-lag-body.open { display: flex; }
