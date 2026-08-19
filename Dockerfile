@@ -86,6 +86,12 @@ COPY overloeb-status.js ./
 # samme "crasher øjeblikkeligt uden denne linje"-fælde som de øvrige lokale
 # moduler i denne fil.
 COPY overloeb-events.js ./
+# NYT: Kommune Dashboard, "Skilte"-fanen — server.js kræver nu også
+# (require('./skilte'), require('./logo-fetch')) disse to moduler ved
+# opstart, samme "crasher øjeblikkeligt uden denne linje"-fælde som de
+# øvrige lokale moduler i denne fil.
+COPY skilte.js ./
+COPY logo-fetch.js ./
 # server.js's GET /admin/dashboard, GET /admin/settings/oauth,
 # GET /admin/login og GET /admin/overloeb-embed læser disse filer direkte
 # via fs.readFileSync(STATIC_DIR, ...) ved hver request (samme mønster som
@@ -98,6 +104,7 @@ COPY admin-login.html ./
 COPY internal-create-trial.html ./
 COPY internal-sales.html ./
 COPY overloeb-embed.html ./
+COPY badested-skilt.html ./
 COPY fetch_currents.py ./
 COPY dansk-overloeb-kort.html ./
 # Vendoret (ikke CDN-loadet) windy.js-motor for strøm-visualiseringen — se

@@ -358,6 +358,28 @@
      viral/alge-chips kan ramme alle fire buckets. */
   .ovl-alert-chip.risk-groen { background: rgba(45,125,79,.18); color: #4fbf7f; }
   .ovl-alert-chip.risk-ingen-data { background: rgba(26,111,175,.18); color: #6fa8d6; }
+
+  /* NYT (bruger-ønske 2026-08-19) — "Skilte"-fanen: <a>-download-knap med
+     samme visuelle stil som almindelige <button>-elementer i denne fil
+     (button {} ovenfor gælder kun selve button-tagget, ikke <a>). */
+  .btn-link {
+    display: inline-block; background: transparent; border: 1px solid var(--accent); color: var(--ink);
+    padding: .5rem 1rem; border-radius: 8px; font-size: .85rem; font-weight: 600;
+    text-decoration: none; cursor: pointer;
+  }
+  .btn-link:hover { background: rgba(79,184,214,.1); }
+  .skilte-row {
+    display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+    padding: .5rem 0; font-size: .86rem; border-top: 1px solid var(--border);
+  }
+  .skilte-row:first-child { border-top: none; }
+  .skilte-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .skilte-row a.btn-link, .skilte-row button { font-size: .76rem; padding: .3rem .7rem; flex-shrink: 0; }
+  .skilte-embed-box { margin-top: .5rem; }
+  .skilte-embed-box textarea {
+    width: 100%; min-height: 3.6rem; background: rgba(255,255,255,.04); border: 1px solid var(--border);
+    color: var(--ink); border-radius: 6px; padding: .5rem .6rem; font-size: .74rem; font-family: monospace; resize: vertical;
+  }
 </style>
 </head>
 <body>
@@ -422,6 +444,7 @@ function render() {
     <div class="tab-bar">
       <button type="button" class="tab-btn active" data-tab="overloeb" onclick="switchDashTab('overloeb')">Overløb</button>
       <button type="button" class="tab-btn" data-tab="badevand" onclick="switchDashTab('badevand')">Badevand</button>
+      <button type="button" class="tab-btn" data-tab="skilte" onclick="switchDashTab('skilte')">Skilte</button>
     </div>
 
     <div class="tab-panel active" id="tab-overloeb">
@@ -681,6 +704,43 @@ function render() {
     </div>
     </div>
 
+    <!-- NYT (bruger-ønske 2026-08-19) — "Skilte"-fanen: tre uafhængige
+         muligheder, se skilte.js/logo-fetch.js/server.js for selve
+         genereringen (server-side PDF/EPS, ingen klient-afhængighed). -->
+    <div class="tab-panel" id="tab-skilte">
+      <div class="card" id="card-skilte-pdf">
+        <h2>Download PDF-skilte</h2>
+        <div class="ov-intro">
+          Ét samlet PDF-dokument med ét printbart A4-skilt pr. badested,
+          inklusiv QR-kode og jeres kommunes eget logo øverst — til
+          opsætning ved badestederne. Adskiller sig fra det almindelige
+          QR-skilt borgerne selv kan udskrive fra badestedssiden ved netop
+          logoet.
+        </div>
+        <a href="/admin/api/skilte/pdf" download class="btn-link">📄 Download alle PDF-skilte</a>
+      </div>
+
+      <div class="card" id="card-skilte-eps">
+        <h2>Download QR EPS-filer</h2>
+        <div class="ov-intro">
+          Rene QR-koder som EPS-vektorfiler til professionelt tryk — vælg
+          selv præcis de skilte I ønsker trykt.
+        </div>
+        <div id="skilte-eps-content">Indlæser…</div>
+      </div>
+
+      <div class="card" id="card-skilte-live">
+        <h2>Live digitale skilte</h2>
+        <div class="ov-intro">
+          Kopiér en iframe-kode pr. badested til en skærm på stedet —
+          skiltet opdaterer sig selv automatisk, hver gang der er nye data
+          (ca. hvert 15. minut). Viser samme offentlige badevandsstatus som
+          badestedets egen side.
+        </div>
+        <div id="skilte-live-content">Indlæser…</div>
+      </div>
+    </div>
+
     <button onclick="location.href='/admin/settings/oauth'">⚙️ OAuth-opsætning</button>
     <button onclick="logout()">Log ud</button>
   `;
@@ -694,6 +754,7 @@ function render() {
   connectOverloebStream();
   loadOverloebHistorik();
   loadOverloebPrioriteret();
+  loadSkiltBadesteder();
 }
 
 // ── Fane-skift (bruger-ønske 2026-08-19) ────────────────────────────────────
@@ -1260,6 +1321,86 @@ async function revokeOverloebEmbeds() {
   } catch (e) {
     document.getElementById('ovl-embed-result').innerHTML = '<div class="err">Kunne ikke tilbagekalde — tjek din forbindelse.</div>';
   }
+}
+
+// ── "Skilte"-fanen (bruger-ønske 2026-08-19) ────────────────────────────────
+// Alle tre kort (PDF/EPS/live) deler samme badested-liste — hentet én gang,
+// PDF-downloaden linker direkte til /admin/api/skilte/pdf (almindeligt
+// browser-download, ingen fetch nødvendig), EPS/live bygges pr. badested
+// herfra.
+let _skilteBadesteder = [];
+
+async function loadSkiltBadesteder() {
+  const epsEl = document.getElementById('skilte-eps-content');
+  const liveEl = document.getElementById('skilte-live-content');
+  if (!epsEl || !liveEl) return;
+  epsEl.textContent = 'Indlæser…';
+  liveEl.textContent = 'Indlæser…';
+  try {
+    const resp = await fetch('/admin/api/skilte/badesteder', { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      const msg = `<div class="err">${escHtml(data.error || 'Kunne ikke hente badesteder.')}</div>`;
+      epsEl.innerHTML = msg; liveEl.innerHTML = msg;
+      return;
+    }
+    _skilteBadesteder = data.badesteder || [];
+    if (_skilteBadesteder.length === 0) {
+      const msg = '<div class="ovl-alert-empty">Ingen badesteder fundet.</div>';
+      epsEl.innerHTML = msg; liveEl.innerHTML = msg;
+      return;
+    }
+    epsEl.innerHTML = _skilteBadesteder.map(b => `
+      <div class="skilte-row">
+        <span class="skilte-row-name">${escHtml(b.navn)}</span>
+        <a class="btn-link" href="/admin/api/skilte/qr-eps/${encodeURIComponent(b.id)}" download>Download EPS</a>
+      </div>
+    `).join('');
+    liveEl.innerHTML = _skilteBadesteder.map(b => `
+      <div class="skilte-row">
+        <span class="skilte-row-name">${escHtml(b.navn)}</span>
+        <button type="button" onclick="toggleSkiltEmbed('${escHtml(String(b.id))}')">🔗 Kopiér iframe</button>
+      </div>
+      <div class="skilte-embed-box" id="skilte-embed-${escHtml(String(b.id))}" style="display:none"></div>
+    `).join('');
+  } catch (e) {
+    const msg = '<div class="err">Kunne ikke hente badesteder — tjek din forbindelse.</div>';
+    epsEl.innerHTML = msg; liveEl.innerHTML = msg;
+  }
+}
+
+// NYT — INGEN token/generér-kald nødvendigt (modsat Overløb-fanens
+// "Indlejr kort") — badevandsstatus for ét badested er allerede offentlig,
+// se server.js's GET /skilt/:slug's filhoved, så linket er blot en fast,
+// permanent offentlig URL, bygget direkte client-side.
+function toggleSkiltEmbed(badestedId) {
+  const b = _skilteBadesteder.find(x => String(x.id) === String(badestedId));
+  const box = document.getElementById(`skilte-embed-${badestedId}`);
+  if (!b || !box) return;
+  const isOpen = box.style.display !== 'none';
+  box.style.display = isOpen ? 'none' : 'block';
+  if (!isOpen && !box.dataset.built) {
+    box.dataset.built = '1';
+    const url = `${location.origin}/skilt/${b.slug}`;
+    const snippet = `<iframe src="${url}" style="width:100%;height:100%;min-height:400px;border:0" title="Badevand — ${b.navn}"></iframe>`;
+    box.innerHTML = `
+      <div class="skilte-embed-box">
+        <textarea readonly onclick="this.select()">${escHtml(snippet)}</textarea>
+        <button type="button" onclick="copySkiltEmbed(this)">Kopiér</button>
+        <span class="copy-note"></span>
+      </div>
+    `;
+  }
+}
+
+function copySkiltEmbed(btn) {
+  const box = btn.closest('.skilte-embed-box');
+  const ta = box.querySelector('textarea');
+  ta.select();
+  navigator.clipboard?.writeText(ta.value).then(() => {
+    const note = box.querySelector('.copy-note');
+    if (note) { note.textContent = ' ✓ Kopieret'; setTimeout(() => { note.textContent = ''; }, 2500); }
+  });
 }
 
 /**

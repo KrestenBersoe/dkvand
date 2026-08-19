@@ -53,6 +53,11 @@ const appMetrics   = require('./app-metrics');
 // her i stedet for direkte i selve ruterne nedenfor.
 const overloebStatus = require('./overloeb-status');
 const overloebEvents = require('./overloeb-events');
+// NYT (Kommune Dashboard-udvidelse, "Skilte"-fanen) — PDF/QR-genererings-
+// logik (ren funktion, se dens filhoved) og SSRF-sikker logo-hentning.
+const skilte = require('./skilte');
+const logoFetch = require('./logo-fetch');
+const PDFDocument = require('pdfkit');
 // NYT (bruger-ønske 2026-08-10 — URL-arkitektur/SEO): navn-kommune-slugs for
 // Tier 1/2 (/badested/:slug, /soe/:slug) + sitemap.xml — se modulets eget
 // filhoved for hvorfor slug-skemaet er bekræftet mod reelle data (0
@@ -1576,6 +1581,145 @@ app.get('/admin/api/overloeb-stream-embed', async (req, res) => {
   });
 });
 
+// ── Kommune Dashboard, "Skilte"-fanen (bruger-ønske 2026-08-19) ────────────
+// Tre undermuligheder: (1) samlet, flersidet PDF med QR + kommune-logo,
+// (2) rene QR-EPS-vektorfiler pr. badested til professionelt tryk, (3) et
+// live, offentligt digitalt skilt pr. badested (se GET /skilt/:slug og
+// GET /api/badevand-risk-stream længere nede — INGEN auth, badevands-status
+// er allerede offentlig). Se skilte.js/logo-fetch.js for selve genererings-
+// logikken — disse ruter binder blot tenant-scoping + HTTP sammen.
+app.get('/admin/api/skilte/badesteder', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const badesteder = tenantBadesteder.resolveTenantBadesteder(tenant.name, kommuneKeyToBadesteder)
+      .map(b => ({ id: b.id, slug: b.slug, navn: b.navn }));
+    res.set('Cache-Control', 'no-store');
+    res.json({ badesteder });
+  } catch (e) {
+    console.error('admin/api/skilte/badesteder: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente badesteder lige nu.' });
+  }
+});
+
+// NYT — ÉN samlet, flersidet PDF (ét A4-skilt pr. badested), IKKE en ZIP
+// med individuelle filer — undgår en tredje ny afhængighed (ZIP-bibliotek),
+// og "download alle" er præcis hvad bruger-ønsket beder om. Henter
+// kommune-logoet ÉN gang (ikke pr. side); logo_url er SSRF-sikret hentet
+// via logo-fetch.js — fejler den (utilgængelig/ugyldig/for stor), streames
+// PDF'en stadig, blot uden logo (se skilte.js's drawSignPage()).
+app.get('/admin/api/skilte/pdf', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const badesteder = tenantBadesteder.resolveTenantBadesteder(tenant.name, kommuneKeyToBadesteder);
+    if (badesteder.length === 0) {
+      return res.status(404).json({ error: `Ingen badesteder fundet for "${tenant.name}".` });
+    }
+
+    let logoBuffer = null;
+    if (tenant.logo_url) {
+      const logoResult = await logoFetch.fetchTenantLogo(tenant.logo_url);
+      if (logoResult.ok) logoBuffer = logoResult.buffer;
+    }
+
+    res.set('Content-Type', 'application/pdf');
+    res.set('Content-Disposition', `attachment; filename="badevands-skilte-${slugIndex.slugify(tenant.name)}.pdf"`);
+    const doc = new PDFDocument({ size: 'A4', margin: 0, autoFirstPage: false });
+    doc.on('error', e => console.error('admin/api/skilte/pdf: pdfkit-fejl —', e.message));
+    doc.pipe(res);
+    for (const b of badesteder) {
+      doc.addPage();
+      const url = `${seoPages.SITE_URL}/badested/${b.slug}`;
+      const qrMatrix = skilte.buildQrMatrix(url);
+      skilte.drawSignPage(doc, { navn: b.navn, url, qrMatrix, logoBuffer });
+    }
+    doc.end();
+  } catch (e) {
+    console.error('admin/api/skilte/pdf: uventet fejl —', e.message);
+    if (!res.headersSent) res.status(500).json({ error: 'Kunne ikke generere PDF-skilte lige nu.' });
+  }
+});
+
+// NYT — bevidst PR.-BADESTED, ikke en bulk-ZIP: brugeren bad specifikt om
+// at kunne vælge "præcis de skilte de selv ønsker" til professionelt tryk.
+// Ejerskabstjek (badestedId skal høre til tenantens egen liste) — samme
+// mønster som andre kommune-scopede ruter, forhindrer enumerering på tværs
+// af kommuner selvom selve QR-indholdet ikke er hemmeligt.
+app.get('/admin/api/skilte/qr-eps/:badestedId', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const badesteder = tenantBadesteder.resolveTenantBadesteder(tenant.name, kommuneKeyToBadesteder);
+    const badested = badesteder.find(b => String(b.id) === req.params.badestedId);
+    if (!badested) {
+      return res.status(404).json({ error: 'Badested ikke fundet for jeres kommune.' });
+    }
+    const url = `${seoPages.SITE_URL}/badested/${badested.slug}`;
+    const qrMatrix = skilte.buildQrMatrix(url);
+    const eps = skilte.buildQrEps(qrMatrix, { sizeMm: 40 });
+    res.set('Content-Type', 'application/postscript');
+    res.set('Content-Disposition', `attachment; filename="qr-${badested.slug}.eps"`);
+    res.send(eps);
+  } catch (e) {
+    console.error('admin/api/skilte/qr-eps: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke generere QR-EPS lige nu.' });
+  }
+});
+
+// NYT — det live digitale skilt: IKKE requireTenantSession, badevands-
+// status for ét badested er allerede 100% offentlig (samme data som
+// GET /api/badevand-risk og /badested/:slug altid har vist). Validerer kun at
+// slug'et findes.
+app.get('/skilt/:slug', (req, res) => {
+  try {
+    const info = badestedSlugToInfo.get(req.params.slug);
+    if (!info) {
+      return res.status(404).type('text/plain').send('Badested ikke fundet.');
+    }
+    const skiltJson = JSON.stringify({ badestedId: info.id, navn: info.navn, slug: req.params.slug });
+    const html = fs.readFileSync(path.join(STATIC_DIR, 'badested-skilt.html'), 'utf8')
+      .replace('%%SKILT_JSON%%', skiltJson);
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (e) {
+    console.error('/skilt/:slug: uventet fejl —', e.message);
+    res.status(500).type('text/plain').send('Kunne ikke hente skiltet lige nu.');
+  }
+});
+
+// NYT — offentlig SSE-ping til de digitale skilte, se
+// broadcastBadevandSignUpdate()'s filhoved for hvorfor denne er en
+// SEPARAT strøm fra kommune-dashboardets egen (/admin/api/overloeb-stream).
+app.get('/api/badevand-risk-stream', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(': forbundet\n\n');
+  badevandSignStreamClients.add(res);
+  const heartbeat = setInterval(() => {
+    try { res.write(': keep-alive\n\n'); }
+    catch (e) { /* fanges af 'close' nedenfor */ }
+  }, 30000);
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    badevandSignStreamClients.delete(res);
+  });
+});
+
 // ── Kommune-benchmark-rapporten (bruger-ønske) ──────────────────────────────
 // Sammenlignende ranking på tværs af ALLE kommuner med mindst ét matchet
 // badested (kommuneKeyToBadesteder, se slug-index.js) — IKKE kun den
@@ -2512,6 +2656,23 @@ function broadcastOverloebUpdate() {
     catch (e) { overloebStreamClients.delete(res); }
   }
 }
+
+// NYT (Kommune Dashboard-udvidelse, "Skilte"-fanen — bruger-ønske
+// 2026-08-19: "en live socket forbindelse til serveren hvor badevands-
+// informationen opdateres hvert 15. minut") — SAMME content-frie SSE-ping-
+// mønster som broadcastOverloebUpdate() ovenfor, men en BEVIDST SEPARAT
+// Set/funktion: denne er OFFENTLIG (intet requireTenantSession, se
+// GET /skilt/:slug og GET /api/badevand-risk-stream nedenfor) — en anden
+// tillidsgrænse end kommune-dashboardets egen strøm, selvom begge udløses
+// fra samme sted (se kaldestedet nedenfor, lige ved siden af
+// broadcastOverloebUpdate()'s eget kald).
+const badevandSignStreamClients = new Set();
+function broadcastBadevandSignUpdate() {
+  for (const res of badevandSignStreamClients) {
+    try { res.write('event: badevand-updated\ndata: {}\n\n'); }
+    catch (e) { badevandSignStreamClients.delete(res); }
+  }
+}
 // NYT (bruger-ønske 2026-08-17 — "Badestedsvurdering"-sektionen på
 // /badested/:slug, se seo-pages.js's buildSsrContent()): badested_id (streng)
 // -> antal vurderinger seneste 30 dage. Bevidst PRÆ-BEREGNET og genopfrisket
@@ -2833,6 +2994,12 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     result.badevand = patchedBadevand;
     badevandRiskCache = { ts: Date.now(), ...result };
     badevandByIdCache = new Map(patchedBadevand.map(b => [String(b.id), b]));
+    // NYT (Skilte-fanen, live digitale skilte) — modsat broadcastOverloebUpdate()
+    // (kaldt ubetinget nedenfor) er DENNE bevidst KUN inde i try-blokken:
+    // badevandRiskCache blev netop lige opdateret her, en fejlet kaskade
+    // (catch-grenen nedenfor) beholder den GAMLE cache uændret, og skal
+    // derfor heller ikke udløse en "der er nyt"-ping til de digitale skilte.
+    broadcastBadevandSignUpdate();
     cascadeResult = result; // NYT: genbruges nedenfor af enqueuePushNotifications() til badested-favoritters "nu"-risiko, se dér
     // NYT: akkumulerer dette tjeks bact/viral/algae/forecast pr. badested ind
     // i det persisterede daglige løbende gennemsnit — se app-metrics.js's

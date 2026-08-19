@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Badevand — live skilt</title>
+<meta name="robots" content="noindex, nofollow">
+<!-- NYT (bruger-ønske 2026-08-19) — live digitalt skilt, tiltænkt en
+     skærm monteret ved selve badestedet, ikke en telefon: store,
+     vh/vw-skalerede skrifttyper, høj kontrast, ingen scroll. Samme visuelle
+     familie (mørk blå-grøn gradient) som det eksisterende printbare
+     "QR-skilt" (dansk-overloeb-kort.html's generateQrSign()), for
+     genkendelighed. -->
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(160deg, #0b3a4d 0%, #124f68 55%, #1a6b8a 100%);
+    color: #fff;
+  }
+  #wrap {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    height: 100vh; text-align: center; padding: 4vh 4vw;
+  }
+  .brand {
+    font-family: 'Courier New', monospace; font-size: 1.5vw; letter-spacing: .15em;
+    text-transform: uppercase; color: #7fd4e8; font-weight: 700; margin-bottom: 2vh;
+  }
+  h1 { font-size: 5vw; font-weight: 800; margin: 0 0 1vh; line-height: 1.05; }
+  .location { font-size: 3vw; font-weight: 600; color: #7fd4e8; margin-bottom: 4vh; }
+  #banner {
+    border-radius: 2vh; padding: 3vh 5vw; margin-bottom: 3vh;
+    background-color: #1a6faf; transition: background-color .6s;
+    box-shadow: 0 1vh 3vh rgba(0,0,0,.25);
+  }
+  #banner .label { font-size: 4vw; font-weight: 800; line-height: 1.15; }
+  #banner .pct { font-size: 2vw; opacity: .85; margin-top: 1vh; }
+  #updated { font-size: 1.2vw; color: #bcdce6; }
+  #err { font-size: 1.4vw; color: #ffb3a0; margin-top: 1vh; min-height: 1.6vw; }
+  #corner {
+    position: fixed; bottom: 3vh; right: 3vw; display: flex; align-items: center; gap: 1vw;
+    background: rgba(255,255,255,.08); border-radius: 1.2vh; padding: 1.2vh 1.4vw;
+  }
+  #corner img { width: 9vw; max-width: 130px; min-width: 60px; background: #fff; border-radius: .6vh; display: block; }
+  #corner .txt { font-size: 1vw; color: #eaf4f8; text-align: left; max-width: 12vw; line-height: 1.3; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div class="brand">🐬 National Badevandsvarsel</div>
+  <div class="location" id="skilt-navn"></div>
+  <div id="banner">
+    <div class="label" id="banner-label">Indlæser…</div>
+    <div class="pct" id="banner-pct"></div>
+  </div>
+  <div id="updated"></div>
+  <div id="err"></div>
+</div>
+<div id="corner">
+  <img id="corner-qr" alt="QR-kode til denne side">
+  <div class="txt">Scan for at tjekke fra din egen telefon</div>
+</div>
+
+<script>
+// NYT (bruger-ønske 2026-08-19) — pladsholderen erstattes SERVER-SIDE af
+// GET /skilt/:slug (server.js), ÉN gang, KUN på linjen nedenfor — se
+// admin-dashboard.html's tilsvarende %%TENANT_JSON%%-kommentar for hvorfor
+// pladsholderen aldrig må optræde i klartekst andre steder i denne fil.
+const SKILT = %%SKILT_JSON%%;
+
+document.getElementById('skilt-navn').textContent = SKILT.navn;
+document.title = `${SKILT.navn} — badevand live`;
+
+const skiltUrl = `${location.origin}/badested/${SKILT.slug}`;
+// Samme gratis, nøglefri QR-genereringstjeneste som det eksisterende
+// klient-side print-skilt bruger (dansk-overloeb-kort.html) — ingen lokal
+// QR-bibliotek-afhængighed nødvendig for dette sekundære hjørne-element.
+document.getElementById('corner-qr').src =
+  `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=4&data=${encodeURIComponent(skiltUrl)}`;
+
+// Samme tærskler/farver som seo-pages.js's riskInfo() (server) og
+// dansk-overloeb-kort.html's riskStyle()/riskLabel() (klient) — REQUIRED-
+// SYNCED duplikat, se skilte-relaterede kommentarer i server.js.
+function riskInfo(risk) {
+  if (risk === null || risk === undefined) return { label: 'Ingen data', color: '#1a6faf', pct: null };
+  if (risk >= 0.6) return { label: 'Høj risiko',     color: '#c84b1f', pct: Math.round(risk * 100) };
+  if (risk >= 0.2) return { label: 'Moderat risiko', color: '#d4a020', pct: Math.round(risk * 100) };
+  return              { label: 'Lav risiko',       color: '#2d7d4f', pct: Math.round(risk * 100) };
+}
+
+// REQUIRED-SYNCED klient-port af seo-pages.js's describeBadestedRisk()
+// (samme fem grene, se dens filhoved for begrundelsen pr. gren), UDVIDET
+// med overrideInfo øverst — en aktiv kommunalt varsel skal vises FØRST,
+// samme forrang som badested-panelets egen override-banner.
+function classifyBadestedSign(entry) {
+  if (!entry) return { label: 'Ingen data', color: '#1a6faf', pct: null };
+  if (entry.overrideInfo) {
+    const bucketColor = { groen: '#2d7d4f', gul: '#d4a020', roed: '#c84b1f', lukket: '#3a3a3a' };
+    return { label: entry.overrideInfo.message || 'Kommunalt varsel', color: bucketColor[entry.overrideInfo.bucket] || '#1a6faf', pct: null };
+  }
+  if (entry.source === 'server-utilgaengelig') return { label: 'Data utilgængelig', color: '#1a6faf', pct: null };
+  if (entry.source === 'ingen-bekraeftet')     return { label: 'Lav risiko', color: '#2d7d4f', pct: null };
+  if (entry.source === 'nedstroms-bekraeftet') return { label: 'Lav risiko', color: '#2d7d4f', pct: null };
+  if (entry.source === 'ingen' && !entry.noDataMatch) return { label: 'Lav risiko', color: '#2d7d4f', pct: null };
+  if (entry.source === 'ingen') return { label: 'Ingen data', color: '#1a6faf', pct: null };
+  const active = [entry.bact, entry.viral].filter(v => v !== null && v !== undefined);
+  const risk = active.length ? Math.max(...active) : null;
+  return riskInfo(risk);
+}
+
+async function loadSkilt() {
+  try {
+    const resp = await fetch('/api/badevand-risk', { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) { document.getElementById('err').textContent = 'Kunne ikke hente data.'; return; }
+    const entry = (data.badevand || []).find(b => String(b.id) === String(SKILT.badestedId));
+    const info = classifyBadestedSign(entry);
+    document.getElementById('banner').style.backgroundColor = info.color;
+    document.getElementById('banner-label').textContent = info.label;
+    document.getElementById('banner-pct').textContent = info.pct != null ? `${info.pct}%` : '';
+    document.getElementById('updated').textContent =
+      `Sidst opdateret: ${new Date().toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' })}`;
+    document.getElementById('err').textContent = '';
+  } catch (e) {
+    document.getElementById('err').textContent = 'Kunne ikke hente data — tjek forbindelsen.';
+  }
+}
+
+// NYT (bruger-krav: "en live socket forbindelse til serveren hvor
+// badevandsinformationen opdateres hvert 15. minut") — samme content-frie
+// SSE-ping-mønster som Overløb-fanens embed (se server.js's
+// broadcastBadevandSignUpdate()), men offentlig, ingen token. Genopretter
+// selv forbindelsen ved fejl/afbrydelse (native EventSource-adfærd).
+const es = new EventSource('/api/badevand-risk-stream');
+es.addEventListener('badevand-updated', () => loadSkilt());
+
+loadSkilt();
+// NYT: sikkerhedsnet — genindlæs alligevel hvert 20. minut, selv hvis SSE
+// mod forventning skulle tabe forbindelsen. Skærmen kører ubevogtet i
+// dagevis; et billigt, regelmæssigt "hent alligevel" er robust uden at
+// afhænge 100% af at ingen mellemled nogensinde afbryder streamen.
+setInterval(loadSkilt, 20 * 60 * 1000);
+</script>
+</body>
+</html>
