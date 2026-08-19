@@ -64,24 +64,32 @@
   }
 
   .brand {
-    font-family: 'Courier New', monospace; font-size: 1.1vw; letter-spacing: .13em;
-    text-transform: uppercase; color: #7fd4e8; font-weight: 700;
+    font-family: 'Courier New', monospace; font-size: .9vw; letter-spacing: .13em;
+    text-transform: uppercase; color: #cdeaf2; font-weight: 700;
   }
-  .location { font-size: 2.1vw; font-weight: 800; line-height: 1.1; margin-top: .3vh; }
+  .location { font-size: 1.5vw; font-weight: 700; line-height: 1.1; margin-top: .2vh; opacity: .92; }
 
   /* ── Samlet risiko-banner ─────────────────────────────────────────────── */
+  /* RETTET (bruger-ønske — headertekst skal være centreret, og selve
+     risikostatussen skal fremstå væsentligt større end lokation/brand):
+     omlagt fra en to-kolonne venstre/højre-opdeling til én centreret,
+     lodret stak — brand (mindst) → lokation → risikostatus (klart
+     dominerende, se .label nedenfor) → procent. */
   #banner {
     grid-area: banner;
-    border-radius: 1.4vh; padding: 1.4vh 2vw;
+    border-radius: 1.4vh; padding: 1vh 2vw;
     background-color: #1a6faf; transition: background-color .6s;
     box-shadow: 0 .5vh 1.6vh rgba(0,0,0,.18);
-    display: flex; align-items: center; justify-content: space-between; gap: 2vw;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: .4vh;
     min-height: 0;
   }
-  /* RETTET (bruger-ønske — headeren skal fremstå tydeligt vigtigst): label/
-     pct hævet markant (1.8vw→2.8vw, 1.05vw→1.5vw). */
-  #banner .label { font-size: 2.8vw; font-weight: 800; line-height: 1.1; }
-  #banner .pct { font-size: 1.5vw; opacity: .85; }
+  /* RETTET (bruger-ønske — "samlet risiko skal være væsentlig større
+     skrifttype end lokation og National Badevandsvarsel"): label hævet
+     markant (2.8vw→4.4vw) — næsten 3× brandets størrelse og knap 3×
+     lokationens, klart det dominerende element i headeren. */
+  #banner .label { font-size: 4.4vw; font-weight: 800; line-height: 1.05; margin-top: .1vh; }
+  #banner .pct { font-size: 1.4vw; opacity: .85; margin-top: .1vh; }
 
   /* ── Datakort (fælles) ────────────────────────────────────────────────── */
   .card {
@@ -150,14 +158,10 @@
 <body>
 <div id="wrap">
   <div id="banner">
-    <div>
-      <div class="brand">🐬 National Badevandsvarsel</div>
-      <div class="location" id="skilt-navn"></div>
-    </div>
-    <div style="text-align:right">
-      <div class="label" id="banner-label">Indlæser…</div>
-      <div class="pct" id="banner-pct"></div>
-    </div>
+    <div class="brand">🐬 National Badevandsvarsel</div>
+    <div class="location" id="skilt-navn"></div>
+    <div class="label" id="banner-label">Indlæser…</div>
+    <div class="pct" id="banner-pct"></div>
   </div>
 
   <div class="card" id="card-bact">
