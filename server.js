@@ -52,6 +52,7 @@ const appMetrics   = require('./app-metrics');
 // se modulets eget filhoved for hvorfor kommune-scoping/bucketing er isoleret
 // her i stedet for direkte i selve ruterne nedenfor.
 const overloebStatus = require('./overloeb-status');
+const overloebEvents = require('./overloeb-events');
 // NYT (bruger-ønske 2026-08-10 — URL-arkitektur/SEO): navn-kommune-slugs for
 // Tier 1/2 (/badested/:slug, /soe/:slug) + sitemap.xml — se modulets eget
 // filhoved for hvorfor slug-skemaet er bekræftet mod reelle data (0
@@ -1337,6 +1338,192 @@ app.get('/admin/api/overloeb-stream', tenantAdmin.requireTenantSession, (req, re
   });
 });
 
+// ── Overløb-fanen: hændelseslog-baseret historik (bruger-ønske 2026-08-19,
+// opfølgning på "gemmer vi varsler pr. udløb med timestamp") ───────────────
+// Fast 90-dages rullende vindue — samme konvention som den eksisterende
+// Badestedsvurderinger-graf (badestedObs.getVurderingTrendForBadestedIds(ids,
+// 90)) — INGEN periodevælger her, kun til den prioriterede liste nedenfor.
+app.get('/admin/api/overloeb-varsler-historik', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const municipalityKey = slugIndex.normalizeKommuneKey(tenant.name);
+    const toMs = Date.now();
+    const fromMs = toMs - 90 * 24 * 3600 * 1000;
+    const trend = await overloebEvents.getVarselTrendForMunicipality({ municipalityKey, fromMs, toMs });
+    res.set('Cache-Control', 'no-store');
+    res.json({ trend });
+  } catch (e) {
+    console.error('admin/api/overloeb-varsler-historik: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente overløbshistorik lige nu.' });
+  }
+});
+
+// NYT — den prioriterede liste: "flest varsler" ELLER (togglebart) "størst
+// estimeret akkumuleret udledning". estimeretLiterTotal beregnes HER, IKKE
+// gemt pr. hændelse (se overloeb-events.js's filhoved) — ganger antal
+// gul/rød-episoder i perioden med punktets `meanVolumePerEvent` (m³,
+// risk-model.js's derivePulsFields(), ×1000 for liter), slået op i den
+// allerede-i-hukommelsen riskScoresCache (samme kilde Overløb-kortet selv
+// bruger), ikke et nyt DB-opslag.
+const OVERLOEB_PRIORITERET_SORT_KEYS = new Set(['varsler', 'udledning']);
+app.get('/admin/api/overloeb-prioriteret', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const period = typeof req.query.period === 'string' ? req.query.period : '';
+    if (!VALID_ALERT_PERIODS.has(period)) {
+      return res.status(400).json({ error: `Ugyldig period — skal være én af: ${[...VALID_ALERT_PERIODS].join(', ')}.` });
+    }
+    const monthParam = typeof req.query.month === 'string' ? req.query.month : null;
+    const range = computeAlertStatsRange(period, monthParam);
+    if (!range) {
+      return res.status(400).json({ error: "Ugyldigt month-format, forventede 'YYYY-MM'." });
+    }
+    const sortBy = OVERLOEB_PRIORITERET_SORT_KEYS.has(req.query.sortBy) ? req.query.sortBy : 'varsler';
+
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const municipalityKey = slugIndex.normalizeKommuneKey(tenant.name);
+    const fromMs = new Date(range.from + 'T00:00:00.000Z').getTime();
+    const toMs   = new Date(range.to   + 'T23:59:59.999Z').getTime();
+    const counts = await overloebEvents.getVarselCountsByPoint({ municipalityKey, fromMs, toMs });
+
+    const pointById = new Map(riskScoresCache.points.map(p => [String(p.id), p]));
+    let liste = counts.map(c => {
+      const pt = pointById.get(String(c.pointId));
+      return {
+        id: c.pointId,
+        navn: pt?.name || c.pointId,
+        isWastewater: pt?.isWastewater ?? null,
+        varslerTotal: c.total,
+        varslerGul: c.gul,
+        varslerRoed: c.roed,
+        estimeretLiterTotal: pt?.meanVolumePerEvent != null ? Math.round(c.total * pt.meanVolumePerEvent * 1000) : null,
+      };
+    });
+    liste.sort((a, b) => sortBy === 'udledning'
+      ? (b.estimeretLiterTotal ?? -1) - (a.estimeretLiterTotal ?? -1)
+      : b.varslerTotal - a.varslerTotal);
+    liste = liste.slice(0, 20);
+
+    res.set('Cache-Control', 'no-store');
+    res.json({ period, from: range.from, to: range.to, sortBy, liste });
+  } catch (e) {
+    console.error('admin/api/overloeb-prioriteret: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente prioriteret overløbsliste lige nu.' });
+  }
+});
+
+// ── Overløb-fanen: iframe-indlejring (bruger-ønske 2026-08-19) ─────────────
+// Se tenant-admin.js's tenant_embed_tokens-kommentar for hele token-
+// designbegrundelsen (revokabel DB-token, ikke en stateless HMAC-signeret
+// en). De to genererings-/administrations-ruter herunder KRÆVER fortsat en
+// gyldig dashboard-session — kun selve embed-SIDEN og dens to API-ruter
+// nedenfor er token-autentificerede i stedet for cookie-autentificerede.
+app.post('/admin/api/overloeb-embed-token', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const token = await tenantAdmin.issueEmbedToken({ tenantId: req.tenant.tenantId });
+    // NYT: bygget fra seoPages.SITE_URL (fast, kendt korrekt), IKKE fra
+    // req.protocol/req.get('host') — samme begrundelse som oauth-login-
+    // callbackens currentUrl ovenfor: 'trust proxy' er bevidst ikke sat i
+    // denne fil, så req.protocol ville rapportere Fly-proxyens interne
+    // http, ikke den offentlige https.
+    const embedUrl = `${seoPages.SITE_URL}/admin/overloeb-embed?token=${encodeURIComponent(token)}`;
+    res.json({ token, embedUrl });
+  } catch (e) {
+    console.error('admin/api/overloeb-embed-token: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke generere indlejrings-link lige nu.' });
+  }
+});
+
+app.post('/admin/api/overloeb-embed-token/revoke-all', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    await tenantAdmin.revokeEmbedTokensForTenant(req.tenant.tenantId);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('admin/api/overloeb-embed-token/revoke-all: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke tilbagekalde indlejrings-links lige nu.' });
+  }
+});
+
+// NYT: IKKE requireTenantSession — en iframe på en ekstern (kommunens egen)
+// hjemmeside har ingen adgang til dashboardets sessions-cookie (og bør
+// heller ikke have, se tredjeparts-cookie-begrundelsen i planen). Validerer
+// i stedet ?token= via tenantAdmin.verifyEmbedToken().
+app.get('/admin/overloeb-embed', async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.verifyEmbedToken(typeof req.query.token === 'string' ? req.query.token : '');
+    if (!tenant) {
+      return res.status(403).type('text/plain').send('Ugyldigt eller tilbagekaldt indlejrings-link.');
+    }
+    const embedJson = JSON.stringify({ tenantName: tenant.tenantName, token: req.query.token });
+    const html = fs.readFileSync(path.join(STATIC_DIR, 'overloeb-embed.html'), 'utf8')
+      .replace('%%EMBED_JSON%%', embedJson);
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (e) {
+    console.error('admin/overloeb-embed: uventet fejl —', e.message);
+    res.status(500).type('text/plain').send('Kunne ikke hente det indlejrede kort lige nu.');
+  }
+});
+
+app.get('/admin/api/overloeb-status-embed', async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.verifyEmbedToken(typeof req.query.token === 'string' ? req.query.token : '');
+    if (!tenant) {
+      return res.status(403).json({ error: 'Ugyldigt eller tilbagekaldt indlejrings-link.' });
+    }
+    const horizon = OVERLOEB_HORIZONS.has(req.query.horizon) ? req.query.horizon : 'nu';
+    const tenantBadestederList = tenantBadesteder.resolveTenantBadesteder(tenant.tenantName, kommuneKeyToBadesteder);
+    const result = overloebStatus.computeOverloebStatusForTenant({
+      tenant: { name: tenant.tenantName },
+      horizon,
+      riskScoresPoints: riskScoresCache.points,
+      badevandList: badevandRiskCache.badevand,
+      tenantBadesteder: tenantBadestederList,
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json(result);
+  } catch (e) {
+    console.error('admin/api/overloeb-status-embed: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente overløbsstatus lige nu.' });
+  }
+});
+
+app.get('/admin/api/overloeb-stream-embed', async (req, res) => {
+  const tenant = await tenantAdmin.verifyEmbedToken(typeof req.query.token === 'string' ? req.query.token : '');
+  if (!tenant) {
+    return res.status(403).json({ error: 'Ugyldigt eller tilbagekaldt indlejrings-link.' });
+  }
+  // NYT: deler PRÆCIS samme overloebStreamClients-Set/broadcastOverloebUpdate()
+  // som den cookie-autentificerede /admin/api/overloeb-stream ovenfor —
+  // pingen er content-fri, så embed- og dashboard-klienter er ikke til at
+  // skelne fra hinanden på selve broadcast-siden, kun i hvordan de
+  // efterfølgende genhenter deres egen (identisk scopede) status.
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache, no-transform',
+    'Connection': 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write(': forbundet\n\n');
+  overloebStreamClients.add(res);
+  const heartbeat = setInterval(() => {
+    try { res.write(': keep-alive\n\n'); }
+    catch (e) { /* fanges af 'close' nedenfor */ }
+  }, 30000);
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    overloebStreamClients.delete(res);
+  });
+});
+
 // ── Kommune-benchmark-rapporten (bruger-ønske) ──────────────────────────────
 // Sammenlignende ranking på tværs af ALLE kommuner med mindst ét matchet
 // badested (kommuneKeyToBadesteder, se slug-index.js) — IKKE kun den
@@ -2250,6 +2437,13 @@ let riskScoresCache = { ts: 0, points: [] };
 // NYT: se badevand-risk.js — { ts, lakes, kystvande, badevand }
 let badevandRiskCache = { ts: 0, lakes: {}, kystvande: {}, badevand: [] };
 
+// NYT (Overløb-fanen, hændelseslog — bruger-ønske 2026-08-19, opfølgning på
+// "gemmer vi varsler pr. udløb med timestamp") — huskes KUN i hukommelsen
+// (nulstilles ved genstart, se overloeb-events.js's shouldLogTransition()
+// for hvorfor det er bevidst harmløst: en "ukendt forrige tilstand" logges
+// aldrig som et skift). point_id -> seneste kendte 'nu'-bucket.
+let lastKnownBucketByPointId = new Map();
+
 // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanen, bruger-krav: "live med
 // en socketforbindelse ... automatisk opdateres hver gang der er en
 // opdatering af overløbenes status") — Server-Sent Events, ikke en rå
@@ -2390,6 +2584,9 @@ async function _evaluatePushNotificationsInner(testThresholds) {
   // for hvert punkt, uanset om det krydser nogen varslingstærskel. Klienten
   // erstatter sin egen computeRisk()/computeViralRisk()-løkke med denne.
   const allPointRisks = [];
+  // NYT (Overløb-fanen, hændelseslog) — samlet HER, ét bulk-INSERT efter
+  // løkken, ikke ét pr. punkt. Se overloeb-events.js's filhoved.
+  const bucketTransitions = [];
 
   let cellMatched = 0, cellMissing = 0;
   let maxForecastMMSeen = 0, maxTodayMMSeen = 0, maxForeRiskSeen = 0;
@@ -2419,6 +2616,26 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     const nowViralRisk   = riskModel.computeViralRisk(riskInput);
     const foreRisk        = riskModel.computeForecastRisk(riskInput);
     const foreViralRisk   = riskModel.computeForecastViralRisk(riskInput);
+
+    // NYT (Overløb-fanen, hændelseslog) — KUN "nu"-risikoen (nowResult),
+    // ALDRIG foreRisk/foreRisk72h herunder — prognosehorisonterne skifter
+    // konstant uden at noget reelt er indtruffet, og ville forurene loggen
+    // med støj. Se overloeb-events.js's shouldLogTransition() for hvorfor
+    // den allerførste observation af et punkt (prevBucket undefined) IKKE
+    // logges som et skift.
+    const ovlBucket = riskModel.riskBucket(nowResult.risk);
+    const ovlPrevBucket = lastKnownBucketByPointId.get(pt.id);
+    if (riskModel.shouldLogTransition(ovlPrevBucket, ovlBucket)) {
+      bucketTransitions.push({
+        pointId: pt.id,
+        municipalityKey: slugIndex.normalizeKommuneKey(pt.municipality || ''),
+        bucket: ovlBucket,
+        prevBucket: ovlPrevBucket,
+        risk: nowResult.risk,
+        createdAt: Date.now(),
+      });
+    }
+    lastKnownBucketByPointId.set(pt.id, ovlBucket);
     // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanens 72h-prognose) —
     // samme computeForecastRisk()-funktion, blot fodret med den 72h-summede
     // nedbørsprognose (w.forecastMM72h, se computeMetrics() ovenfor) i
@@ -2507,6 +2724,14 @@ async function _evaluatePushNotificationsInner(testThresholds) {
   }
 
   riskScoresCache = { ts: Date.now(), points: allPointRisks };
+
+  // NYT (Overløb-fanen, hændelseslog) — ét bulk-INSERT for hele cyklussens
+  // transitions. Fejler den (DB-hik), stopper resten af cyklussen IKKE —
+  // samme resiliens-princip som cascade-try/catch'en lige nedenfor.
+  if (bucketTransitions.length > 0) {
+    try { await overloebEvents.recordTransitions(bucketTransitions); }
+    catch (e) { console.warn('overloeb-events: recordTransitions fejlede —', e.message); }
+  }
 
   // NYT: se badevand-risk.js filhoved — server-side gengivelse af sø-/
   // kystvand-/badevands-kaskaden, der tidligere blokerede browseren i
@@ -4392,7 +4617,7 @@ const DAILY_STATS_SNAPSHOT_INTERVAL_MS = 24 * 3600 * 1000;
 // ovenfor (rute-registrering, setInterval-opsætning, den forsinkede
 // warmCache()-opstart) kræver ikke databasen og kører uændret synkront —
 // kun selve lytte-starten er gated.
-Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, badestedOverrides.ready, schema])
+Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, badestedOverrides.ready, overloebEvents.ready, schema])
   .then(() => {
     app.listen(PORT, HOST, () => {
       console.log(`Overløbsrisiko server kører på http://${HOST}:${PORT}`);

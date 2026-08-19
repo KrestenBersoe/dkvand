@@ -327,10 +327,22 @@ function riskBucket(r) {
   return 'groen';
 }
 
+// NYT (Overløb-fanen, hændelseslog — bruger-ønske 2026-08-19) — ren
+// beslutningsfunktion for om et bucket-skift skal logges. Bevidst placeret
+// HER (ikke i overloeb-events.js, som rører databasen ved require-tid) så
+// den kan testes uden en Postgres-forbindelse, samme grænse resten af
+// repoets *.test.js-filer allerede holder (kun DB-frie moduler enhedstestes
+// direkte). Første observation af et punkt (prevBucket ukendt/undefined,
+// fx lige efter en serverstart) logges bevidst IKKE som et skift — intet
+// FAKTISK er sket, kun serverens hukommelse er tom.
+function shouldLogTransition(prevBucket, newBucket) {
+  return prevBucket != null && prevBucket !== newBucket;
+}
+
 module.exports = {
   sigmoid, seasonalTau, seasonalTauViral, cellKey, computeRisk, computeForecastRisk,
   computeViralRisk, computeForecastViralRisk, derivePulsFields, estimateLastEventAge,
-  accumulateDecayed, computeIntensityFactor, riskBucket,
+  accumulateDecayed, computeIntensityFactor, riskBucket, shouldLogTransition,
   GRID_DEG, TAU_BASE_DAYS, Q10, SEDIMENT_REBOUND, DK_RAINY_DAYS_YEAR, DK_WATER_TEMP, DK_DAYLIGHT_HRS,
   LAST_EVENT_TRIGGER_MM, HOURLY_DECAY_TAU_DAYS, TAU_VIRAL_BASE, Q10_VIRAL,
 };

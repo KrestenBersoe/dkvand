@@ -81,16 +81,23 @@ COPY badested-override-logic.js ./
 # øjeblikkeligt uden denne linje"-fælde som de øvrige lokale moduler i
 # denne fil.
 COPY overloeb-status.js ./
-# server.js's GET /admin/dashboard, GET /admin/settings/oauth og
-# GET /admin/login læser disse filer direkte via fs.readFileSync(STATIC_DIR,
-# ...) ved hver request (samme mønster som stats.html nedenfor) — mangler
-# en af dem, fejler netop DEN rute med ENOENT, men crasher IKKE hele
-# processen (læsningen sker i en try/catch, se ruterne).
+# NYT: Overløb-fanen, hændelseslog (bruger-ønske 2026-08-19) — server.js
+# kræver nu også (require('./overloeb-events')) dette modul ved opstart,
+# samme "crasher øjeblikkeligt uden denne linje"-fælde som de øvrige lokale
+# moduler i denne fil.
+COPY overloeb-events.js ./
+# server.js's GET /admin/dashboard, GET /admin/settings/oauth,
+# GET /admin/login og GET /admin/overloeb-embed læser disse filer direkte
+# via fs.readFileSync(STATIC_DIR, ...) ved hver request (samme mønster som
+# stats.html nedenfor) — mangler en af dem, fejler netop DEN rute med
+# ENOENT, men crasher IKKE hele processen (læsningen sker i en try/catch,
+# se ruterne).
 COPY admin-dashboard.html ./
 COPY admin-oauth-setup.html ./
 COPY admin-login.html ./
 COPY internal-create-trial.html ./
 COPY internal-sales.html ./
+COPY overloeb-embed.html ./
 COPY fetch_currents.py ./
 COPY dansk-overloeb-kort.html ./
 # Vendoret (ikke CDN-loadet) windy.js-motor for strøm-visualiseringen — se

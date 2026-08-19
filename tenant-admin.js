@@ -95,6 +95,27 @@ const ready = query(`
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   CREATE INDEX IF NOT EXISTS idx_trial_token_hash ON tenant_trial_logins(token_hash);
+
+  -- NYT (Overløb-fanen, iframe-indlejring — bruger-ønske 2026-08-19): SAMME
+  -- ét-vejs-hash-opskrift som tenant_trial_logins ovenfor (kun token_hash
+  -- gemmes, aldrig det rå token), men en EGEN tabel, ikke en genbrug af
+  -- trial-logins — semantisk et andet formål (permanent offentligt
+  -- indlejrings-link til ét bestemt live-kort, IKKE et login der sætter en
+  -- sessions-cookie) og en anden levetid (ingen expires_at — et embed-link
+  -- er tiltænkt at leve indtil eksplicit tilbagekaldt, ikke udløbe som et
+  -- trial). Bevidst IKKE en stateless HMAC-signeret token (se
+  -- tenant-session.js's signPayload/verifyPayload) — et sådant token kan
+  -- kun spærres ved at rotere HELE sitets SESSION_SECRET, hvilket ville
+  -- logge alle kommuner ud på én gang. Denne tabel gør ÉT bestemt
+  -- indlejrings-link individuelt tilbagekaldeligt.
+  CREATE TABLE IF NOT EXISTS tenant_embed_tokens (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    token_hash  TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked_at  TIMESTAMPTZ
+  );
+  CREATE INDEX IF NOT EXISTS idx_embed_token_hash ON tenant_embed_tokens(token_hash);
 `).then(() => console.info('tenant-admin: Postgres-skema klar'))
   .catch(e => { console.error('tenant-admin: skemaoprettelse fejlede —', e.message); throw e; });
 
@@ -169,6 +190,58 @@ async function consumeTrialLogin(rawToken) {
   if (row.revoked_at) return null;
   if (new Date(row.expires_at).getTime() < Date.now()) return null;
   return { tenantId: row.tenant_id, tenantName: row.name, tenantStatus: row.status };
+}
+
+// ── Iframe-indlejrings-tokens (Overløb-fanen, bruger-ønske 2026-08-19) ──────
+// Se tenant_embed_tokens's egen filhoveds-kommentar for hvorfor dette er en
+// EGEN tabel/token-type, ikke en genbrug af trial-logins eller en stateless
+// signeret token. Samme ét-vejs-hash-princip som issueTrialLogin/
+// consumeTrialLogin ovenfor.
+
+/**
+ * @param {{tenantId: string}} p
+ * @returns {Promise<string>} rawToken — KUN returneret her, aldrig persisteret i klartekst
+ */
+async function issueEmbedToken({ tenantId }) {
+  const rawToken = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  await query(
+    `INSERT INTO tenant_embed_tokens (tenant_id, token_hash) VALUES ($1, $2)`,
+    [tenantId, tokenHash]
+  );
+  return rawToken;
+}
+
+/**
+ * @param {string} rawToken
+ * @returns {Promise<{tenantId: string, tenantName: string}|null>}
+ */
+async function verifyEmbedToken(rawToken) {
+  if (!rawToken || typeof rawToken !== 'string') return null;
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const { rows } = await query(
+    `SELECT tet.tenant_id, tet.revoked_at, t.name
+     FROM tenant_embed_tokens tet
+     JOIN tenants t ON t.id = tet.tenant_id
+     WHERE tet.token_hash = $1`,
+    [tokenHash]
+  );
+  const row = rows[0];
+  if (!row || row.revoked_at) return null;
+  return { tenantId: row.tenant_id, tenantName: row.name };
+}
+
+/**
+ * "Lav nyt link"-arbejdsgangen — spærrer SAMTLIGE aktive indlejrings-
+ * tokens for en tenant på én gang, bevidst uden en pr.-token-administrations-
+ * UI (se planens afgrænsning: enkel sikkerhedsventil, ikke fin-granuleret
+ * styring). @param {string} tenantId
+ */
+async function revokeEmbedTokensForTenant(tenantId) {
+  await query(
+    `UPDATE tenant_embed_tokens SET revoked_at = now() WHERE tenant_id = $1 AND revoked_at IS NULL`,
+    [tenantId]
+  );
 }
 
 /** @param {string} tenantId */
@@ -494,6 +567,9 @@ module.exports = {
   createTenant,
   issueTrialLogin,
   consumeTrialLogin,
+  issueEmbedToken,
+  verifyEmbedToken,
+  revokeEmbedTokensForTenant,
   getTenant,
   listTenants,
   // OAuth-konfiguration (modul 2)

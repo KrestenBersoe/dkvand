@@ -274,6 +274,28 @@
   .ovl-alert-chip.risk-gul  { background: rgba(212,160,32,.18); color: #d4a020; }
   .ovl-alert-meta { color: var(--ink-soft); font-size: .76rem; margin-top: .25rem; }
   .ovl-alert-empty { color: var(--ink-soft); font-size: .85rem; }
+
+  /* NYT — generisk to-knaps-toggle (prioriteret listes sortering), samme
+     visuelle stil som .ovl-horizon-toggle/.ovl-horizon-btn men et separat
+     navn, da de to togglere styrer forskellige ting. */
+  .ovl-toggle { display: inline-flex; gap: .3rem; margin: .5rem 0 .8rem; }
+  .ovl-toggle-btn { padding: .3rem .8rem; font-size: .8rem; }
+  .ovl-toggle-btn.active { background: rgba(79,184,214,.15); border-color: var(--accent); color: var(--ink); }
+  .ovl-prio-note { font-size: .72rem; color: var(--ink-soft); margin-top: .6rem; line-height: 1.4; }
+
+  /* NYT — "Indlejr kort"-kortets link-visning, samme readonly-tekstfelt +
+     kopiér-mønster som andre steder i appen (fx sales-portalens login-link). */
+  .ovl-embed-box { margin-top: .8rem; }
+  .ovl-embed-box textarea {
+    width: 100%; min-height: 4.2rem; background: rgba(255,255,255,.04); border: 1px solid var(--border);
+    color: var(--ink); border-radius: 6px; padding: .5rem .6rem; font-size: .78rem; font-family: monospace; resize: vertical;
+  }
+  .ovl-embed-box .copy-note { font-size: .74rem; color: var(--ok); margin-top: .3rem; min-height: 1em; }
+
+  /* NYT — fuldskærm: Leaflet-kortet skal fylde HELE skærmen, ikke kun sin
+     normale kort-højde, når #ovl-map selv er :fullscreen-elementet. */
+  #ovl-map:fullscreen { height: 100vh; }
+  #ovl-map:-webkit-full-screen { height: 100vh; }
 </style>
 </head>
 <body>
@@ -357,6 +379,7 @@ function render() {
             <button type="button" class="ovl-horizon-btn" data-horizon="24h" onclick="setOverloebHorizon('24h')">24h</button>
             <button type="button" class="ovl-horizon-btn" data-horizon="72h" onclick="setOverloebHorizon('72h')">72h</button>
           </div>
+          <button type="button" onclick="toggleOvlFullscreen()" style="margin-left:auto">⛶ Fuld skærm</button>
         </div>
 
         <div id="ovl-map" class="ovl-map"></div>
@@ -371,6 +394,41 @@ function render() {
       <div class="card" id="card-overloeb-varsler">
         <h2>Udløb med aktive varsler</h2>
         <div id="ovl-varsler-content">Indlæser…</div>
+      </div>
+
+      <div class="card" id="card-overloeb-historik">
+        <h2>Historik — overløbsvarsler</h2>
+        <div class="ov-intro">Antal nye gul/rød-varsler pr. dag i kommunen, seneste 90 dage.</div>
+        <div class="trend-chart-wrap" id="ovl-historik-chart">Indlæser…</div>
+      </div>
+
+      <div class="card" id="card-overloeb-prioriteret">
+        <h2>Prioriterede overløb</h2>
+        <div class="stat-controls">
+          <label for="ovl-prio-period">Periode</label>
+          <select id="ovl-prio-period" onchange="onOvlPrioPeriodChange()">
+            <option value="today">I dag</option>
+            <option value="7d">Sidste 7 dage</option>
+            <option value="month">Måned</option>
+            <option value="quarter" selected>Sidste kvartal</option>
+            <option value="year">Sidste år</option>
+          </select>
+          <input type="month" id="ovl-prio-month" value="${currentMonthStr()}" onchange="loadOverloebPrioriteret()" style="display:none">
+        </div>
+        <div class="ovl-toggle" id="ovl-prio-sort-toggle">
+          <button type="button" class="ovl-toggle-btn active" data-sort="varsler" onclick="setOvlPrioSort('varsler')">Flest varsler</button>
+          <button type="button" class="ovl-toggle-btn" data-sort="udledning" onclick="setOvlPrioSort('udledning')">Størst estimeret udledning</button>
+        </div>
+        <div id="ovl-prio-content">Indlæser…</div>
+        <div class="ovl-prio-note">Estimeret udledning er baseret på PULS' gennemsnitlige udledningsmængde pr. hændelse × antal registrerede varsler i perioden — IKKE en målt mængde.</div>
+      </div>
+
+      <div class="card" id="card-overloeb-embed">
+        <h2>Indlejr kort</h2>
+        <div class="ov-intro">Vis kortet på jeres egen hjemmeside via en iframe — opdaterer sig selv live, samme data som ovenfor.</div>
+        <button type="button" onclick="generateOverloebEmbed()">🔗 Generér indlejrings-link</button>
+        <button type="button" onclick="revokeOverloebEmbeds()">Tilbagekald alle indlejrings-links</button>
+        <div id="ovl-embed-result"></div>
       </div>
     </div>
 
@@ -544,6 +602,8 @@ function render() {
   loadKommuneBenchmark();
   loadOverloebStatus();
   connectOverloebStream();
+  loadOverloebHistorik();
+  loadOverloebPrioriteret();
 }
 
 // ── Fane-skift (bruger-ønske 2026-08-19) ────────────────────────────────────
@@ -701,6 +761,153 @@ function connectOverloebStream() {
   if (ovlEventSource) return;
   ovlEventSource = new EventSource('/admin/api/overloeb-stream');
   ovlEventSource.addEventListener('overloeb-updated', () => loadOverloebStatus());
+}
+
+// NYT (bruger-ønske 2026-08-19) — historik-graf, fast 90-dages rullende
+// vindue, se server.js's GET /admin/api/overloeb-varsler-historik og
+// overloeb-events.js's getVarselTrendForMunicipality() for selve
+// beregningen (hændelsesloggen, ikke et live-øjebliksbillede).
+async function loadOverloebHistorik() {
+  const el = document.getElementById('ovl-historik-chart');
+  if (!el) return;
+  try {
+    const resp = await fetch('/admin/api/overloeb-varsler-historik', { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente historik.')}</div>`;
+      return;
+    }
+    renderVarselBarChart('ovl-historik-chart', data.trend);
+  } catch (e) {
+    el.innerHTML = '<div class="err">Kunne ikke hente historik — tjek din forbindelse.</div>';
+  }
+}
+
+// NYT — prioriteret liste: "flest varsler" ELLER "størst estimeret
+// udledning", togglebar, med samme today/7d/month/quarter/year-periode-
+// mønster som Badested-statistik-kortet (onStatPeriodChange()) ovenfor.
+let ovlPrioSort = 'varsler';
+
+function onOvlPrioPeriodChange() {
+  const period = document.getElementById('ovl-prio-period').value;
+  document.getElementById('ovl-prio-month').style.display = period === 'month' ? '' : 'none';
+  loadOverloebPrioriteret();
+}
+
+function setOvlPrioSort(sortBy) {
+  if (sortBy === ovlPrioSort) return;
+  ovlPrioSort = sortBy;
+  document.querySelectorAll('#ovl-prio-sort-toggle .ovl-toggle-btn').forEach(b => b.classList.toggle('active', b.dataset.sort === sortBy));
+  loadOverloebPrioriteret();
+}
+
+function fmtLiter(n) {
+  if (n == null) return '—';
+  return `${Math.round(n).toLocaleString('da-DK')} L`;
+}
+
+async function loadOverloebPrioriteret() {
+  const el = document.getElementById('ovl-prio-content');
+  if (!el) return;
+  el.textContent = 'Indlæser…';
+  const period = document.getElementById('ovl-prio-period').value;
+  const month = document.getElementById('ovl-prio-month').value;
+  const qs = new URLSearchParams({ period, sortBy: ovlPrioSort });
+  if (period === 'month' && month) qs.set('month', month);
+  try {
+    const resp = await fetch(`/admin/api/overloeb-prioriteret?${qs.toString()}`, { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente prioriteret liste.')}</div>`;
+      return;
+    }
+    if (data.liste.length === 0) {
+      el.innerHTML = '<div class="ovl-alert-empty">Ingen overløbsvarsler registreret i denne periode.</div>';
+      return;
+    }
+    el.innerHTML = `
+      <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
+        <td>#</td><td>Udløb</td><td>Type</td><td class="n">Varsler</td><td class="n">Est. udledning</td>
+      </tr></thead><tbody>${data.liste.map((r, i) => `
+        <tr>
+          <td>${i + 1}</td>
+          <td>${escHtml(r.navn)}</td>
+          <td>${r.isWastewater === false ? 'Regnvand' : 'Kloak'}</td>
+          <td class="n">${r.varslerTotal} <span style="color:var(--ink-soft);font-size:.72rem">(${r.varslerGul}g/${r.varslerRoed}r)</span></td>
+          <td class="n">${fmtLiter(r.estimeretLiterTotal)}</td>
+        </tr>`).join('')}</tbody></table>
+    `;
+  } catch (e) {
+    el.innerHTML = '<div class="err">Kunne ikke hente prioriteret liste — tjek din forbindelse.</div>';
+  }
+}
+
+// NYT — fuldskærm: #ovl-map selv er :fullscreen-elementet (se CSS'en for
+// #ovl-map:fullscreen), ikke hele kortets card — Leaflet skal blot
+// genberegne sin egen containerstørrelse (invalidateSize()), samme
+// nødvendighed som ved fane-skift (se switchDashTab()).
+function toggleOvlFullscreen() {
+  const mapEl = document.getElementById('ovl-map');
+  if (!mapEl) return;
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else {
+    (mapEl.requestFullscreen || mapEl.webkitRequestFullscreen)?.call(mapEl);
+  }
+}
+document.addEventListener('fullscreenchange', () => { if (ovlMap) setTimeout(() => ovlMap.invalidateSize(), 50); });
+
+// NYT — "Indlejr kort": se tenant-admin.js's tenant_embed_tokens-kommentar
+// for hele token-designbegrundelsen (revokabel DB-token, ikke en stateless
+// signeret en). Viser et færdigt iframe-snippet klar til at kopiere ind på
+// kommunens egen hjemmeside.
+async function generateOverloebEmbed() {
+  const el = document.getElementById('ovl-embed-result');
+  el.textContent = 'Genererer…';
+  try {
+    const resp = await fetch('/admin/api/overloeb-embed-token', { method: 'POST' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke generere indlejrings-link.')}</div>`;
+      return;
+    }
+    const snippet = `<iframe src="${data.embedUrl}" style="width:100%;height:520px;border:0" title="Overløb — live kort"></iframe>`;
+    el.innerHTML = `
+      <div class="ovl-embed-box">
+        <textarea id="ovl-embed-snippet" readonly onclick="this.select()">${escHtml(snippet)}</textarea>
+        <button type="button" onclick="copyOverloebEmbedSnippet()">Kopiér</button>
+        <div class="copy-note" id="ovl-embed-copy-note"></div>
+      </div>
+    `;
+  } catch (e) {
+    el.innerHTML = '<div class="err">Kunne ikke generere indlejrings-link — tjek din forbindelse.</div>';
+  }
+}
+
+function copyOverloebEmbedSnippet() {
+  const ta = document.getElementById('ovl-embed-snippet');
+  if (!ta) return;
+  ta.select();
+  navigator.clipboard?.writeText(ta.value).then(() => {
+    const note = document.getElementById('ovl-embed-copy-note');
+    if (note) { note.textContent = '✓ Kopieret'; setTimeout(() => { note.textContent = ''; }, 2500); }
+  });
+}
+
+async function revokeOverloebEmbeds() {
+  if (!confirm('Tilbagekald ALLE eksisterende indlejrings-links for jeres kommune? Ethvert sted de er indlejret, holder op med at virke med det samme.')) return;
+  try {
+    const resp = await fetch('/admin/api/overloeb-embed-token/revoke-all', { method: 'POST' });
+    const data = await resp.json();
+    const el = document.getElementById('ovl-embed-result');
+    if (!resp.ok) {
+      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke tilbagekalde indlejrings-links.')}</div>`;
+      return;
+    }
+    el.innerHTML = '<div class="copy-note" style="color:var(--ok)">✓ Alle indlejrings-links er tilbagekaldt.</div>';
+  } catch (e) {
+    document.getElementById('ovl-embed-result').innerHTML = '<div class="err">Kunne ikke tilbagekalde — tjek din forbindelse.</div>';
+  }
 }
 
 /**
@@ -898,6 +1105,58 @@ function renderTrendChart(containerId, points, opts) {
   hitLayer.addEventListener('pointermove', e => showAt(e.clientX));
   hitLayer.addEventListener('pointerdown', e => showAt(e.clientX));
   hitLayer.addEventListener('pointerleave', hide);
+}
+
+// NYT (Overløb-fanen, historik-graf — bruger-ønske 2026-08-19) — stablede
+// søjler (gul i bunden, rød ovenpå), IKKE en genbrug/udvidelse af
+// renderTrendChart() ovenfor: en to-farvet stak kommunikerer "gul OG rød pr.
+// dag" tydeligere end to overlappende linjer/arealer ville. Genbruger samme
+// SVG-viewBox-dimensioner og .trend-grid-line/.trend-axis-label/.trend-empty-
+// stile som renderTrendChart, for visuel konsistens — men ingen pointer-
+// crosshair-tooltip, native <title> pr. søjle er nok til diskrete dags-bars.
+function renderVarselBarChart(containerId, points) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return;
+  if (points.length === 0) {
+    wrap.innerHTML = '<div class="trend-empty">Ingen overløbsvarsler registreret i perioden endnu</div>';
+    return;
+  }
+
+  const W = 600, H = 150;
+  const padL = 4, padR = 8, padT = 10, padB = 20;
+  const plotL = padL, plotR = W - padR, plotT = padT, plotB = H - padB;
+  const plotW = plotR - plotL, plotH = plotB - plotT;
+
+  const totals = points.map(p => p.gul + p.roed);
+  const vMax = Math.max(1, ...totals);
+  const barGap = 1;
+  const barW = Math.max(0.6, plotW / points.length - barGap);
+  const xAt = i => plotL + i * (plotW / points.length);
+
+  const bars = points.map((p, i) => {
+    const x = xAt(i).toFixed(1);
+    const gulH = (p.gul / vMax) * plotH;
+    const roedH = (p.roed / vMax) * plotH;
+    const gulY = plotB - gulH;
+    const roedY = gulY - roedH;
+    const titleText = `${escHtml(p.date)}: ${p.gul} gul, ${p.roed} rød`;
+    return `<g>
+      ${p.gul > 0  ? `<rect x="${x}" y="${gulY.toFixed(1)}" width="${barW.toFixed(1)}" height="${gulH.toFixed(1)}" fill="#d4a020"><title>${titleText}</title></rect>` : ''}
+      ${p.roed > 0 ? `<rect x="${x}" y="${roedY.toFixed(1)}" width="${barW.toFixed(1)}" height="${roedH.toFixed(1)}" fill="#c84b1f"><title>${titleText}</title></rect>` : ''}
+    </g>`;
+  }).join('');
+
+  const totalSum = totals.reduce((a, b) => a + b, 0);
+
+  wrap.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Overløbsvarsler over tid, i alt ${totalSum} i perioden">
+      <line class="trend-grid-line" x1="${plotL}" y1="${plotT}" x2="${plotR}" y2="${plotT}"/>
+      <line class="trend-grid-line" x1="${plotL}" y1="${plotB}" x2="${plotR}" y2="${plotB}"/>
+      ${bars}
+      <text class="trend-axis-label" x="${plotL}" y="${H - 4}">${fmtDateShort(points[0].date)}</text>
+      <text class="trend-axis-label" x="${plotR}" y="${H - 4}" text-anchor="end">${fmtDateShort(points[points.length - 1].date)}</text>
+    </svg>
+  `;
 }
 
 const KSTAT_PUSH_TYPE_LABELS = {

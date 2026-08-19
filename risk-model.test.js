@@ -2,7 +2,7 @@
 const assert = require('assert');
 const {
   sigmoid, seasonalTau, cellKey, computeRisk, computeForecastRisk, derivePulsFields, estimateLastEventAge, GRID_DEG,
-  computeIntensityFactor,
+  computeIntensityFactor, riskBucket, shouldLogTransition,
 } = require('./risk-model');
 
 let passed = 0, failed = 0;
@@ -223,6 +223,38 @@ test('badested-aggregering: samlet risiko er max af bakteriel/viral på tværs a
   }
   assert.strictEqual(maxRisk, 0.60, 'skal finde den højeste værdi på tværs af BÅDE bakteriel og viral, uanset hvilket udløb den kommer fra');
   assert.strictEqual(hasRain, true, 'mindst ét udløb i gruppen har regn, så hasRain skal være true for hele gruppen');
+});
+
+test('riskBucket: matcher riskLabel()/riskStyle()s tærskler (0.6/0.2), null giver ingen-data', () => {
+  assert.strictEqual(riskBucket(null), 'ingen-data');
+  assert.strictEqual(riskBucket(undefined), 'ingen-data');
+  assert.strictEqual(riskBucket(0.6), 'roed');
+  assert.strictEqual(riskBucket(0.75), 'roed');
+  assert.strictEqual(riskBucket(0.2), 'gul');
+  assert.strictEqual(riskBucket(0.59), 'gul');
+  assert.strictEqual(riskBucket(0), 'groen');
+  assert.strictEqual(riskBucket(0.19), 'groen');
+});
+
+test('shouldLogTransition: første observation (prevBucket ukendt) logges IKKE', () => {
+  assert.strictEqual(shouldLogTransition(undefined, 'roed'), false);
+  assert.strictEqual(shouldLogTransition(null, 'gul'), false);
+});
+
+test('shouldLogTransition: reelt skift logges', () => {
+  assert.strictEqual(shouldLogTransition('groen', 'gul'), true);
+  assert.strictEqual(shouldLogTransition('gul', 'roed'), true);
+  assert.strictEqual(shouldLogTransition('roed', 'groen'), true);
+});
+
+test('shouldLogTransition: uændret bucket logges IKKE', () => {
+  assert.strictEqual(shouldLogTransition('groen', 'groen'), false);
+  assert.strictEqual(shouldLogTransition('roed', 'roed'), false);
+});
+
+test('shouldLogTransition: skift til/fra ingen-data tæller også som et skift', () => {
+  assert.strictEqual(shouldLogTransition('groen', 'ingen-data'), true);
+  assert.strictEqual(shouldLogTransition('ingen-data', 'gul'), true);
 });
 
 console.log(`\n${passed} bestået, ${failed} fejlet`);
