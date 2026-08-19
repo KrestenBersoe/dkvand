@@ -2111,20 +2111,23 @@
     </div>
     <div id="national-summary-meta"></div>
 
-    <div class="section-head" style="margin-top:1.4rem">
-      Varsler nær dig
-      <span class="section-count" id="alarm-count">0</span>
-    </div>
-    <div class="card-grid" id="alarm-grid">
-      <div class="v-empty"><span class="icon">✅</span>Ingen aktive varsler</div>
-    </div>
-
+    <!-- NYT (bruger-ønske 2026-08-19): "Mine favoritter" flyttet OP over
+         "Varsler nær dig" — loadVarselData() finder begge grids via ID, ikke
+         DOM-position, så selve ombytningen ændrer ingen JS-adfærd. -->
     <div class="section-head" style="margin-top:1.4rem">
       Mine favoritter
       <span class="section-count" id="fav-count">0</span>
     </div>
     <div class="card-grid" id="fav-grid">
       <div class="v-empty"><span class="icon">🤍</span>Ingen favoritter — klik ❤️ på et punkt i kortet</div>
+    </div>
+
+    <div class="section-head" style="margin-top:1.4rem">
+      Varsler nær dig
+      <span class="section-count" id="alarm-count">0</span>
+    </div>
+    <div class="card-grid" id="alarm-grid">
+      <div class="v-empty"><span class="icon">✅</span>Ingen aktive varsler</div>
     </div>
 
     <div id="varsler-status"></div>
@@ -10917,40 +10920,40 @@ function findBadevandFeatureNear(lat, lng) {
 // status/farve/tekst som detaljesiden ville — inklusive de positive
 // "bekræftet ingen kilde"-kategorier (ingen-bekraeftet/nedstroms-
 // bekraeftet/ingen uden geomMatchNoData), ikke kun en rå procent.
-function buildBadevandFavCard(rec, key) {
-  const feature    = findBadevandFeatureNear(rec.lat, rec.lng);
-  const badevandId = feature?.properties?.bathingwat ?? feature?.properties?.ov_id ?? feature?.properties?.id ?? null;
-  const r      = computeBadevandRisk(rec.lat, rec.lng, badevandId);
+// NYT (bruger-ønske 2026-08-19) — udtrukket fra det der tidligere var
+// buildBadevandFavCard()'s indlejrede klassificering, så "Mine favoritter"
+// OG den nu badested-baserede "Varsler nær dig" (se getBadevandAlarmCandidates()/
+// buildBadevandAlarmCard() nedenfor) bruger PRÆCIS samme fem-grens
+// source-state-logik ét sted, i stedet for at den findes duplikeret to
+// steder og kan drive fra hinanden.
+function classifyBadevandRisk(r) {
   const active = [r.bact, r.viral].filter(v => v !== null);
   const risk   = active.length ? Math.max(...active) : null;
 
-  let chipHtml, statusText, cardCls;
   if (r.source === 'server-utilgaengelig') {
-    chipHtml   = `<span class="chip risk-nodata">Data utilgængelig</span>`;
-    statusText = '⚠ Serverdata utilgængelig eller forældet — prøv igen om lidt.';
-    cardCls    = 'risk-nodata';
-  } else if (r.source === 'ingen-bekraeftet') {
-    chipHtml   = `<span class="chip risk-low">Bekræftet ingen kilde</span>`;
-    statusText = '✅ Ingen kendte spildevandsudledninger i nærheden.';
-    cardCls    = 'risk-low';
-  } else if (r.source === 'nedstroms-bekraeftet') {
-    chipHtml   = `<span class="chip risk-low">Ingen aktuel kilde</span>`;
-    statusText = '✅ Kendte udløb er lige nu strømbekræftet nedstrøms.';
-    cardCls    = 'risk-low';
-  } else if (r.source === 'ingen' && !r.geomMatchNoData) {
-    chipHtml   = `<span class="chip risk-low">Ingen kendte udløb</span>`;
-    statusText = '✅ Ingen registrerede udløb, som udleder til denne lokation.';
-    cardCls    = 'risk-low';
-  } else if (r.source === 'ingen') {
-    chipHtml   = `<span class="chip risk-nodata">Ingen data</span>`;
-    statusText = 'Vandområdet er matchet, men mangler egne beregnede data.';
-    cardCls    = 'risk-nodata';
-  } else {
-    const rl = riskLabel(risk);
-    chipHtml   = `<span class="chip ${rl.cls}">${rl.label} · ${Math.round((risk || 0) * 100)}%</span>`;
-    statusText = riskTooltipText(risk);
-    cardCls    = rl.cardCls;
+    return { risk, chipHtml: `<span class="chip risk-nodata">Data utilgængelig</span>`, statusText: '⚠ Serverdata utilgængelig eller forældet — prøv igen om lidt.', cardCls: 'risk-nodata' };
   }
+  if (r.source === 'ingen-bekraeftet') {
+    return { risk, chipHtml: `<span class="chip risk-low">Bekræftet ingen kilde</span>`, statusText: '✅ Ingen kendte spildevandsudledninger i nærheden.', cardCls: 'risk-low' };
+  }
+  if (r.source === 'nedstroms-bekraeftet') {
+    return { risk, chipHtml: `<span class="chip risk-low">Ingen aktuel kilde</span>`, statusText: '✅ Kendte udløb er lige nu strømbekræftet nedstrøms.', cardCls: 'risk-low' };
+  }
+  if (r.source === 'ingen' && !r.geomMatchNoData) {
+    return { risk, chipHtml: `<span class="chip risk-low">Ingen kendte udløb</span>`, statusText: '✅ Ingen registrerede udløb, som udleder til denne lokation.', cardCls: 'risk-low' };
+  }
+  if (r.source === 'ingen') {
+    return { risk, chipHtml: `<span class="chip risk-nodata">Ingen data</span>`, statusText: 'Vandområdet er matchet, men mangler egne beregnede data.', cardCls: 'risk-nodata' };
+  }
+  const rl = riskLabel(risk);
+  return { risk, chipHtml: `<span class="chip ${rl.cls}">${rl.label} · ${Math.round((risk || 0) * 100)}%</span>`, statusText: riskTooltipText(risk), cardCls: rl.cardCls };
+}
+
+function buildBadevandFavCard(rec, key) {
+  const feature    = findBadevandFeatureNear(rec.lat, rec.lng);
+  const badevandId = feature?.properties?.bathingwat ?? feature?.properties?.ov_id ?? feature?.properties?.id ?? null;
+  const r = computeBadevandRisk(rec.lat, rec.lng, badevandId);
+  const { chipHtml, statusText, cardCls } = classifyBadevandRisk(r);
 
   const div = document.createElement('div');
   div.className = 'alarm-card ' + cardCls;
@@ -10969,6 +10972,69 @@ function buildBadevandFavCard(rec, key) {
     </div>
   `;
   return div;
+}
+
+// NYT (bruger-ønske 2026-08-19) — badested-baseret kandidatliste til
+// "Varsler nær dig" (se loadVarselData()). Erstatter den tidligere PULS-
+// udløbs-baserede __warnpoints__-kilde: en badegæst spørger "er DER HVOR
+// JEG SKAL BADE sikkert", ikke "hvilke tekniske overløbspunkter har høj
+// prognose" — de to var aldrig samme spørgsmål. "Varsel" defineres her som
+// badestedets EGEN risiko (max bact/viral, samme som classifyBadevandRisk()
+// beregner) >= 0.2 — samme gul/rød-tærskel riskLabel()/kortfarverne
+// allerede bruger overalt, IKKE den tidligere "foreRisk > .55" for et helt
+// andet datalag (udløbspunkter). Samme koordinat-udtræksmønster som
+// colorBadevandByRisk() (linje ~6742-6752).
+function getBadevandAlarmCandidates() {
+  if (!vp3BadevandLayer) return [];
+  const out = [];
+  vp3BadevandLayer.eachLayer(layer => {
+    let ll;
+    try { ll = layer.getLatLng ? layer.getLatLng() : layer.getBounds().getCenter(); }
+    catch (e) { return; }
+    const p = layer.feature?.properties || {};
+    const badevandId = p.bathingwat ?? p.ov_id ?? p.id;
+    if (badevandId == null) return;
+    const r = computeBadevandRisk(ll.lat, ll.lng, badevandId);
+    const { risk } = classifyBadevandRisk(r);
+    if (risk == null || risk < 0.2) return;
+    out.push({ id: String(badevandId), name: getBadevandNavn(p), lat: ll.lat, lng: ll.lng, risk, r });
+  });
+  return out;
+}
+
+// NYT — alarmlistens udvidede detalje-kort (klik på en række), samme
+// visuelle sprog som buildBadevandFavCard() (deler classifyBadevandRisk()),
+// men UDEN favorit-fjern-knappen — dette badested er ikke nødvendigvis en
+// favorit.
+function buildBadevandAlarmCard(a) {
+  const { chipHtml, statusText, cardCls } = classifyBadevandRisk(a.r);
+  const div = document.createElement('div');
+  div.className = 'alarm-card ' + cardCls;
+  div.innerHTML = `
+    <div class="card-top">
+      <div>
+        <div class="card-name">${escHtml(a.name || 'Badested')}</div>
+        <div class="card-sub">Badested</div>
+      </div>
+    </div>
+    <div style="margin-bottom:.4rem">${chipHtml}</div>
+    <div style="font-size:.78rem;color:var(--ink-soft);line-height:1.5">${escHtml(statusText)}</div>
+    <div class="card-actions" style="margin-top:.5rem">
+      <button class="ctrl-btn" style="font-size:.65rem" onclick="goToBadevand(${a.lat},${a.lng})">Vis badested →</button>
+    </div>
+  `;
+  return div;
+}
+
+// NYT — badested-udgave af waitForLiveRiskData() (som ventede på
+// overflowPoints/PULS-niveau data) — venter i stedet på at badevandRiskData
+// (badested-niveau) er frisk, se isBadevandRiskDataFresh().
+async function waitForLiveBadevandRiskData(timeoutMs = 30000) {
+  const start = Date.now();
+  while (!isBadevandRiskDataFresh()) {
+    if (Date.now() - start > timeoutMs) return; // giver op — loadVarselData() viser da 0 kandidater, ikke en fejl
+    await new Promise(r => setTimeout(r, 300));
+  }
 }
 
 function buildVarselCard(pt, isFavCard) {
@@ -11107,30 +11173,6 @@ function setVarselStatus(msg) {
   if (el) el.textContent = msg;
 }
 
-// RETTET (samme klasse fejl som goToBadevand() ovenfor, bruger-rapporteret):
-// loadVarselData() læser "aktive varsler" fra en IndexedDB-snapshot
-// (__warnpoints__), som KUN skrives af saveWarnPoints() — kaldt fra
-// renderMap(), først efter overflowPoints har fået server-risikoscorer
-// flettet ind (se loadRiskScores()/loadAll()). Ved en frisk sideindlæsning
-// hvor Varsler-fanen åbnes (fx switchTab('varsler')) FØR denne første
-// renderMap()-kørsel er færdig, læste funktionen enten INTET (allerførste
-// besøg på enheden, ingen tidligere snapshot) eller en FORÆLDET snapshot
-// fra en tidligere session — begge dele viser fejlagtigt "ingen aktive
-// varsler", uafhængigt af den reelle, aktuelle risiko. Venter nu på at
-// DENNE sessions egne, friske serverdata rent faktisk er flettet ind i
-// overflowPoints (samme readiness-signal som allerede bruges andre steder
-// i appen til at afgøre om server-risikoscorer er ankommet), før
-// IndexedDB-snapshottet overhovedet konsulteres — loftet på 30 sek matcher
-// serverens egen kold-cache-sikkerhedsnet (se ensureFreshRiskCaches() i
-// server.js) + margin.
-async function waitForLiveRiskData(timeoutMs = 30000) {
-  const start = Date.now();
-  while (!overflowPoints || overflowPoints.length === 0 || !overflowPoints.some(p => p.riskScore !== null)) {
-    if (Date.now() - start > timeoutMs) return; // giver op — loadVarselData() falder tilbage til hvad IndexedDB nu end har
-    await new Promise(r => setTimeout(r, 300));
-  }
-}
-
 async function loadVarselData() {
   const alarmGrid  = document.getElementById('alarm-grid');
   const alarmCount = document.getElementById('alarm-count');
@@ -11141,28 +11183,22 @@ async function loadVarselData() {
   // Vis en tydelig indlæsningstilstand, mens vi venter — i stedet for at
   // vise "ingen aktive varsler" først og så uforklarligt skifte til et
   // andet resultat et øjeblik senere.
-  if (!overflowPoints || !overflowPoints.some(p => p.riskScore !== null)) {
+  if (!isBadevandRiskDataFresh()) {
     alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">⏳</span>Indlæser varsler…</div>';
     setVarselStatus('Indlæser…');
-    await waitForLiveRiskData();
+    await waitForLiveBadevandRiskData();
   }
 
-  // ── Hent gemte varsler fra IndexedDB ────────────────────────────────────
+  // ── Badested-baserede kandidater (bruger-ønske 2026-08-19) ──────────────
+  // RETTET: "Varsler nær dig" viste tidligere individuelle PULS-udløbs-
+  // punkters 24h-prognoserisiko (>55%, fra __warnpoints__/saveWarnPoints())
+  // — forvirrende for en badegæst, der spørger "er DER HVOR JEG SKAL BADE
+  // sikkert", ikke "hvilke tekniske overløbspunkter har høj prognose".
+  // Bruger nu badestedernes EGEN badevandsrisiko, se
+  // getBadevandAlarmCandidates()'s filhoved.
   let alarms = [];
-  let ageMin = 0;
-  try {
-    const rec = await dbGet(STORE_WEATHER, '__warnpoints__');
-    if (rec && rec.data && Array.isArray(rec.data) && rec.data.length > 0) {
-      ageMin = Math.round((Date.now() - rec.ts) / 60000);
-      if (Date.now() - rec.ts > 2 * 3600 * 1000) {
-        alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">🕐</span>Varsler forældede — genindlæs siden for at opdatere</div>';
-        if (alarmCount) alarmCount.textContent = '0';
-        updateVarslerBadge(0);
-        return;
-      }
-      alarms = rec.data;
-    }
-  } catch(e) { console.warn('loadVarselData IDB fejl:', e); }
+  try { alarms = getBadevandAlarmCandidates(); }
+  catch (e) { console.warn('loadVarselData badevand-fejl:', e); }
 
   // ── Brugerposition — direkte fra globale variable ─────────────────────
   // hjemUserLat/hjemUserLng sættes af locateUser() ved GPS-fix
@@ -11172,7 +11208,7 @@ async function loadVarselData() {
   const hasPos = isFinite(uLat) && isFinite(uLng) && uLat !== 0 && uLng !== 0;
   console.info('Varsler filter — hasPos:', hasPos, 'uLat:', uLat, 'uLng:', uLng, 'alarms:', alarms.length);
 
-  // ── Filtrer og sortér ─────────────────────────────────────────────────
+  // ── Filtrer og sortér — UÆNDRET 50 km/nærmeste-først/loft 25-logik ─────
   let filtered, note;
   if (hasPos && alarms.length > 0) {
     // Tilføj afstand til alle alarmer
@@ -11185,13 +11221,13 @@ async function loadVarselData() {
       .sort((a, b) => a.dist - b.dist)  // nærmeste først
       .slice(0, 25);
     note = filtered.length
-      ? `${filtered.length} varsel${filtered.length !== 1 ? 'er' : ''} inden for 50 km · opdateret ${ageMin < 1 ? '< 1' : ageMin} min siden`
+      ? `${filtered.length} varsel${filtered.length !== 1 ? 'er' : ''} inden for 50 km`
       : `Ingen aktive varsler inden for 50 km`;
   } else if (!hasPos) {
     filtered = [];
     note = '📍 Aktivér lokation i din browser for at se varsler i dit område';
   } else {
-    filtered = alarms.sort((a,b) => (b.foreRisk||0) - (a.foreRisk||0)).slice(0, 25);
+    filtered = alarms.sort((a,b) => (b.risk||0) - (a.risk||0)).slice(0, 25);
     note = `Alle ${filtered.length} varsler — aktivér lokation for lokal filtrering`;
   }
 
@@ -11202,22 +11238,22 @@ async function loadVarselData() {
   alarmGrid.innerHTML = '';
 
   if (filtered.length === 0 && hasPos) {
-    alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">✅</span>Ingen aktive overløbsvarsler inden for 50 km</div>';
+    alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">✅</span>Ingen aktive badevandsvarsler inden for 50 km</div>';
   } else if (filtered.length === 0) {
     alarmGrid.innerHTML = '<div class="v-empty"><span class="icon">📍</span>' + note + '</div>';
   } else {
-    filtered.forEach(pt => {
-      const rl   = riskLabel(pt.foreRisk || 0);
-      const risk = Math.round((pt.foreRisk || 0) * 100);
-      const dist = pt.dist != null ? pt.dist.toFixed(1) + ' km' : '';
+    filtered.forEach(a => {
+      const rl   = riskLabel(a.risk);
+      const risk = Math.round((a.risk || 0) * 100);
+      const dist = a.dist != null ? a.dist.toFixed(1) + ' km' : '';
 
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:.6rem;padding:.6rem .4rem;border-bottom:1px solid #eef2f5;cursor:pointer;color:#1a2733;background:#fff;';
       row.innerHTML =
         `<span class="chip ${rl.cls}" style="flex-shrink:0;min-width:3.5rem;text-align:center;font-size:.78rem">${risk}%</span>
          <div style="flex:1;min-width:0">
-           <div style="font-size:.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(pt.name || '—')}</div>
-           <div style="font-size:.7rem;color:#5a6b78">${escHtml(pt.municipality || '')}${dist ? ' · ' + dist : ''}</div>
+           <div style="font-size:.82rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escHtml(a.name || '—')}</div>
+           <div style="font-size:.7rem;color:#5a6b78">${dist}</div>
          </div>
          <span class="alarm-chev" style="opacity:.4">›</span>`;
 
@@ -11230,7 +11266,7 @@ async function loadVarselData() {
         row.querySelector('.alarm-chev').textContent = isOpen ? '›' : '⌄';
         if (!isOpen && !detail.dataset.built) {
           detail.dataset.built = '1';
-          detail.appendChild(buildVarselCard(pt, false));
+          detail.appendChild(buildBadevandAlarmCard(a));
         }
       });
 

@@ -71,6 +71,18 @@ function computeOverloebStatusForTenant({ tenant, horizon, riskScoresPoints, bad
         bucket: riskModel.riskBucket(risk),
         forecastMM: pt.forecastMM ?? null,
         todayMM: pt.todayMM ?? null,
+        // NYT (klik-detaljepanel, bruger-ønske 2026-08-19) — panelet viser
+        // TRE risikobjælker samtidig (nu/24h/72h), uafhængigt af kortets
+        // egen horisont-vælger (som kun styrer `risk`/`bucket` ovenfor).
+        riskNu: pt.riskScore ?? null,
+        foreRisk24h: pt.foreRisk ?? null,
+        foreRisk72h: pt.foreRisk72h ?? null,
+        viralScore: pt.viralScore ?? null,
+        algaeScore: pt.algaeScore ?? null,
+        waterArea: pt.waterArea ?? null,
+        dataQuality: pt.dataQuality ?? null,
+        weatherKey: pt.weatherKey ?? null,
+        meanVolumePerEvent: pt.meanVolumePerEvent ?? null,
       };
     });
 

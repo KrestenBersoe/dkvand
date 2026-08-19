@@ -296,6 +296,52 @@
      normale kort-højde, når #ovl-map selv er :fullscreen-elementet. */
   #ovl-map:fullscreen { height: 100vh; }
   #ovl-map:-webkit-full-screen { height: 100vh; }
+
+  /* NYT (bruger-ønske 2026-08-19) — kortvælger-flyout, samme mønster som
+     dkvand's #lag-btn/#lag-body men egne id'er/klasser. */
+  .ovl-lag-wrap { position: relative; }
+  .ovl-lag-body {
+    display: none; position: absolute; top: 100%; left: 0; margin-top: .3rem;
+    background: var(--paper); border: 1px solid var(--border); border-radius: 8px;
+    padding: .5rem; z-index: 10; flex-direction: column; gap: .3rem; min-width: 180px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  }
+  .ovl-lag-body.open { display: flex; }
+  .ovl-layer-btn { text-align: left; font-size: .8rem; }
+  .ovl-layer-btn.active { border-color: var(--accent); color: var(--ink); background: rgba(79,184,214,.12); }
+
+  /* NYT — udløbs-detaljepanel: fast bundpanel, samme "mørk overlay bag et
+     opslået ark"-mønster som showUdlobPanel() i dansk-overloeb-kort.html,
+     men simplere/genimplementeret (egen fil, egen kontekst). */
+  .ovl-panel-overlay {
+    display: none; position: fixed; inset: 0; z-index: 3000; background: rgba(0,0,0,.55);
+    align-items: flex-end; justify-content: center;
+  }
+  .ovl-panel-overlay.open { display: flex; }
+  .ovl-panel-sheet {
+    background: var(--paper); border-top: 1px solid var(--border); border-radius: 14px 14px 0 0;
+    max-width: 640px; width: 100%; max-height: 85vh; overflow-y: auto; padding: 1.1rem 1.3rem 1.6rem;
+  }
+  .ovl-panel-top { display: flex; justify-content: space-between; align-items: flex-start; gap: .6rem; margin-bottom: .6rem; }
+  .ovl-panel-title { font-size: 1.05rem; font-weight: 700; }
+  .ovl-panel-sub { color: var(--ink-soft); font-size: .8rem; margin-top: .15rem; }
+  .ovl-panel-close { background: transparent; border: none; color: var(--ink-soft); font-size: 1.3rem; cursor: pointer; line-height: 1; padding: .2rem .4rem; }
+  .ovl-panel-bars { display: flex; flex-direction: column; gap: .5rem; margin: .8rem 0; }
+  .ovl-panel-bar-row { display: flex; align-items: center; gap: .6rem; font-size: .8rem; }
+  .ovl-panel-bar-label { flex: 0 0 5.2rem; color: var(--ink-soft); }
+  .ovl-panel-bar-track { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,.06); overflow: hidden; }
+  .ovl-panel-bar-fill { display: block; height: 100%; border-radius: 4px; }
+  .ovl-panel-bar-pct { flex: 0 0 3rem; text-align: right; font-variant-numeric: tabular-nums; }
+  .ovl-panel-chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0; }
+  .ovl-panel-stamdata { font-size: .82rem; line-height: 1.8; margin: .8rem 0; }
+  .ovl-panel-stamdata a { color: var(--accent); }
+  .ovl-panel-rain-title { font-size: .72rem; color: var(--ink-soft); margin: .8rem 0 .3rem; text-transform: uppercase; letter-spacing: .05em; }
+
+  /* NYT — .ovl-alert-chip havde kun risk-roed/risk-gul defineret (den
+     eksisterende varselsliste viser aldrig grøn/ingen-data der) — panelets
+     viral/alge-chips kan ramme alle fire buckets. */
+  .ovl-alert-chip.risk-groen { background: rgba(45,125,79,.18); color: #4fbf7f; }
+  .ovl-alert-chip.risk-ingen-data { background: rgba(26,111,175,.18); color: #6fa8d6; }
 </style>
 </head>
 <body>
@@ -379,6 +425,17 @@ function render() {
             <button type="button" class="ovl-horizon-btn" data-horizon="24h" onclick="setOverloebHorizon('24h')">24h</button>
             <button type="button" class="ovl-horizon-btn" data-horizon="72h" onclick="setOverloebHorizon('72h')">72h</button>
           </div>
+          <!-- NYT (bruger-ønske 2026-08-19) — kortvælger, samme mønster som
+               dkvand's #lag-btn/#lag-body, kun de lag kommune-kortet har
+               data for (se planens afgrænsning). -->
+          <div class="ovl-lag-wrap">
+            <button type="button" onclick="toggleOvlLagPanel()">🗺️ Lag</button>
+            <div id="ovl-lag-body" class="ovl-lag-body">
+              <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-badesteder" onclick="toggleOvlLayer('badesteder')">🏖 Badesteder</button>
+              <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-udloeb" onclick="toggleOvlLayer('udloeb')">📍 Udløbspunkter</button>
+              <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-ringe" onclick="toggleOvlLayer('ringe')">⚠ Varselsringe</button>
+            </div>
+          </div>
           <button type="button" onclick="toggleOvlFullscreen()" style="margin-left:auto">⛶ Fuld skærm</button>
         </div>
 
@@ -389,6 +446,13 @@ function render() {
           <span><span class="ovl-legend-dot" style="background:#c84b1f"></span>Rød</span>
           <span><span class="ovl-legend-ring"></span>Aktiv varselsring (udløb)</span>
         </div>
+      </div>
+
+      <!-- NYT (bruger-ønske 2026-08-19) — udløbs-detaljepanel, fast
+           bundpanel (se .ovl-panel-overlay-CSS'en), skjult indtil et udløb
+           klikkes på kortet. -->
+      <div class="ovl-panel-overlay" id="ovl-udlob-panel" onclick="if (event.target === this) closeOvlUdlobPanel()">
+        <div class="ovl-panel-sheet" id="ovl-panel-sheet"></div>
       </div>
 
       <div class="card" id="card-overloeb-varsler">
@@ -625,10 +689,31 @@ function switchDashTab(tab) {
 // overloeb-status og overloeb-status.js for selve beregningen. Al kommune-
 // scoping/bucketing sker server-side; denne kode renderer udelukkende det
 // færdige resultat, samme server-autoritative princip som resten af appen.
-let ovlMap = null, ovlBadestedLayer = null, ovlUdloebLayer = null;
+let ovlMap = null, ovlBadestedLayer = null, ovlUdloebLayer = null, ovlRingLayer = null;
 let ovlHorizon = 'nu';
 let ovlEventSource = null;
 let ovlBoundsFitted = false;
+// NYT (bruger-ønske 2026-08-19, kortvælger) — hvilke af de tre lag der er
+// synlige lige nu, styret af flyout-panelet nedenfor.
+let ovlLayerVisible = { badesteder: true, udloeb: true, ringe: true };
+// NYT (klik-detaljepanel) — sidste hentede udløbsliste, opslået pr. id når
+// en markør klikkes, undgår en ekstra netværkstur pr. klik.
+let ovlUdloebById = new Map();
+
+// NYT — REQUIRED-SYNCED klient-duplikat af risk-model.js's riskBucket()
+// (samme 0,6/0,2-tærskler som resten af appen), bruges her til at farve de
+// TRE risikobjælker i klik-panelet (nu/24h/72h) samt viral/alge-chips —
+// disse tal kommer allerede bucket-mærket for kortets EGEN valgte horisont
+// (data.udloeb[].bucket), men panelet skal vise alle tre horisonter (og to
+// ekstra scores) samtidig, og har derfor brug for at bucket'e dem selv.
+function ovlRiskBucket(r) {
+  if (r === null || r === undefined) return 'ingen-data';
+  if (r >= 0.6) return 'roed';
+  if (r >= 0.2) return 'gul';
+  return 'groen';
+}
+
+const OVL_DATA_QUALITY_LABEL = { 0: 'Reelle data', 1: 'Verificeret nul', 2: 'Estimeret', 3: 'Ingen data' };
 
 // groen/gul/roed/ingen-data matcher risk-model.js's riskBucket()-strenge
 // 1:1 — lukket dækker en aktiv kommune-override med bucket 'lukket' (se
@@ -652,6 +737,28 @@ function ensureOvlMap() {
   }).addTo(ovlMap);
   ovlBadestedLayer = L.layerGroup().addTo(ovlMap);
   ovlUdloebLayer = L.layerGroup().addTo(ovlMap);
+  // NYT (kortvælger) — varselsringene lå tidligere i SAMME layer group som
+  // udløbsprikkerne (ovlUdloebLayer) og kunne derfor ikke skjules
+  // uafhængigt af dem — udtrukket til sit eget lag.
+  ovlRingLayer = L.layerGroup().addTo(ovlMap);
+}
+
+// NYT (kortvælger, bruger-ønske 2026-08-19: "kortvælgeren fra dkvand gøres
+// tilgængelig i kommune kortet også") — let flyout, samme visuelle mønster
+// som hovedkortets #lag-btn/#lag-body (dansk-overloeb-kort.html), men
+// bevidst KUN de to lag kommune-kortet allerede har data for (badesteder/
+// udløbspunkter) plus varselsringene som eget lag — IKKE strøm/RBU/
+// kystvande/søer (se planens afgrænsning: markant dyrere landsdækkende
+// datasæt/live-hentninger, uden for "badesteder og overløbspunkter").
+function toggleOvlLagPanel() {
+  document.getElementById('ovl-lag-body').classList.toggle('open');
+}
+
+function toggleOvlLayer(name) {
+  const layer = name === 'badesteder' ? ovlBadestedLayer : name === 'udloeb' ? ovlUdloebLayer : ovlRingLayer;
+  ovlLayerVisible[name] = !ovlLayerVisible[name];
+  if (ovlLayerVisible[name]) ovlMap.addLayer(layer); else ovlMap.removeLayer(layer);
+  document.getElementById(`ovl-layerbtn-${name}`).classList.toggle('active', ovlLayerVisible[name]);
 }
 
 function setOverloebHorizon(h) {
@@ -686,6 +793,8 @@ function renderOverloeb(data) {
 
   ovlBadestedLayer.clearLayers();
   ovlUdloebLayer.clearLayers();
+  ovlRingLayer.clearLayers();
+  ovlUdloebById.clear();
   const bounds = [];
 
   for (const b of data.badesteder) {
@@ -703,25 +812,31 @@ function renderOverloeb(data) {
   for (const u of data.udloeb) {
     if (u.lat == null || u.lng == null) continue;
     bounds.push([u.lat, u.lng]);
+    ovlUdloebById.set(String(u.id), u);
     const color = OVL_BUCKET_COLOR[u.bucket] || OVL_BUCKET_COLOR['ingen-data'];
     const typeLabel = u.isWastewater ? 'Kloak' : 'Regnvand';
     const riskPct = u.risk != null ? Math.round(u.risk * 100) + '%' : 'ingen data';
-    L.circleMarker([u.lat, u.lng], {
+    const marker = L.circleMarker([u.lat, u.lng], {
       radius: 4, fillColor: color, color: 'rgba(255,255,255,.4)', weight: 1, fillOpacity: 0.85,
     }).bindTooltip(
       `<strong>🚰 ${escHtml(u.navn)}</strong><br>${escHtml(typeLabel)} · ${escHtml(OVL_BUCKET_LABEL[u.bucket] || u.bucket)} (${riskPct})`,
       { sticky: true }
     ).addTo(ovlUdloebLayer);
+    // NYT (bruger-ønske 2026-08-19): klik åbner det fulde detaljepanel —
+    // samme information som badegæster ser på dkvand.dk's hovedkort.
+    marker.on('click', () => openOvlUdlobPanel(u));
 
     // NYT: to-trins varselsring (gul/rød) — hovedkortets tilsvarende ring
     // (dansk-overloeb-kort.html) findes KUN for rød (foreRisk>.55), ingen
     // gul tærskel findes der i dag. Samme L.circleMarker-mønster
     // (fillOpacity:0, dashArray), blot med to tærskler i stedet for én.
+    // Lagt i sit EGET lag (ovlRingLayer), ikke ovlUdloebLayer, så
+    // kortvælgeren kan skjule ringene uafhængigt af selve prikkerne.
     if (u.bucket === 'gul' || u.bucket === 'roed') {
       L.circleMarker([u.lat, u.lng], {
         radius: 12, fillOpacity: 0, weight: 2, dashArray: '4,4',
         color: u.bucket === 'roed' ? '#ff6040' : '#f0c040',
-      }).addTo(ovlUdloebLayer);
+      }).addTo(ovlRingLayer);
     }
   }
 
@@ -748,6 +863,122 @@ function renderOverloeb(data) {
       `;
     }).join('');
   }
+}
+
+// ── Udløbs-detaljepanel (bruger-ønske 2026-08-19) ───────────────────────────
+// "Man skal kunne klikke på hvert enkelt overløb og få den fulde information
+// om overløbet - den samme som i vises til badegæsterne i dkvand." — portet
+// visuelt sprog fra dansk-overloeb-kort.html's showUdlobPanel(), men egen,
+// simplere markup (fast bundpanel, ikke en fuldskærms-overlay). Bevidst
+// UDEN "Andre udløb der påvirker denne lokation" (kræver det fulde
+// 21.556-punkts landsdækkende opslagsindeks) og vandtemperatur (ikke
+// plumbet til denne server-cache) — se planens afgrænsning.
+function ovlBarRow(label, risk) {
+  const bucket = ovlRiskBucket(risk);
+  const color = OVL_BUCKET_COLOR[bucket];
+  const pct = risk != null ? Math.round(risk * 100) : null;
+  return `
+    <div class="ovl-panel-bar-row">
+      <span class="ovl-panel-bar-label">${escHtml(label)}</span>
+      <span class="ovl-panel-bar-track"><span class="ovl-panel-bar-fill" style="width:${pct ?? 0}%;background:${color}"></span></span>
+      <span class="ovl-panel-bar-pct">${pct != null ? pct + '%' : '—'}</span>
+    </div>`;
+}
+
+function openOvlUdlobPanel(u) {
+  const panel = document.getElementById('ovl-udlob-panel');
+  const sheet = document.getElementById('ovl-panel-sheet');
+  if (!panel || !sheet) return;
+  const typeLabel = u.isWastewater ? 'Kloak' : 'Regnvand';
+  const qualityLabel = OVL_DATA_QUALITY_LABEL[u.dataQuality] ?? 'Ukendt';
+  const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(u.lat)},${encodeURIComponent(u.lng)}`;
+  const literTekst = u.meanVolumePerEvent != null
+    ? `${Math.round(u.meanVolumePerEvent * 1000).toLocaleString('da-DK')} L/hændelse`
+    : 'Ukendt';
+  sheet.innerHTML = `
+    <div class="ovl-panel-top">
+      <div>
+        <div class="ovl-panel-title">🚰 ${escHtml(u.navn)}</div>
+        <div class="ovl-panel-sub">${escHtml(typeLabel)} · PULS-udløb</div>
+      </div>
+      <button type="button" class="ovl-panel-close" onclick="closeOvlUdlobPanel()">✕</button>
+    </div>
+    <div class="ovl-panel-bars">
+      ${ovlBarRow('Nu', u.riskNu)}
+      ${ovlBarRow('24h prognose', u.foreRisk24h)}
+      ${ovlBarRow('72h prognose', u.foreRisk72h)}
+    </div>
+    <div class="ovl-panel-chips">
+      <span class="ovl-alert-chip risk-${ovlRiskBucket(u.viralScore)}">Viral ${u.viralScore != null ? Math.round(u.viralScore * 100) + '%' : '—'}</span>
+      <span class="ovl-alert-chip risk-${ovlRiskBucket(u.algaeScore)}">Alger ${u.algaeScore != null ? Math.round(u.algaeScore * 100) + '%' : '—'}</span>
+    </div>
+    <div class="ovl-panel-stamdata">
+      <div>📍 <a href="${mapsUrl}" target="_blank" rel="noopener">Se på Google Maps</a></div>
+      <div>💧 Recipient: ${escHtml(u.waterArea || 'Ukendt')}</div>
+      <div>📊 Datakvalitet: ${escHtml(qualityLabel)}</div>
+      <div>🪣 Gennemsnitlig udledning: ${literTekst}</div>
+    </div>
+    <div class="ovl-panel-rain-title">Nedbør — seneste 7 dage</div>
+    <div id="ovl-panel-rain">Indlæser…</div>
+  `;
+  panel.classList.add('open');
+  loadOvlRainChart(u.weatherKey);
+}
+
+function closeOvlUdlobPanel() {
+  document.getElementById('ovl-udlob-panel')?.classList.remove('open');
+}
+
+// NYT — genbruger det eksisterende, OFFENTLIGE GET /api/weather/weekly
+// (samme rute dansk-overloeb-kort.html's egen udløbspanel bruger), ingen ny
+// server-rute nødvendig. weatherKey er allerede beregnet server-side (se
+// server.js's riskModel.cellKey(pt.lat,pt.lng) i allPointRisks).
+async function loadOvlRainChart(weatherKey) {
+  const el = document.getElementById('ovl-panel-rain');
+  if (!el) return;
+  if (!weatherKey) { el.innerHTML = '<div class="trend-empty">Ingen vejrdata for denne lokation</div>'; return; }
+  try {
+    const resp = await fetch(`/api/weather/weekly?key=${encodeURIComponent(weatherKey)}`, { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) { el.innerHTML = '<div class="trend-empty">Kunne ikke hente nedbørsdata</div>'; return; }
+    renderOvlRainChart('ovl-panel-rain', data.hourlyWeek || []);
+  } catch (e) {
+    el.innerHTML = '<div class="trend-empty">Kunne ikke hente nedbørsdata</div>';
+  }
+}
+
+// NYT — kompakt 7-dages søjlegraf (timetal fra hourlyWeek summeret pr.
+// døgn), samme lette SVG-teknik som renderVarselBarChart() men bevidst
+// ikke genbrugt direkte — enkeltfarvet mm-graf er semantisk noget andet
+// end den to-farvede gul/rød-varselsstak.
+function renderOvlRainChart(containerId, hourlyWeek) {
+  const wrap = document.getElementById(containerId);
+  if (!wrap) return;
+  if (!hourlyWeek || hourlyWeek.length === 0) {
+    wrap.innerHTML = '<div class="trend-empty">Ingen nedbørsdata</div>';
+    return;
+  }
+  const days = [];
+  for (let i = 0; i < hourlyWeek.length; i += 24) {
+    days.push(hourlyWeek.slice(i, i + 24).reduce((a, b) => a + (b || 0), 0));
+  }
+  const W = 300, H = 80, padB = 14;
+  const vMax = Math.max(1, ...days);
+  const slotW = W / days.length;
+  const barW = Math.max(1, slotW - 2);
+  const bars = days.map((v, i) => {
+    const h = (v / vMax) * (H - padB);
+    const x = i * slotW + 1;
+    const y = H - padB - h;
+    return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" fill="#4fb8d6"><title>${v.toFixed(1)} mm</title></rect>`;
+  }).join('');
+  wrap.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:80px" role="img" aria-label="Nedbør seneste 7 dage">
+      ${bars}
+      <text x="0" y="${H}" font-size="8" fill="#9fb0bb">−7d</text>
+      <text x="${W}" y="${H}" font-size="8" fill="#9fb0bb" text-anchor="end">i dag</text>
+    </svg>
+  `;
 }
 
 // NYT (bruger-krav: "live med en socketforbindelse ... automatisk

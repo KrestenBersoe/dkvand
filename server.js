@@ -2713,6 +2713,27 @@ async function _evaluatePushNotificationsInner(testThresholds) {
       // kommune-scope og plotte punkterne direkte fra denne allerede
       // cachede liste, uden selv at skulle genindlæse loadPulsPointsFull().
       lat: pt.lat, lng: pt.lng, municipality: pt.municipality, isWastewater: pt.isWastewater, name: pt.name,
+      // NYT (Kommune Dashboard-udvidelse, udløbs-detaljepanel) — waterArea/
+      // dataQuality til stamdata-visning, weatherKey (samme 0,25°-gitter-
+      // celle som resten af appen, se riskModel.cellKey()) så klienten kan
+      // hente den offentlige 7-dages nedbørsgraf (GET /api/weather/weekly)
+      // uden selv at skulle genimplementere cellKey()-beregningen en tredje
+      // gang (server.js/dansk-overloeb-kort.html har den allerede hver for sig).
+      waterArea: pt.waterArea, dataQuality: pt.dataQuality, weatherKey: riskModel.cellKey(pt.lat, pt.lng),
+      // RETTET: forecastMM/todayMM manglede her fra sidste feature —
+      // overloeb-status.js's udloeb[].forecastMM/todayMM (vist i "Udløb med
+      // aktive varsler"-listen) læste dermed altid `pt.forecastMM`/`pt.
+      // todayMM` som undefined→null, og viste stille "0.0 mm" for begge felter
+      // uanset faktisk nedbør. Begge er allerede i scope i denne løkke (`w.
+      // forecastMM`/`w.todayMM`, se riskInput ovenfor).
+      forecastMM, todayMM,
+      // RETTET: meanVolumePerEvent manglede her fra sidste feature —
+      // /admin/api/overloeb-prioriteret's "størst estimeret udledning"-
+      // sortering slog altid op i denne (`riskScoresCache.points`), fandt
+      // undefined, og satte estimeretLiterTotal:null for ALLE udløb — den
+      // sorteringsmulighed var derfor reelt ikke-funktionel. pt.
+      // meanVolumePerEvent er allerede i scope (bruges i riskInput ovenfor).
+      meanVolumePerEvent: pt.meanVolumePerEvent,
     });
 
     if ((foreRisk || 0) > minRisk) {
