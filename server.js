@@ -4018,15 +4018,31 @@ async function enqueuePushNotifications(warnPoints, pointRisks, bypassDedup = fa
           // (se isForecast nedenfor), blot i prognose-halvdelen af
           // signalet, som den daværende rettelse ikke dækkede, fordi
           // bv.forecast dengang ikke fandtes endnu.
-          if (bv.forecast != null) { forecastRisk = bv.forecast; scopedForecast = true; }
+          //
+          // RETTET (bruger-rapporteret — Saltbæk Badebro: push med "(prognose)"
+          // og markant risiko, men badestedets EGEN "⚡ 24h prognose"-bjælke
+          // viste 0% ved opslag): faldt tidligere tilbage til den brede,
+          // urelaterede 15 km-boks blot fordi bv.forecast var null — men det
+          // sker IKKE kun ved et helt umatchet badested (source:'ingen', se
+          // fallback-kommentaren nedenfor), også ved et BEKRÆFTET sø-/
+          // kystvand-match, hvis dets egne matchede udløb midlertidigt mangler
+          // vejrdata i netop denne kørsel (se _evaluatePushNotificationsInner()'s
+          // cellMissing-gren — pt.foreRisk sættes da aldrig). Et bekræftet
+          // match uden forecast-data skal her behandles som 0 — PRÆCIS samme
+          // `?? 0`-koercion som badevandspanelets egen prognose-bjælke bruger
+          // (se dansk-overloeb-kort.html's showBadevandPanel()) — i stedet for
+          // at falde tilbage til et potentielt helt urelateret punkts prognose.
+          const isConfirmedMatch = bv.source !== 'ingen' && bv.source !== 'server-utilgaengelig';
+          if (bv.forecast != null || isConfirmedMatch) { forecastRisk = bv.forecast ?? 0; scopedForecast = true; }
         }
       }
       // Fallback KUN hvis badestedet ikke har noget cascade-match overhovedet
-      // (source:'ingen' — intet bekræftet sø-/kystvand fundet) — her findes
-      // intet scopet bv.forecast at falde tilbage på, så den brede,
-      // uretningsbestemte 15 km-radius-liste er stadig bedre end intet
-      // signal. Respekterer samme spildevandsfilter som før (se pointRisks'
-      // isWastewater, sat i _evaluatePushNotificationsInner()).
+      // (source:'ingen' — intet bekræftet sø-/kystvand fundet, ELLER coordIndex-
+      // opslaget ovenfor slet ikke fandt nogen bv) — her findes intet scopet
+      // bv.forecast at falde tilbage på, så den brede, uretningsbestemte
+      // 15 km-radius-liste er stadig bedre end intet signal. Respekterer
+      // samme spildevandsfilter som før (se pointRisks' isWastewater, sat i
+      // _evaluatePushNotificationsInner()).
       if (!scopedForecast) {
         for (const id of (group.pulsIds || [])) {
           const pr = pointRisks.get(String(id));
