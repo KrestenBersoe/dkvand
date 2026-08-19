@@ -45,15 +45,16 @@
     grid-template-columns: repeat(3, 1fr);
     /* RETTET (bruger-ønske — den samlede risiko er det vigtigste på
        skiltet): headeren får nu en større andel af den lodrette plads end
-       de øvrige rækker (1.5fr mod 1fr), så dens større typografi (se
-       #banner nedenfor) har albuerum uden at virke sammenpresset.
+       de øvrige rækker (2.2fr mod 1fr — var 1.5fr, hævet igen for at give
+       den nu FORDOBLEDE risikostatus-skrift, se #banner .label nedenfor,
+       plads uden at klemmes).
        RETTET (bruger-ønske — nedbørselementet skal være i fuld bredde):
        nedbørsrækken fik samtidig lidt mere højde (1.6fr) — ved fuld bredde
        (se grid-template-areas nedenfor) ville en 1fr-række ellers efterlade
        tomme margener i siderne, da grafens faste højde/bredde-forhold
        (bevidst bevaret, se buildWeeklyChart()) ikke ville nå at fylde den
        nu meget bredere kolonne. */
-    grid-template-rows: 1.5fr 1fr 1fr 1.6fr 1fr;
+    grid-template-rows: 2.2fr 1fr 1fr 1.6fr 1fr;
     grid-template-areas:
       "banner banner banner"
       "bact   viral  algae"
@@ -63,33 +64,36 @@
     gap: 1.1vh 1vw;
   }
 
+  /* RETTET (bruger-ønske — risikostatus øverst): brand/lokation får et
+     eksplicit `order` (se #banner .label/.pct for de to første pladser),
+     så rækkefølgen er robust uafhængig af deres faktiske DOM-rækkefølge. */
   .brand {
     font-family: 'Courier New', monospace; font-size: .9vw; letter-spacing: .13em;
-    text-transform: uppercase; color: #cdeaf2; font-weight: 700;
+    text-transform: uppercase; color: #cdeaf2; font-weight: 700; order: 1;
   }
-  .location { font-size: 1.5vw; font-weight: 700; line-height: 1.1; margin-top: .2vh; opacity: .92; }
+  .location { font-size: 1.5vw; font-weight: 700; line-height: 1.1; margin-top: .2vh; opacity: .92; order: 0; }
 
   /* ── Samlet risiko-banner ─────────────────────────────────────────────── */
-  /* RETTET (bruger-ønske — headertekst skal være centreret, og selve
-     risikostatussen skal fremstå væsentligt større end lokation/brand):
-     omlagt fra en to-kolonne venstre/højre-opdeling til én centreret,
-     lodret stak — brand (mindst) → lokation → risikostatus (klart
-     dominerende, se .label nedenfor) → procent. */
+  /* RETTET (bruger-ønske — headertekst centreret, risikostatus øverst og
+     væsentligt større end lokation/brand): centreret, lodret stak —
+     risikostatus (klart dominerende, se .label nedenfor, ØVERST) →
+     procent → lokation → brand (mindst, nederst). Rækkefølgen er bevidst
+     vendt om ift. den forrige udgave (brand→lokation→status→pct) efter
+     eksplicit bruger-ønske om at have selve risikovurderingen øverst. */
   #banner {
     grid-area: banner;
-    border-radius: 1.4vh; padding: 1vh 2vw;
+    border-radius: 1.4vh; padding: .8vh 2vw;
     background-color: #1a6faf; transition: background-color .6s;
     box-shadow: 0 .5vh 1.6vh rgba(0,0,0,.18);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
-    text-align: center; gap: .4vh;
+    text-align: center; gap: .3vh;
     min-height: 0;
   }
-  /* RETTET (bruger-ønske — "samlet risiko skal være væsentlig større
-     skrifttype end lokation og National Badevandsvarsel"): label hævet
-     markant (2.8vw→4.4vw) — næsten 3× brandets størrelse og knap 3×
-     lokationens, klart det dominerende element i headeren. */
-  #banner .label { font-size: 4.4vw; font-weight: 800; line-height: 1.05; margin-top: .1vh; }
-  #banner .pct { font-size: 1.4vw; opacity: .85; margin-top: .1vh; }
+  /* RETTET (bruger-ønske — "risikovurderingen dobbelt op i størrelse"):
+     label FORDOBLET (4.4vw→8.8vw) — se #wrap's grid-template-rows for den
+     tilsvarende udvidede rækkehøjde, der giver den plads uden at klemmes. */
+  #banner .label { font-size: 8.8vw; font-weight: 800; line-height: 1; order: -2; }
+  #banner .pct { font-size: 1.4vw; opacity: .85; order: -1; }
 
   /* ── Datakort (fælles) ────────────────────────────────────────────────── */
   .card {
@@ -284,6 +288,33 @@ function setBar(barId, pctId, hasMatch, risk) {
   if (pctEl) { pctEl.textContent = `${pct}%`; pctEl.style.color = color; }
 }
 
+// NYT — automatisk skrifttilpasning af risikostatussen: label-teksten er
+// enten en kort, fast streng ('Moderat risiko' m.fl., se riskInfo()) ELLER
+// en FRIT REDIGERBAR kommunal varselsbesked (entry.overrideInfo.message,
+// se classifyBadestedSign() og badested-overrides.js) — ubegrænset i
+// længde. Den faste 8.8vw-størrelse (se #banner .label) er tunet til de
+// korte standardstrenge; en lang kommunal besked ('Kommunalt varsel:
+// badning frarådet på grund af høj E. coli-koncentration efter kraftig
+// regn' e.l.) ville ellers ombrydes til flere linjer og vælte ud af
+// headerens faste rækkehøjde, ind over panelrækken nedenfor. Formindsker
+// derfor label-skriften trinvist, indtil hele banneret (inkl. label, pct,
+// lokation, brand) rent faktisk kan være i sin tildelte plads — ned til et
+// gulv (2vw), så teksten aldrig bliver ulæselig lille ved en ekstremt lang
+// besked.
+function fitBannerLabel() {
+  const el = document.getElementById('banner-label');
+  const banner = document.getElementById('banner');
+  if (!el || !banner) return;
+  const MAX_VW = 8.8, MIN_VW = 2, STEP = 0.94;
+  let vw = MAX_VW;
+  el.style.fontSize = vw + 'vw';
+  let guard = 0;
+  while (banner.scrollHeight > banner.clientHeight && vw > MIN_VW && guard++ < 40) {
+    vw *= STEP;
+    el.style.fontSize = vw + 'vw';
+  }
+}
+
 async function loadRisk() {
   try {
     const resp = await fetch('/api/badevand-risk', { cache: 'no-store' });
@@ -294,6 +325,7 @@ async function loadRisk() {
     document.getElementById('banner').style.backgroundColor = info.color;
     document.getElementById('banner-label').textContent = info.label;
     document.getElementById('banner-pct').textContent = info.pct != null ? `${info.pct}%` : '';
+    fitBannerLabel();
 
     // Samme hasMatch-regel som showBadevandPanel(): 'ingen'/'server-
     // utilgaengelig' er reelt datamangel, alle andre kilder (inkl.
