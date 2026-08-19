@@ -1686,7 +1686,12 @@ app.get('/skilt/:slug', (req, res) => {
     if (!info) {
       return res.status(404).type('text/plain').send('Badested ikke fundet.');
     }
-    const skiltJson = JSON.stringify({ badestedId: info.id, navn: info.navn, slug: req.params.slug });
+    // UDVIDET (bruger-ønske 2026-08-19 — skiltet skal vise opdelt risiko,
+    // temperatur, vind/strøm og nedbørsgraf, ikke kun samlet risiko): lat/lng
+    // medbragt her, så klienten selv kan slå vejr (GET /api/weather/weekly)
+    // og strøm (GET /api/current-at) op for PRÆCIS badestedets koordinat —
+    // samme mønster som badested-panelets egen showBadevandPanel().
+    const skiltJson = JSON.stringify({ badestedId: info.id, navn: info.navn, slug: req.params.slug, lat: info.lat, lng: info.lng });
     const html = fs.readFileSync(path.join(STATIC_DIR, 'badested-skilt.html'), 'utf8')
       .replace('%%SKILT_JSON%%', skiltJson);
     res.set('Cache-Control', 'no-store');
@@ -4582,6 +4587,22 @@ app.get('/api/currents', async (req, res) => {
   // konstanten direkte, så der kun er ét sted at holde synkroniseret
   // fremover.
   res.json({ ts: currentsCache.ts, ageMinutes, stale: (Date.now() - currentsCache.ts) > CURRENTS_TTL, points: out });
+});
+
+// ── GET /api/current-at?lat=&lng= — strøm for ÉT punkt ───────────────────────
+// NYT (bruger-ønske 2026-08-19 — det live digitale skilt, se GET /skilt/:slug):
+// et badested-skilt kører ubevogtet i dagevis og skal IKKE hente den fulde
+// ~1.500-punkts strøm-grid (GET /api/currents) bare for ét enkelt opslag —
+// tynd server-side wrapper om getCurrentAtServer()/currentsCache.grid,
+// PRÆCIS samme opslagslogik som klientens getCurrentAt() allerede bruger.
+app.get('/api/current-at', async (req, res) => {
+  const lat = parseFloat(req.query.lat);
+  const lng = parseFloat(req.query.lng);
+  if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'lat/lng required' });
+  const grid = await fetchCMEMSCurrents();
+  const c = grid ? getCurrentAtServer(lat, lng, grid) : null;
+  res.set('Cache-Control', 'public, max-age=1800');
+  res.json(c ? { speed: c.speed, dir: c.dir, temp: c.temp } : null);
 });
 
 // ── GET /api/debug additions ──────────────────────────────────────────────────
