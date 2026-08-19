@@ -43,33 +43,45 @@
     height: 100vh; width: 100vw; padding: 1.6vh 1.6vw;
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    grid-template-rows: repeat(5, 1fr);
+    /* RETTET (bruger-ønske — den samlede risiko er det vigtigste på
+       skiltet): headeren får nu en større andel af den lodrette plads end
+       de øvrige rækker (1.5fr mod 1fr), så dens større typografi (se
+       #banner nedenfor) har albuerum uden at virke sammenpresset.
+       RETTET (bruger-ønske — nedbørselementet skal være i fuld bredde):
+       nedbørsrækken fik samtidig lidt mere højde (1.6fr) — ved fuld bredde
+       (se grid-template-areas nedenfor) ville en 1fr-række ellers efterlade
+       tomme margener i siderne, da grafens faste højde/bredde-forhold
+       (bevidst bevaret, se buildWeeklyChart()) ikke ville nå at fylde den
+       nu meget bredere kolonne. */
+    grid-template-rows: 1.5fr 1fr 1fr 1.6fr 1fr;
     grid-template-areas:
       "banner banner banner"
       "bact   viral  algae"
       "fore   temp   wind"
-      "precip precip ."
+      "precip precip precip"
       "qr     qr     qr";
     gap: 1.1vh 1vw;
   }
 
   .brand {
-    font-family: 'Courier New', monospace; font-size: .85vw; letter-spacing: .13em;
+    font-family: 'Courier New', monospace; font-size: 1.1vw; letter-spacing: .13em;
     text-transform: uppercase; color: #7fd4e8; font-weight: 700;
   }
-  .location { font-size: 1.5vw; font-weight: 800; line-height: 1.1; margin-top: .2vh; }
+  .location { font-size: 2.1vw; font-weight: 800; line-height: 1.1; margin-top: .3vh; }
 
   /* ── Samlet risiko-banner ─────────────────────────────────────────────── */
   #banner {
     grid-area: banner;
-    border-radius: 1.4vh; padding: 1.1vh 1.6vw;
+    border-radius: 1.4vh; padding: 1.4vh 2vw;
     background-color: #1a6faf; transition: background-color .6s;
     box-shadow: 0 .5vh 1.6vh rgba(0,0,0,.18);
     display: flex; align-items: center; justify-content: space-between; gap: 2vw;
     min-height: 0;
   }
-  #banner .label { font-size: 1.8vw; font-weight: 800; line-height: 1.1; }
-  #banner .pct { font-size: 1.05vw; opacity: .85; }
+  /* RETTET (bruger-ønske — headeren skal fremstå tydeligt vigtigst): label/
+     pct hævet markant (1.8vw→2.8vw, 1.05vw→1.5vw). */
+  #banner .label { font-size: 2.8vw; font-weight: 800; line-height: 1.1; }
+  #banner .pct { font-size: 1.5vw; opacity: .85; }
 
   /* ── Datakort (fælles) ────────────────────────────────────────────────── */
   .card {
@@ -106,7 +118,7 @@
 
   #card-precip svg { width: 100%; height: 100%; display: block; }
   #card-precip .card-title { margin-bottom: 0; }
-  #precip-body { flex: 1; min-height: 0; margin-top: .6vh; }
+  #precip-body { flex: 1; min-height: 0; margin-top: 1.2vh; }
 
   /* ── QR-bjælke (bund, fuld bredde, samme højde som header) ───────────────
      RETTET (bruger-ønske — layoutrettelse): QR-koden sad tidligere i sin
@@ -123,13 +135,16 @@
     min-height: 0;
   }
   #qr-bar .qr-left { display: flex; align-items: center; gap: 1.2vw; min-width: 0; height: 100%; }
+  /* RETTET (bruger-ønske — selve QR-koden er fin i størrelsen, kun
+     TEKSTEN skal være tydeligere): img uændret (height:100%), kun
+     qr-title/qr-caption/updated/err hævet (1.05vw→1.6vw osv.). */
   #qr-bar img { height: 100%; max-height: 100%; width: auto; aspect-ratio: 1 / 1; background: #fff; border-radius: .6vh; display: block; flex-shrink: 0; }
   #qr-bar .qr-text { text-align: left; min-width: 0; }
-  #qr-bar .qr-title { font-size: 1.05vw; font-weight: 800; color: #124f68; line-height: 1.25; }
-  #qr-bar .qr-caption { font-size: .8vw; color: #5a6b78; margin-top: .2vh; }
+  #qr-bar .qr-title { font-size: 1.6vw; font-weight: 800; color: #124f68; line-height: 1.3; }
+  #qr-bar .qr-caption { font-size: 1.15vw; color: #5a6b78; margin-top: .4vh; }
   #qr-bar .qr-right { text-align: right; flex-shrink: 0; }
-  #qr-bar #updated { font-size: .85vw; color: #5a6b78; }
-  #qr-bar #err { font-size: .85vw; color: #c84b1f; }
+  #qr-bar #updated { font-size: 1.15vw; color: #5a6b78; }
+  #qr-bar #err { font-size: 1.15vw; color: #c84b1f; }
 </style>
 </head>
 <body>
@@ -319,13 +334,15 @@ function buildWeeklyChart(weekObs, fore, totalMM) {
   const fore24 = (fore    || []).slice(0, 24);
   const all    = [...obs, ...fore24];
   const maxMM  = Math.max(...all, 0.5);
-  // RETTET (bruger-ønske — layoutrettelse): nedbørskortet er nu en almindelig
-  // 1fr-panelrække (se #wrap's filhoved), samme højde som de øvrige paneler
-  // — IKKE længere en stor, strakt række ved siden af en fuldhøj QR-kolonne.
-  // H sat ned til 70 (var 110) for at matche den nu langt mere begrænsede
-  // pladsdel; SVG'ens preserveAspectRatio (meet, standard) skalerer og
-  // centrerer stadig uden forvrængning uanset den præcise værdi her.
-  const W = 320, H = 70;
+  // RETTET (bruger-ønske — nedbørselementet skal fylde fuld bredde): W øget
+  // til 480 (var 320) — kortet spænder nu hele skiltets bredde (se #wrap's
+  // grid-template-areas), et bredt/kort formatforhold, hvor det oprindelige
+  // 320:84-forhold ellers ville efterlade store tomme margener i siderne
+  // (SVG'ens preserveAspectRatio, meet, skalerer proportionalt og ville
+  // ellers blive højde-begrænset længe før bredden var udnyttet). H
+  // uændret (70) — alle skrifttyper/streger er dimensioneret relativt
+  // hertil, se resten af funktionen.
+  const W = 480, H = 70;
   const total = Math.max(obs.length + fore24.length, 1);
   const barW  = W / total;
   const nowX  = (obs.length / total) * W;
