@@ -1419,6 +1419,58 @@ app.get('/admin/api/overloeb-prioriteret', tenantAdmin.requireTenantSession, asy
   }
 });
 
+// ── Overløb-fanen: kommune-scopet RBU Regn/Kloak (bruger-ønske 2026-08-19,
+// opfølgning: "Samme mulighed for at vælge regn og kloak RBUer") ───────────
+// vp3_rbu_slim.geojson er 5,6 MB / 21.375 landsdækkende punkter — hovedkortet
+// (dansk-overloeb-kort.html) henter og filtrerer den FULDE fil client-side,
+// acceptabelt for en borger der alligevel henter hele kortet, men urimeligt
+// for et kommune-scopet dashboard der kun skal vise en brøkdel. Filtreres
+// derfor HER, server-side, via features' egen `komm_navn`-egenskab (samme
+// felt hovedkortets RBU-tooltip allerede viser) — klienten modtager kun sin
+// egen kommunes punkter. Samme wastewater-klassificering (bgv_type) som
+// hovedkortets isRbuWastewater().
+const RBU_WASTEWATER_TYPES = new Set(['OS', 'OV', 'OF', 'OVI', 'OSI', 'OK', 'OKI']);
+let _rbuFeaturesCache = null;
+function loadRbuFeatures() {
+  if (_rbuFeaturesCache) return _rbuFeaturesCache;
+  const raw = fs.readFileSync(path.join(STATIC_DIR, 'vp3_rbu_slim.geojson'), 'utf8');
+  const geojson = JSON.parse(raw);
+  _rbuFeaturesCache = geojson.features || [];
+  return _rbuFeaturesCache;
+}
+
+app.get('/admin/api/overloeb-rbu', tenantAdmin.requireTenantSession, async (req, res) => {
+  try {
+    const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
+    if (!tenant) {
+      res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
+      return res.status(401).json({ error: 'Kommunen findes ikke længere — log ind igen.' });
+    }
+    const tenantKey = slugIndex.normalizeKommuneKey(tenant.name);
+    const features = loadRbuFeatures();
+    const rbu = [];
+    for (const f of features) {
+      const p = f.properties || {};
+      if (!p.komm_navn || slugIndex.normalizeKommuneKey(p.komm_navn) !== tenantKey) continue;
+      const coords = f.geometry?.coordinates;
+      if (!Array.isArray(coords) || coords.length < 2) continue;
+      rbu.push({
+        id: p.pkt_id ?? null,
+        navn: p.pkt_navn || null,
+        lat: coords[1], lng: coords[0],
+        isWastewater: RBU_WASTEWATER_TYPES.has(p.bgv_type),
+        vandomraade: p.vandomr_id || null,
+        tilstand: p.udl_va_sta || null,
+      });
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ rbu });
+  } catch (e) {
+    console.error('admin/api/overloeb-rbu: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente RBU-punkter lige nu.' });
+  }
+});
+
 // ── Overløb-fanen: iframe-indlejring (bruger-ønske 2026-08-19) ─────────────
 // Se tenant-admin.js's tenant_embed_tokens-kommentar for hele token-
 // designbegrundelsen (revokabel DB-token, ikke en stateless HMAC-signeret

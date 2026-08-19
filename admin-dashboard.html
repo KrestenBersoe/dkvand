@@ -450,6 +450,8 @@ function render() {
               <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-badesteder" onclick="toggleOvlLayer('badesteder')">🏖 Badesteder</button>
               <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-udloeb" onclick="toggleOvlLayer('udloeb')">📍 Udløbspunkter</button>
               <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-ringe" onclick="toggleOvlLayer('ringe')">⚠ Varselsringe</button>
+              <button type="button" class="ovl-layer-btn" id="ovl-layerbtn-rbuRegn" onclick="toggleOvlLayer('rbuRegn')">🔴 RBU Regn</button>
+              <button type="button" class="ovl-layer-btn" id="ovl-layerbtn-rbuKloak" onclick="toggleOvlLayer('rbuKloak')">🟤 RBU Kloak</button>
             </div>
           </div>
           <button type="button" onclick="toggleOvlFullscreen()" style="margin-left:auto">⛶ Fuld skærm</button>
@@ -714,12 +716,19 @@ function switchDashTab(tab) {
 // scoping/bucketing sker server-side; denne kode renderer udelukkende det
 // færdige resultat, samme server-autoritative princip som resten af appen.
 let ovlMap = null, ovlBadestedLayer = null, ovlUdloebLayer = null, ovlRingLayer = null;
+// NYT (bruger-ønske 2026-08-19 — "Samme mulighed for at vælge regn og
+// kloak RBUer") — to ekstra lag, hentet dovent (kun ved første synlig-
+// gørelse, se toggleOvlLayer()) fra den nye, kommune-scopede GET /admin/
+// api/overloeb-rbu (server-filtreret, se dens filhoved for hvorfor — den
+// rå vp3_rbu_slim.geojson er 5,6 MB landsdækkende).
+let ovlRbuRegnLayer = null, ovlRbuKloakLayer = null;
+let ovlRbuLoaded = false;
 let ovlHorizon = 'nu';
 let ovlEventSource = null;
 let ovlBoundsFitted = false;
-// NYT (bruger-ønske 2026-08-19, kortvælger) — hvilke af de tre lag der er
+// NYT (bruger-ønske 2026-08-19, kortvælger) — hvilke af de fem lag der er
 // synlige lige nu, styret af flyout-panelet nedenfor.
-let ovlLayerVisible = { badesteder: true, udloeb: true, ringe: true };
+let ovlLayerVisible = { badesteder: true, udloeb: true, ringe: true, rbuRegn: false, rbuKloak: false };
 // NYT (klik-detaljepanel) — sidste hentede udløbsliste, opslået pr. id når
 // en markør klikkes, undgår en ekstra netværkstur pr. klik.
 let ovlUdloebById = new Map();
@@ -746,6 +755,38 @@ const OVL_DATA_QUALITY_LABEL = { 0: 'Reelle data', 1: 'Verificeret nul', 2: 'Est
 const OVL_BUCKET_COLOR = { roed: '#c84b1f', gul: '#d4a020', groen: '#2d7d4f', lukket: '#3a3a3a', 'ingen-data': '#1a6faf' };
 const OVL_BUCKET_LABEL = { roed: 'Rød', gul: 'Gul', groen: 'Grøn', lukket: 'Lukket', 'ingen-data': 'Ingen data' };
 
+// RETTET (bruger-rapporteret — "lokationsprikkerne skal have samme farver
+// som fra dkvand kortet til borgerne") — badested-prikkerne farves allerede
+// af OVL_BUCKET_COLOR ovenfor, SAMME diskrete tre-trins farve som
+// hovedkortets riskStyle() bruger til badevandsmarkører (r>=.6 rød,
+// r>=.2 gul, ellers grøn — bekræftet identisk). Men UDLØBS-prikkerne på
+// hovedkortet farves IKKE sådan — de bruger riskColor(r), en KONTINUERLIG
+// grøn→gul→rød-lerp (dansk-overloeb-kort.html:4518), ikke tre faste
+// bucket-farver. Denne prik-funktion var derfor den reelle uoverensstemmelse
+// — porteret 1:1 (REQUIRED-SYNCED duplikat, samme princip som
+// computeIntensityFactor()/riskBucket() andre steder i repoet) i stedet for
+// blot at genbruge OVL_BUCKET_COLOR til udløbspunkter.
+function ovlRiskColor(r) {
+  if (r == null) return OVL_BUCKET_COLOR['ingen-data'];
+  if (r < .2) return `rgba(45,125,79,${0.5 + r})`;
+  if (r < .6) {
+    const t = (r - .2) / .4;
+    return `rgba(${Math.round(45 + t * (212 - 45))},${Math.round(125 + t * (160 - 125))},${Math.round(79 + t * (32 - 79))},0.85)`;
+  }
+  const t = (r - .6) / .4;
+  return `rgba(${Math.round(212 + t * (200 - 212))},${Math.round(160 - t * 160)},${Math.round(32 - t * 32)},0.9)`;
+}
+
+// NYT (bruger-ønske 2026-08-19 — "Samme mulighed for at vælge regn og
+// kloak RBUer") — samme faste visningsfarver som hovedkortets
+// currentRbuStyle() bruger ved fuldt indzoomet (RBU_ZOOM_NEAR) visning;
+// kommune-kortet zoom-gradueres ikke (få hundrede punkter, ikke 21.375),
+// så kun "tæt"-udseendet er relevant her.
+const OVL_RBU_STYLE = {
+  wastewater: { fill: '#8b5a2b', stroke: '#4a2c14', label: 'Kloak' },
+  stormwater: { fill: '#c0392b', stroke: '#8b1a1a', label: 'Regn' },
+};
+
 // NYT: samme selv-hostede, kun-Danmark tileserver som dansk-overloeb-
 // kort.html allerede bruger (se dens filhoved for hvorfor: uautentificerede
 // tredjeparts-tile-CDN'er er gentagne gange blevet strammet uden varsel).
@@ -765,24 +806,72 @@ function ensureOvlMap() {
   // udløbsprikkerne (ovlUdloebLayer) og kunne derfor ikke skjules
   // uafhængigt af dem — udtrukket til sit eget lag.
   ovlRingLayer = L.layerGroup().addTo(ovlMap);
+  // NYT (RBU Regn/Kloak) — bevidst IKKE addTo(ovlMap) her, standard-
+  // synlighed er slukket (se ovlLayerVisible) og data hentes først dovent
+  // ved første tænding, se toggleOvlLayer().
+  ovlRbuRegnLayer = L.layerGroup();
+  ovlRbuKloakLayer = L.layerGroup();
 }
 
 // NYT (kortvælger, bruger-ønske 2026-08-19: "kortvælgeren fra dkvand gøres
-// tilgængelig i kommune kortet også") — let flyout, samme visuelle mønster
-// som hovedkortets #lag-btn/#lag-body (dansk-overloeb-kort.html), men
-// bevidst KUN de to lag kommune-kortet allerede har data for (badesteder/
-// udløbspunkter) plus varselsringene som eget lag — IKKE strøm/RBU/
-// kystvande/søer (se planens afgrænsning: markant dyrere landsdækkende
-// datasæt/live-hentninger, uden for "badesteder og overløbspunkter").
+// tilgængelig i kommune kortet også" + opfølgning "Samme mulighed for at
+// vælge regn og kloak RBUer") — let flyout, samme visuelle mønster som
+// hovedkortets #lag-btn/#lag-body (dansk-overloeb-kort.html). Badesteder/
+// udløbspunkter/varselsringe er allerede beregnet server-side for kommune-
+// kortet; RBU Regn/Kloak hentes dovent fra en NY, kommune-scopet rute (se
+// server.js's GET /admin/api/overloeb-rbu) — IKKE strøm/kystvande/søer
+// (stadig uden for "badesteder og overløbspunkter", se planens afgrænsning).
 function toggleOvlLagPanel() {
   document.getElementById('ovl-lag-body').classList.toggle('open');
 }
 
-function toggleOvlLayer(name) {
-  const layer = name === 'badesteder' ? ovlBadestedLayer : name === 'udloeb' ? ovlUdloebLayer : ovlRingLayer;
+const OVL_LAYER_BY_NAME = () => ({
+  badesteder: ovlBadestedLayer, udloeb: ovlUdloebLayer, ringe: ovlRingLayer,
+  rbuRegn: ovlRbuRegnLayer, rbuKloak: ovlRbuKloakLayer,
+});
+
+async function toggleOvlLayer(name) {
+  const btn = document.getElementById(`ovl-layerbtn-${name}`);
+  // NYT: RBU-lagene hentes først ved FØRSTE tænding af ét af dem (ikke ved
+  // sideindlæsning) — undgår at betale for et opslag, medmindre brugeren
+  // rent faktisk beder om det. Begge lag (Regn+Kloak) hentes/bygges samlet
+  // (ét API-kald), da de deler samme kilde.
+  if ((name === 'rbuRegn' || name === 'rbuKloak') && !ovlRbuLoaded) {
+    if (btn) { btn.disabled = true; btn.textContent = btn.textContent.replace(/^./, '⏳'); }
+    await loadOvlRbu();
+    if (btn) { btn.disabled = false; }
+  }
+  const layer = OVL_LAYER_BY_NAME()[name];
   ovlLayerVisible[name] = !ovlLayerVisible[name];
   if (ovlLayerVisible[name]) ovlMap.addLayer(layer); else ovlMap.removeLayer(layer);
-  document.getElementById(`ovl-layerbtn-${name}`).classList.toggle('active', ovlLayerVisible[name]);
+  document.getElementById(`ovl-layerbtn-${name}`)?.classList.toggle('active', ovlLayerVisible[name]);
+}
+
+// NYT — henter kommunens RBU-punkter ÉN gang (server-filtreret, se
+// server.js's GET /admin/api/overloeb-rbu), bygger begge lag (Regn/Kloak)
+// med samme faste farver som hovedkortets currentRbuStyle() bruger ved
+// fuldt indzoomet visning (se OVL_RBU_STYLE).
+async function loadOvlRbu() {
+  if (ovlRbuLoaded) return;
+  try {
+    const resp = await fetch('/admin/api/overloeb-rbu', { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) { console.warn('Kunne ikke hente RBU-punkter:', data.error); return; }
+    for (const p of (data.rbu || [])) {
+      if (p.lat == null || p.lng == null) continue;
+      const style = p.isWastewater ? OVL_RBU_STYLE.wastewater : OVL_RBU_STYLE.stormwater;
+      const targetLayer = p.isWastewater ? ovlRbuKloakLayer : ovlRbuRegnLayer;
+      L.circleMarker([p.lat, p.lng], {
+        radius: 5, fillColor: style.fill, color: style.stroke, weight: 2, fillOpacity: 0.75, opacity: 0.95,
+      }).bindTooltip(
+        `<strong>${escHtml(p.navn || 'RBU-punkt')}</strong><br>${escHtml(style.label)}${p.vandomraade ? ' · ' + escHtml(p.vandomraade) : ''}`,
+        { sticky: true }
+      ).addTo(targetLayer);
+    }
+    ovlRbuLoaded = true;
+  } catch (e) {
+    console.warn('Kunne ikke hente RBU-punkter:', e.message);
+  }
 }
 
 function setOverloebHorizon(h) {
@@ -837,7 +926,11 @@ function renderOverloeb(data) {
     if (u.lat == null || u.lng == null) continue;
     bounds.push([u.lat, u.lng]);
     ovlUdloebById.set(String(u.id), u);
-    const color = OVL_BUCKET_COLOR[u.bucket] || OVL_BUCKET_COLOR['ingen-data'];
+    // RETTET: farvedes tidligere med OVL_BUCKET_COLOR (samme diskrete
+    // tre-trins farve som badested-prikkerne) — hovedkortets udløbsprikker
+    // bruger derimod ovlRiskColor()'s kontinuerlige grøn→gul→rød-lerp, se
+    // dens filhoved.
+    const color = ovlRiskColor(u.risk);
     const typeLabel = u.isWastewater ? 'Kloak' : 'Regnvand';
     const riskPct = u.risk != null ? Math.round(u.risk * 100) + '%' : 'ingen data';
     const marker = L.circleMarker([u.lat, u.lng], {
