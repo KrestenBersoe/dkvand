@@ -615,6 +615,37 @@
     margin-bottom: .65rem;
   }
 
+  /* NYT (bruger-ønske 2026-08-20 — Historik-panelet, to donuts): mobil-
+     først lodret (donut over ren-tekst-forklaring), vandret side om side
+     fra samme 721px-grænse resten af appen skifter til desktop-layout ved
+     (se @media (max-width:720px) andetsteds i denne fil). Genbruges af
+     BÅDE dansk-overloeb-kort.html's eget badevandspanel og admin-
+     dashboard.html's badested-detaljepanel — se buildRiskDonutSvg()/
+     buildRiskLegendHtml()/renderBadestedHistorySummary() i JS. */
+  .bv-history-block {
+    flex: 1;
+    min-width: 150px;
+    text-align: center;
+  }
+  .bv-history-inner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: .5rem;
+  }
+  .bv-history-legend {
+    display: flex;
+    flex-direction: column;
+    gap: .25rem;
+    color: #1a2733;
+    font-size: .78rem;
+    text-align: center;
+  }
+  @media (min-width: 721px) {
+    .bv-history-inner { flex-direction: row; justify-content: center; gap: 1rem; }
+    .bv-history-legend { text-align: left; align-items: flex-start; }
+  }
+
   .bv-risk-row {
     display: flex;
     align-items: center;
@@ -9884,26 +9915,31 @@ function buildRiskDonutSvg(counts) {
     `</svg>`;
 }
 
-// NYT (bruger-ønske 2026-08-20) — chip-legenden under hver donut, genbruger
-// PRÆCIS samme .chip.risk-*-klasser som resten af panelet allerede bruger
-// (se fx algaeScore-chippen i buildBadevandFavCard()) — ingen ny CSS.
+// RETTET (bruger-ønske 2026-08-20): var oprindeligt farvede .chip.risk-*-
+// pilller (samme mønster som resten af panelet, se fx algaeScore-chippen i
+// buildBadevandFavCard()) — ændret efter eksplicit ønske til ren, sort
+// tekst uden farvet baggrund. Donut-ringen bærer selv farve/kategori,
+// legenden er nu bevidst rent tekstligt supplement, ikke en gentagelse.
 function buildRiskLegendHtml(counts) {
   const { lav = 0, moderat = 0, hoej = 0, ingenData = 0 } = counts || {};
   const rows = [
-    lav       > 0 ? `<span class="chip risk-low">Sikkert ${lav} ${lav === 1 ? 'dag' : 'dage'}</span>`                  : '',
-    moderat   > 0 ? `<span class="chip risk-medium">Moderat ${moderat} ${moderat === 1 ? 'dag' : 'dage'}</span>`       : '',
-    hoej      > 0 ? `<span class="chip risk-high">Høj risiko ${hoej} ${hoej === 1 ? 'dag' : 'dage'}</span>`            : '',
-    ingenData > 0 ? `<span class="chip risk-nodata">Ingen data ${ingenData} ${ingenData === 1 ? 'dag' : 'dage'}</span>` : '',
+    lav       > 0 ? `<div>Sikkert ${lav} ${lav === 1 ? 'dag' : 'dage'}</div>`                  : '',
+    moderat   > 0 ? `<div>Moderat ${moderat} ${moderat === 1 ? 'dag' : 'dage'}</div>`           : '',
+    hoej      > 0 ? `<div>Høj risiko ${hoej} ${hoej === 1 ? 'dag' : 'dage'}</div>`               : '',
+    ingenData > 0 ? `<div>Ingen data ${ingenData} ${ingenData === 1 ? 'dag' : 'dage'}</div>`     : '',
   ].filter(Boolean);
-  return `<div style="display:flex;flex-direction:column;gap:.3rem;margin-top:.5rem;align-items:center">${rows.join('')}</div>`;
+  return `<div class="bv-history-legend">${rows.join('')}</div>`;
 }
 
 // NYT (bruger-ønske 2026-08-20): henter GET /api/badested-history-summary/:id
 // (se server.js — to parallelle DB-opslag, 7/30 dage, mod badevand_daily_risk,
 // samme tabel som den ugentlige digest allerede læser fra) og tegner de to
-// donuts ("Sidste uge"/"Sidste måned") i #bv-history-summary, placeret under
-// nedbørspanelet. Fejler stille (samme mønster som renderBadestedExtras()) —
-// én manglende sektion skal aldrig vælte resten af panelet.
+// donuts ("Sidste 7 dage"/"Sidste 30 dage") i #bv-history-summary, placeret
+// under nedbørspanelet. RETTET (bruger-ønske): donut+legende ligger nu i
+// .bv-history-inner, som er lodret på mobil og vandret side om side fra
+// 721px (se CSS'en ved .bv-card-title). Fejler stille (samme mønster som
+// renderBadestedExtras()) — én manglende sektion skal aldrig vælte resten
+// af panelet.
 async function renderBadestedHistorySummary(p) {
   const wrap = document.getElementById('bv-history-summary');
   if (!wrap) return;
@@ -9918,18 +9954,17 @@ async function renderBadestedHistorySummary(p) {
     const { week, month } = await resp.json();
     const block = (title, counts) => {
       if (!counts || counts.daysFound === 0) {
-        return `<div style="flex:1;min-width:130px;text-align:center">
-          <div style="font-size:.75rem;font-weight:700;color:#5a6b78;margin-bottom:.5rem">${title}</div>
+        return `<div class="bv-history-block">
+          <div class="bv-card-title" style="margin-bottom:.5rem">${title}</div>
           <div style="font-size:.75rem;color:#7a8892;padding:1rem 0">Endnu ingen historik.</div>
         </div>`;
       }
-      return `<div style="flex:1;min-width:130px;text-align:center">
-        <div style="font-size:.75rem;font-weight:700;color:#5a6b78;margin-bottom:.5rem">${title}</div>
-        ${buildRiskDonutSvg(counts)}
-        ${buildRiskLegendHtml(counts)}
+      return `<div class="bv-history-block">
+        <div class="bv-card-title" style="margin-bottom:.5rem">${title}</div>
+        <div class="bv-history-inner">${buildRiskDonutSvg(counts)}${buildRiskLegendHtml(counts)}</div>
       </div>`;
     };
-    wrap.innerHTML = block('Sidste uge', week) + block('Sidste måned', month);
+    wrap.innerHTML = block('Sidste 7 dage', week) + block('Sidste 30 dage', month);
   } catch (e) {
     console.warn('renderBadestedHistorySummary fejl:', e.message);
     wrap.innerHTML = '<div style="flex:1;text-align:center;color:#5a6b78;font-size:.8rem;padding:1rem 0">Kunne ikke hente ugestatus lige nu.</div>';
@@ -11713,7 +11748,7 @@ document.addEventListener('visibilitychange', () => {
          buildRiskDonutSvg() i JS. Placeret UNDER nedbørspanelet, efter
          eksplicit ønske. -->
     <div class="bv-card">
-      <div class="bv-card-title">Ugestatus</div>
+      <div class="bv-card-title">Historik</div>
       <div id="bv-history-summary" style="display:flex;gap:1rem;flex-wrap:wrap">
         <div style="flex:1;min-width:130px;text-align:center;color:#5a6b78;font-size:.8rem;padding:1rem 0">Indlæser…</div>
       </div>

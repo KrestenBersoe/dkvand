@@ -107,11 +107,33 @@
   .stat-controls select option, .ov-field select option {
     background: var(--paper); color: var(--ink);
   }
-  .stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: .35rem 0; font-size: .86rem; }
+  .stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: .35rem 0; font-size: .86rem; cursor: pointer; }
   .stat-row + .stat-row { border-top: 1px solid var(--border); }
+  .stat-row:hover .stat-name { text-decoration: underline; }
   .stat-name { flex: 1; }
   .stat-nums { color: var(--ink-soft); font-size: .78rem; white-space: nowrap; margin-left: .8rem; }
   .stat-empty { color: var(--ink-soft); font-size: .85rem; }
+
+  /* NYT (bruger-ønske 2026-08-20) — historik-panelet (2 donuts) foldet ud
+     under en badested-række i Badested-statistik, se toggleBadestedHistory()
+     og buildRiskDonutSvg() i JS. Samme klassenavne/layout-logik som
+     dansk-overloeb-kort.html's badevandspanel (mobil-først lodret, vandret
+     side om side fra 721px), men egne farve-tokens (var(--ink) osv.) da
+     DETTE dashboard er mørkt tema, i modsætning til det offentlige kort.
+     ingenData-farven matcher OVL_BUCKET_COLOR['ingen-data'] (#1a6faf,
+     blå) — IKKE dansk-overloeb-kort.html's gråtone, for at følge DETTE
+     dashboards egen etablerede "ingen data"-farvekonvention. */
+  .stat-detail { display: none; padding: .8rem 0 .4rem; border-top: 1px solid var(--border); }
+  .stat-detail.open { display: block; }
+  .bv-history-summary { display: flex; gap: 1rem; flex-wrap: wrap; }
+  .bv-history-block { flex: 1; min-width: 130px; text-align: center; }
+  .bv-history-block-title { font-size: .72rem; font-weight: 700; color: var(--ink-soft); margin-bottom: .5rem; }
+  .bv-history-inner { display: flex; flex-direction: column; align-items: center; gap: .5rem; }
+  .bv-history-legend { display: flex; flex-direction: column; gap: .25rem; color: var(--ink); font-size: .78rem; text-align: center; }
+  @media (min-width: 721px) {
+    .bv-history-inner { flex-direction: row; justify-content: center; gap: 1rem; }
+    .bv-history-legend { text-align: left; align-items: flex-start; }
+  }
 
   /* NYT (Kommunepakke, modul 6) — Kommunalt Varsel */
   .ov-intro { color: var(--ink-soft); font-size: .82rem; margin-bottom: .9rem; line-height: 1.4; }
@@ -1467,6 +1489,102 @@ function onStatPeriodChange() {
   loadAlertStats();
 }
 
+// NYT (bruger-ønske 2026-08-20) — samme afhængighedsfri SVG-donut som
+// dansk-overloeb-kort.html's badested-detaljepanel (se dens filhoved for
+// den fulde begrundelse) — duplikeret HER (ikke delt via en fælles fil)
+// bevidst: to forskellige temaer (dette dashboard er mørkt, det offentlige
+// kort er lyst) og to forskellige "ingen data"-farvekonventioner
+// (OVL_BUCKET_COLOR['ingen-data'] = blå her, grå der) gjorde en fælles,
+// parameteriseret udgave mere kompleks end værd for ~40 linjer kode. Hold
+// tærskler/rækkefølge (lav→moderat→høj→ingenData) i sync med den anden,
+// hvis farverne nogensinde ændres.
+function buildRiskDonutSvg(counts) {
+  const { lav = 0, moderat = 0, hoej = 0, ingenData = 0 } = counts || {};
+  const total = lav + moderat + hoej + ingenData;
+  const size = 76, r = 30, cx = size / 2, cy = size / 2, strokeW = 11;
+  const circumference = 2 * Math.PI * r;
+  if (total === 0) {
+    return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="Ingen data endnu">` +
+      `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="${strokeW}"></circle></svg>`;
+  }
+  const segments = [
+    { n: lav,       color: '#2d7d4f' },
+    { n: moderat,   color: '#d4a020' },
+    { n: hoej,      color: '#c84b1f' },
+    { n: ingenData, color: '#1a6faf' },
+  ].filter(s => s.n > 0);
+  const gap = segments.length > 1 ? 2.5 : 0;
+  let offset = 0;
+  const strokes = segments.map(s => {
+    const len  = (s.n / total) * circumference;
+    const dash = Math.max(len - gap, 0);
+    const el = `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${s.color}" stroke-width="${strokeW}" ` +
+      `stroke-dasharray="${dash} ${circumference - dash}" stroke-dashoffset="${-offset}" ` +
+      `transform="rotate(-90 ${cx} ${cy})"></circle>`;
+    offset += len;
+    return el;
+  }).join('');
+  const daysWithData = lav + moderat + hoej;
+  return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" ` +
+    `aria-label="${lav} sikre dage, ${moderat} moderat risiko, ${hoej} høj risiko${ingenData ? ', ' + ingenData + ' uden data' : ''}">` +
+    strokes +
+    `<text x="${cx}" y="${cy + 1}" text-anchor="middle" dominant-baseline="middle" font-size="14" font-weight="800" fill="var(--ink)">${daysWithData}</text>` +
+    `<text x="${cx}" y="${cy + 12}" text-anchor="middle" font-size="6" fill="var(--ink-soft)">dage m. data</text>` +
+    `</svg>`;
+}
+
+// NYT (bruger-ønske 2026-08-20) — ren tekst, INGEN farvet baggrund (efter
+// eksplicit ønske, i modsætning til dansk-overloeb-kort.html's chips).
+function buildRiskLegendHtml(counts) {
+  const { lav = 0, moderat = 0, hoej = 0, ingenData = 0 } = counts || {};
+  const rows = [
+    lav       > 0 ? `<div>Sikkert ${lav} ${lav === 1 ? 'dag' : 'dage'}</div>`                  : '',
+    moderat   > 0 ? `<div>Moderat ${moderat} ${moderat === 1 ? 'dag' : 'dage'}</div>`           : '',
+    hoej      > 0 ? `<div>Høj risiko ${hoej} ${hoej === 1 ? 'dag' : 'dage'}</div>`               : '',
+    ingenData > 0 ? `<div>Ingen data ${ingenData} ${ingenData === 1 ? 'dag' : 'dage'}</div>`     : '',
+  ].filter(Boolean);
+  return `<div class="bv-history-legend">${rows.join('')}</div>`;
+}
+
+// NYT (bruger-ønske 2026-08-20) — folder historik-panelet ud/sammen for
+// ÉN badested-række. Henter kun ved FØRSTE åbning (se _badestedHistoryCache),
+// samme genbrugte offentlige endpoint (GET /api/badested-history-summary/:id)
+// som badested-detaljesiden allerede kalder.
+const _badestedHistoryCache = new Map(); // badestedId -> { week, month }
+async function toggleBadestedHistory(badestedId) {
+  const el = document.getElementById(`stat-detail-${badestedId}`);
+  if (!el) return;
+  const isOpen = el.classList.toggle('open');
+  if (!isOpen || el.dataset.loaded === '1') return;
+
+  el.innerHTML = '<div style="color:var(--ink-soft);font-size:.8rem;padding:.4rem 0">Indlæser…</div>';
+  try {
+    let summary = _badestedHistoryCache.get(badestedId);
+    if (!summary) {
+      const resp = await fetch(`/api/badested-history-summary/${encodeURIComponent(badestedId)}`, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      summary = await resp.json();
+      _badestedHistoryCache.set(badestedId, summary);
+    }
+    const block = (title, counts) => {
+      if (!counts || counts.daysFound === 0) {
+        return `<div class="bv-history-block">
+          <div class="bv-history-block-title">${title}</div>
+          <div style="font-size:.75rem;color:var(--ink-soft);padding:.6rem 0">Endnu ingen historik.</div>
+        </div>`;
+      }
+      return `<div class="bv-history-block">
+        <div class="bv-history-block-title">${title}</div>
+        <div class="bv-history-inner">${buildRiskDonutSvg(counts)}${buildRiskLegendHtml(counts)}</div>
+      </div>`;
+    };
+    el.innerHTML = `<div class="bv-history-summary">${block('Sidste 7 dage', summary.week)}${block('Sidste 30 dage', summary.month)}</div>`;
+    el.dataset.loaded = '1';
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--ink-soft);font-size:.8rem;padding:.4rem 0">Kunne ikke hente historik lige nu.</div>';
+  }
+}
+
 async function loadAlertStats() {
   const statEl = document.getElementById('stat-content');
   if (!statEl) return;
@@ -1490,11 +1608,15 @@ async function loadAlertStats() {
       statEl.innerHTML = '<div class="stat-empty">Ingen badesteder fundet.</div>';
       return;
     }
+    // NYT (bruger-ønske 2026-08-20) — hver række er nu klikbar og folder
+    // historik-panelet (2 donuts, samme kilde som badested-detaljesiden)
+    // ud i #stat-detail-${b.id} — se toggleBadestedHistory().
     statEl.innerHTML = data.badesteder.map(b => `
-      <div class="stat-row">
+      <div class="stat-row" onclick="toggleBadestedHistory('${b.id}')">
         <span class="stat-name">${escHtml(b.navn)}</span>
         <span class="stat-nums">${b.alertCount} varsel${b.alertCount === 1 ? '' : 'er'} · ${b.subscriberCount} abonnent${b.subscriberCount === 1 ? '' : 'er'}</span>
       </div>
+      <div class="stat-detail" id="stat-detail-${b.id}"></div>
     `).join('');
   } catch (e) {
     statEl.innerHTML = '<div class="err">Kunne ikke hente statistik — tjek din forbindelse.</div>';
