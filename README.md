@@ -41,21 +41,40 @@ Badevandssteder-historik, kommune-benchmark, borgerindberetninger),
 
 ### Strøm (CMEMS)
 
-To produkter kombineres i `fetch_currents.py` til ét sammenhængende gitter:
+Tre CMEMS-datasæt kombineres i `fetch_currents.py` til ét sammenhængende
+gitter, dækkende hele det danske farvand fra Vesterhavet til øst for
+Bornholm:
 
 - **Østersø-produktet** (`cmems_mod_bal_phy_anfc_PT1H-i`,
-  BALTICSEA_ANALYSISFORECAST_PHY_003_006) — hoveddækning, ca. 9–16,5°E.
-- **NWSHELF-produktet** (`cmems_mod_nws_phy-cur_anfc_1.5km-2D_PT1H-i_202511`
-  + tilhørende SST-datasæt) — supplerer VESTFOR Østersø-produktets grænse
-  (Vesterhavet/den jyske vestkyst, ned til 6°E), interpoleret onto PRÆCIS
-  samme gitter-spacing/oprindelse som Østersø-punkterne, så
-  `buildVelocityGridJSON()` i `server.js` (som antager ét regulært gitter)
-  kan flette dem uden videre.
+  BALTICSEA_ANALYSISFORECAST_PHY_003_006, uo/vo/thetao samlet) —
+  hoveddækning. Vores bbox er `LON_MIN, LON_MAX = 8.0, 16.5` /
+  `LAT_MIN, LAT_MAX = 54.0, 58.0`. `LON_MAX` var oprindeligt 15.0, hvilket
+  skar tværs gennem Bornholm (øen strækker sig til ~15,2°E) og udelod al
+  åben Østersø-vand østfor — udvidet til 16.5°E (2026-08-20). Produktets
+  eget native grid går til ~30°E, så bbox-grænsen her er selvpålagt, ikke
+  en begrænsning i selve CMEMS-produktet.
+- **NWSHELF-strøm** (`cmems_mod_nws_phy-cur_anfc_1.5km-2D_PT1H-i_202511`,
+  uo/vo) og **NWSHELF-SST** (`cmems_mod_nws_phy-sst_anfc_1.5km-2D_PT1H-i_202511`,
+  thetao) — to separate datasæt (i modsætning til Østersø-produktet, hvor
+  strøm og temperatur er ét datasæt), tilføjet 2026-08-20 for at dække
+  Vesterhavet/den jyske vestkyst, som Østersø-produktet slet ikke når
+  (dets reelle data starter først ved ~9,04°E). Bbox går ned til
+  `WEST_LON_MIN = 6.0`. Begge interpoleres (`xarray.interp()`, kræver
+  `scipy` — se `requirements.txt`) onto PRÆCIS Østersø-gitterets egne
+  breddegrader og gitter-afstand (udledt af de faktiske Østersø-koordinater,
+  ikke hardkodet), så det samlede punktsæt forbliver ét regulært gitter —
+  afgørende fordi `buildVelocityGridJSON()` i `server.js` antager præcis
+  dét. Begge NWSHELF-hentninger er best-effort (egen try/except pr. datasæt)
+  — fejler de, falder scriptet tilbage til uændret Østersø-only-dækning
+  frem for at vælte hele strøm-hentningen.
 
 Farveskalaen i strøm-animationen (`windy-currents.js`) er RELATIV min/max
 over de faktiske temperaturer i det viste datasæt (beregnet klientside i
-`computeVelocityTempRangeK()`), ikke en fast skala — så begge produkters
-punkter altid falder inden for samme blå→røde farveinterval.
+`computeVelocityTempRangeK()`), ikke en fast skala — så alle tre datasæts
+punkter altid falder inden for samme blå→røde farveinterval. Uden ægte
+temperatur for et område ville det området vises som én ensfarvet klat i
+stedet for en gradient, derfor hentes SST separat for NWSHELF-punkterne
+fremfor at lade dem falde tilbage til en syntetisk gennemsnitsværdi.
 
 ## Arkitektur / struktur
 
