@@ -4516,14 +4516,16 @@ function riskLabel(r) {
 }
 
 function riskColor(r) {
-  // Green → amber → red interpolation
-  if (r < .2) return `rgba(45,125,79,${0.5 + r})`;
-  if (r < .6) {
-    const t = (r - .2) / .4;
-    return `rgba(${Math.round(45 + t*(212-45))},${Math.round(125 + t*(160-125))},${Math.round(79 + t*(32-79))},0.85)`;
-  }
-  const t = (r - .6) / .4;
-  return `rgba(${Math.round(212 + t*(200-212))},${Math.round(160 - t*160)},${Math.round(32 - t*32)},0.9)`;
+  // RETTET (bug 2026-08-20): var tidligere en KONTINUERLIG grøn→gul→rød-
+  // interpolation, uafhængig af riskLabel()'s diskrete 0.2/0.6-tærskler —
+  // en risiko lige under 0.6 ("Moderat") blev farvet næsten identisk med
+  // "Høj", så kortet så rødt ud selvom labelen (og badested-statistik/push,
+  // som bruger de rigtige diskrete tærskler) stadig sagde "Moderat". Nu
+  // samme tre faste farver som riskInfo() i badested-skilt.html, valgt
+  // udelukkende ud fra riskLabel()'s bucket — matcher altså altid teksten.
+  if (r >= .6) return '#c84b1f';
+  if (r >= .2) return '#d4a020';
+  return '#2d7d4f';
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

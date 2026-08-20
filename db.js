@@ -30,7 +30,29 @@ if (!process.env.DATABASE_URL) {
 // opdateringer), og med op til få hundrede abonnenter er der plads til at
 // undgå at queue'e forespørgsler internt i klienten. Stadig langt under
 // hvad Fly Managed Postgres' Basic-plan tillader af samtidige forbindelser.
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 20 });
+//
+// NYT (2026-08-20, produktionshændelse — gentagne "Connection terminated
+// unexpectedly"): pg's egne standardværdier er idleTimeoutMillis=10000 (10
+// sek.) og connectionTimeoutMillis=0 (ALDRIG timeout ved forsøg på at åbne
+// en ny forbindelse — et hængende forsøg venter derfor uendeligt i stedet
+// for at fejle hurtigt og tydeligt). Sat eksplicit her:
+//  - idleTimeoutMillis: 30000 — poolen lukker selv en ledig forbindelse
+//    efter 30 sek., FØR den risikerer at blive ramt af Fly Managed
+//    Postgres' egen proxy/forbindelses-oprydning i baggrunden. Den præcise
+//    grænse på Fly-siden er ikke dokumenteret her i koden og BØR
+//    verificeres/justeres ud fra faktisk observeret adfærd efter denne
+//    ændring (se punkt 5 i den tilhørende fejlrettelse) — 30 sek. er en
+//    forsigtig, konservativ start, ikke en bekræftet nøjagtig værdi.
+//  - connectionTimeoutMillis: 5000 — et forsøg på at hente en forbindelse
+//    fejler nu hurtigt (5 sek.) i stedet for evigt, hvis Postgres/proxyen
+//    er utilgængelig — fejlen rammer da den almindelige try/catch om det
+//    pågældende kald i stedet for at lade requesten hænge på ubestemt tid.
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
 
 pool.on('error', (err) => {
   // NYT: ubehandlede fejl på en IDLE pool-forbindelse (fx databasen lukker

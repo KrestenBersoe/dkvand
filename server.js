@@ -27,6 +27,11 @@ const fs          = require('fs');
 const zlib        = require('zlib');
 const crypto      = require('crypto');
 const webpush     = require('web-push');
+// NYT (2026-08-20, event loop-blokerings-rettelse): kun brugt af
+// runBadevandRiskCascadeInWorker() — se dens filhoved og badevand-risk-
+// worker.js for hvorfor computeBadevandRiskCascade() flyttede til en
+// separat OS-tråd.
+const { Worker }  = require('worker_threads');
 // NYT: portering af risikomodellen fra dansk-overloeb-kort.html, så
 // serveren selv kan evaluere overløbsrisiko UAFHÆNGIGT af om en klient har
 // en fane åben — se server-modules/risk-model.js for fuld begrundelse.
@@ -2780,6 +2785,53 @@ async function evaluatePushNotifications(testThresholds) {
   return _evalPushInFlight;
 }
 
+// NYT (2026-08-20, event loop-blokerings-rettelse): kører
+// badevandRisk.computeBadevandRiskCascade() i en engangs worker_thread i
+// stedet for direkte på hovedtråden — se badevand-risk-worker.js's filhoved
+// for den fulde begrundelse (45-57 sek. pr. kørsel, uden event loop-
+// afgivelse undervejs i hovedparten af funktionen). points/staticDir er
+// allerede rene data; currentPoints sendes som `[...grid.values()]` (de rå
+// strømpunkter), IKKE selve grid-Map'en — strukturklonings-algoritmen
+// (workerData bruger samme mekanisme som postMessage) bevarer Map'ens
+// nøgle/værdi-par, men IKKE den bolt-på'ede `.buckets`-property
+// buildCurrentGrid() sætter direkte på Map-instansen (se current-grid.js) —
+// workeren genopbygger derfor sit eget, ækvivalente grid+bucket-index
+// lokalt ud fra de rå punkter, i stedet for at modtage et allerede bygget
+// (og dermed delvist tabt) grid.
+//
+// Engangs-worker pr. kald (ikke en genbrugt pool) — kørslen sker kun hvert
+// 15. minut (se WEATHER_CHECK_INTERVAL_MS), så opstartsomkostningen ved en
+// ny worker (typisk lav tocifret ms) er ubetydelig sammenlignet med de
+// 45-57 sek. selve beregningen tager.
+function runBadevandRiskCascadeInWorker(points, staticDir, grid) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const worker = new Worker(path.join(__dirname, 'badevand-risk-worker.js'), {
+      workerData: {
+        points,
+        staticDir,
+        currentPoints: grid ? [...grid.values()] : null,
+      },
+    });
+    worker.once('message', (msg) => {
+      done = true;
+      worker.terminate();
+      if (msg.ok) resolve(msg.result);
+      else reject(new Error(`badevand-risk-worker fejlede: ${msg.error}`));
+    });
+    worker.once('error', (err) => {
+      if (done) return;
+      done = true;
+      reject(err);
+    });
+    worker.once('exit', (code) => {
+      if (done) return;
+      done = true;
+      reject(new Error(`badevand-risk-worker afsluttede uventet (kode ${code})`));
+    });
+  });
+}
+
 // NYT: selve arbejdet, uændret fra før — kun kaldt via låsen ovenfor.
 // BEMÆRK: hvis dette kald genbruger et allerede kørende kald (låsen ovenfor
 // slog til), IGNORERES dette kalds testThresholds stiltiende — accepteret
@@ -2978,13 +3030,16 @@ async function _evaluatePushNotificationsInner(testThresholds) {
   // direkte, se ovenfor) — ingen ekstra vejr-/risikoberegning her.
   let cascadeResult = null;
   try {
-    // NYT: sender nu en strømopslagsfunktion med — se badevand-risk.js's
-    // computeIsotropicKystvandResult() for hvordan den bruges til at
-    // udelukke nedstrøms/tværgående udløb og bruge MÅLT strømhastighed
-    // (i stedet for en antaget konstant) for bekræftede opstrøms udløb.
-    // Genbruger samme getCurrentAtServer()/currentsCache.grid som
-    // algeberegningen allerede bruger til vandtemperatur ovenfor.
-    const result = await badevandRisk.computeBadevandRiskCascade(points, riskModel.seasonalTau, riskModel.seasonalTauViral, STATIC_DIR, undefined, (lat, lng) => getCurrentAtServer(lat, lng, currentsCache.grid));
+    // RETTET (2026-08-20, event loop-blokerings-hændelse): kaldte tidligere
+    // badevandRisk.computeBadevandRiskCascade() DIREKTE her, synkront på
+    // hovedtråden — observeret 45-57 sek. pr. kørsel, hvoraf hovedparten af
+    // funktionen (se badevand-risk-worker.js's filhoved) ALDRIG afgiver
+    // kontrollen til event loopet undervejs. HELE Node-processen (HTTP +
+    // pg-pool) stod derfor reelt stille i op mod et minut, hver 15. minut.
+    // Kører nu i egen worker_thread — se runBadevandRiskCascadeInWorker()
+    // og badevand-risk-worker.js. Selve funktionen (badevand-risk.js) er
+    // 100% uændret; kun HVOR den kører er ændret.
+    const result = await runBadevandRiskCascadeInWorker(points, STATIC_DIR, currentsCache.grid);
     // NYT (Kommunepakke, modul 6): _rawBadevandCascade gemmer det UPATCHEDE
     // resultat — se dens egen filhoveds-kommentar for hvorfor dette SKAL
     // holdes adskilt fra den patchede udgave (uden en ren kilde at patche
@@ -3645,7 +3700,16 @@ app.post('/api/push/warnpoints', (req, res) => {
   // hver renderMap()) skal ikke lade HTTP-svaret vente på faktiske
   // push-afsendelser — enqueue er hurtig (rent CPU), selve afsendelsen
   // fortsætter løsrevet. Se pushSendQueue's filhoved.
-  enqueuePushNotifications(warnPoints);
+  // RETTET (2026-08-20, produktionshændelse): manglede tidligere en
+  // .catch() her — i modsætning til flushPushQueue() lige nedenfor.
+  // enqueuePushNotifications() → getAllPushSubscriptions() → pg-pool kan
+  // afvise (fx "Connection terminated unexpectedly"), og uden nogen .catch
+  // ét eneste sted i kaldekæden blev det en UBEHANDLET promise-rejection —
+  // som crashede hele Node-processen (og dermed ALLE samtidige brugere),
+  // ikke kun dette ene request. pool.on('error', ...) i db.js fanger kun
+  // fejl på en IDLE forbindelse, ikke en afvist promise fra et aktivt kald
+  // som dette.
+  enqueuePushNotifications(warnPoints).catch(e => console.warn('enqueuePushNotifications (warnpoints) fejl:', e.message));
   flushPushQueue().catch(e => console.warn('flushPushQueue (warnpoints) fejl:', e.message));
   res.json({ ok: true, warned: warnPoints.length });
 });
@@ -4319,65 +4383,13 @@ function runPythonFetch() {
   });
 }
 
-// RETTET (KRITISK — se badevand-risk.js:190-203 for den oprindelige
-// hændelse): getCurrentAtServer() faldt for ethvert reelt badested tilbage
-// til et LINEÆRT SCAN over alle ~1.500 CMEMS-strømpunkter, fordi dens
-// "hurtige" nøgle (afrundet til nærmeste 0,5°) næsten aldrig matchede et
-// faktisk punkts koordinat (som ikke ligger 0,5°-justeret) — kaldt op til
-// hundredtusindvis af gange pr. badevand-risk-beregning, nok til at en enkelt
-// cyklus observeret i produktion tog 93,8 sek (mod normalt ~10 sek), og
-// blokerede Node's event loop imens. buildCurrentGrid() bygger nu ET rigtigt
-// spatialt bucket-index (0,5°-celler) ved siden af selve punkt-Map'en (kun
-// bevaret for .size, se currentsCache.grid-brug andre steder), så et opslag
-// kun skal tjekke nabocellerne omkring punktet — O(1) i praksis, ikke O(n).
-const CURRENT_BUCKET_SIZE = 0.5;
-function buildCurrentGrid(points) {
-  const grid = new Map();
-  const buckets = new Map();
-  for (const p of points) {
-    const speed = Math.hypot(p.uo, p.vo);
-    const dir   = (Math.atan2(p.uo, p.vo) * 180 / Math.PI + 360) % 360; // 0=N,90=E
-    const entry = { lat: p.lat, lng: p.lng, uo: p.uo, vo: p.vo, speed, dir, temp: p.temp ?? null };
-    grid.set(`${p.lat.toFixed(2)}:${p.lng.toFixed(2)}`, entry);
-    const bKey = `${Math.floor(p.lat / CURRENT_BUCKET_SIZE)}:${Math.floor(p.lng / CURRENT_BUCKET_SIZE)}`;
-    let arr = buckets.get(bKey);
-    if (!arr) { arr = []; buckets.set(bKey, arr); }
-    arr.push(entry);
-  }
-  grid.buckets = buckets;
-  return grid;
-}
-
-// NYT: server-side port af klientens getCurrentAt() — identisk logik,
-// genbruger samme currentsCache.grid-struktur direkte (se
-// buildCurrentGrid() ovenfor, allerede fælles mellem klient og server).
-// Bruges af evaluatePushNotifications() til algeberegningens CMEMS-
-// temperaturopslag — se risk-model.js's computeAlgaeRisk() filhoved for
-// hvorfor dette først nu blev flyttet server-side.
-function getCurrentAtServer(lat, lng, grid) {
-  if (!grid || grid.size === 0 || !grid.buckets) return null;
-  const bLat = Math.floor(lat / CURRENT_BUCKET_SIZE);
-  const bLng = Math.floor(lng / CURRENT_BUCKET_SIZE);
-  let minDist = Infinity, nearest = null;
-  // Udvider søgeringen bucket-ring for bucket-ring i stedet for at scanne
-  // ALLE punkter — ring 4 (× 0,5°) dækker rigeligt den accepterede
-  // 1,5°-grænse nedenfor, med god margin til CMEMS' ~10 km punktafstand.
-  for (let ring = 0; ring <= 4; ring++) {
-    for (let dLat = -ring; dLat <= ring; dLat++) {
-      for (let dLng = -ring; dLng <= ring; dLng++) {
-        if (Math.max(Math.abs(dLat), Math.abs(dLng)) !== ring) continue; // kun ringens rand — det indre er allerede tjekket i tidligere iterationer
-        const arr = grid.buckets.get(`${bLat + dLat}:${bLng + dLng}`);
-        if (!arr) continue;
-        for (const v of arr) {
-          const d = Math.hypot(v.lat - lat, v.lng - lng);
-          if (d < minDist) { minDist = d; nearest = v; }
-        }
-      }
-    }
-    if (minDist < 0.3) break;
-  }
-  return minDist < 1.5 ? nearest : null;
-}
+// UDSKILT (2026-08-20, event loop-blokerings-rettelse): buildCurrentGrid()/
+// getCurrentAtServer() bor nu i current-grid.js, som BÅDE denne fil og
+// badevand-risk-worker.js kræver hver for sig — se dens filhoved for
+// hvorfor (workerData kan ikke bære funktions-referencer over en
+// worker_thread-grænse, kun rene data, så begge tråde må bygge deres eget
+// grid lokalt fra hver sin kopi af de rå strømpunkter).
+const { buildCurrentGrid, getCurrentAtServer } = require('./current-grid');
 
 // Selve netværkskaldet — altid asynkront, opdaterer cache + disk ved succes,
 // beholder eksisterende (forældede) cache ved fejl i stedet for at nulstille.

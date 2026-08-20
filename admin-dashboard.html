@@ -1011,9 +1011,14 @@ function renderOverloeb(data) {
     // Lagt i sit EGET lag (ovlRingLayer), ikke ovlUdloebLayer, så
     // kortvælgeren kan skjule ringene uafhængigt af selve prikkerne.
     if (u.bucket === 'gul' || u.bucket === 'roed') {
+      // RETTET (bug 2026-08-20): interactive:false, ellers opfanger denne
+      // gennemsigtige ring klik (Leaflets pointer-events dækker hele
+      // fill-arealet, ikke kun stregen) FØR de når prikken under, som har
+      // den rigtige click-handler (linje 1005) — se openOvlUdlobPanel().
       L.circleMarker([u.lat, u.lng], {
         radius: 12, fillOpacity: 0, weight: 2, dashArray: '4,4',
         color: u.bucket === 'roed' ? '#ff6040' : '#f0c040',
+        interactive: false,
       }).addTo(ovlRingLayer);
     }
   }
