@@ -363,6 +363,45 @@ async function getMonthlyRiskBuckets(badestedIds, yearMonth) {
 }
 
 /**
+ * NYT (bruger-ønske 2026-08-20 — ugestatus/månedsstatus på badested-
+ * detaljesiden): antal dage i grøn/gul/rød for ÉT badested over de seneste
+ * `days` DAGE MED DATA (ikke en fast kalenderperiode som
+ * getMonthlyRiskBuckets() ovenfor) — bruger derfor `ORDER BY date DESC
+ * LIMIT days` i stedet for en dato-grænse, så et badested med huller i
+ * historikken (fx nyoprettet, eller en periode uden vejrdata) stille
+ * tæller færre reelle dage, i stedet for at "ingen data"-dage skulle
+ * fylde et fast antal rækker op. Samme bact/viral-kombinationsregel
+ * (Math.max, algae/forecast bevidst UDELADT) som buildWeeklyDigestMessage()
+ * nedenfor — se dens filhoved for den HÅRDE begrundelse.
+ *
+ * @param {string|number} badestedId
+ * @param {number} days — fx 7 (uge) eller 30 (måned)
+ * @returns {Promise<{lav:number, moderat:number, hoej:number, ingenData:number, daysRequested:number, daysFound:number}>}
+ */
+async function getRollingRiskBuckets(badestedId, days) {
+  const { rows } = await query(`
+    SELECT date, sum_bact, n_bact, sum_viral, n_viral
+    FROM badevand_daily_risk
+    WHERE badested_id = $1
+    ORDER BY date DESC
+    LIMIT $2
+  `, [String(badestedId), days]);
+
+  let lav = 0, moderat = 0, hoej = 0, ingenData = 0;
+  for (const r of rows) {
+    const bact  = r.n_bact  > 0 ? r.sum_bact  / r.n_bact  : null;
+    const viral = r.n_viral > 0 ? r.sum_viral / r.n_viral : null;
+    const combined = (bact != null || viral != null) ? Math.max(bact ?? 0, viral ?? 0) : null;
+    const bucket = riskBucket(combined);
+    if (bucket === null) ingenData++;
+    else if (bucket === 'høj') hoej++;
+    else if (bucket === 'moderat') moderat++;
+    else lav++;
+  }
+  return { lav, moderat, hoej, ingenData, daysRequested: days, daysFound: rows.length };
+}
+
+/**
  * Bygger titel/body til den ugentlige badested-digest, eller null hvis der
  * endnu ikke er nok historik (kræver alle 7 foregående dage — ny
  * funktionalitet, ingen bagudrettet data, se plan). Kombinerer bact/viral
@@ -625,6 +664,7 @@ module.exports = {
   buildWeeklyDigestMessage,
   riskBucket,
   getMonthlyRiskBuckets,
+  getRollingRiskBuckets,
   recordPushSent,
   pruneOldPushSendLog,
   getPushSendStats,

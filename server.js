@@ -3356,6 +3356,27 @@ app.get('/api/badested-observation/:id', async (req, res) => {
   }
 });
 
+// NYT (bruger-ønske 2026-08-20 — ugestatus/månedsstatus på badested-
+// detaljesiden, samme information som den ugentlige push-digest allerede
+// bygger, se app-metrics.js's buildWeeklyDigestMessage()/getRollingRiskBuckets()):
+// to uafhængige DB-opslag (7/30 dage) for ÉT badested, kørt PARALLELT — ikke
+// den bulk-forespørgsel getAllWeeklyBadevandHistory()/getMonthlyRiskBuckets()
+// bruger (dem er designet til ALLE badesteder på én gang, til digest-jobbet
+// hhv. admin-dashboardets kalendermåned).
+app.get('/api/badested-history-summary/:id', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const [week, month] = await Promise.all([
+      appMetrics.getRollingRiskBuckets(req.params.id, 7),
+      appMetrics.getRollingRiskBuckets(req.params.id, 30),
+    ]);
+    res.json({ week, month });
+  } catch (e) {
+    console.error('badested-history-summary GET: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente ugestatus lige nu.' });
+  }
+});
+
 // NYT (bruger-ønske 2026-08-17 — "Badestedsvurdering"-kortet i det levende
 // badevand-panel, se dansk-overloeb-kort.html's renderBadestedExtras()):
 // LÆSER UDELUKKENDE den allerede præ-beregnede vurderingCount30dCache
