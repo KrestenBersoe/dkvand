@@ -3061,11 +3061,37 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     // derfor heller ikke udløse en "der er nyt"-ping til de digitale skilte.
     broadcastBadevandSignUpdate();
     cascadeResult = result; // NYT: genbruges nedenfor af enqueuePushNotifications() til badested-favoritters "nu"-risiko, se dér
+    // RETTET (bruger-rapporteret 2026-08-20 — Odsherred: adskillige
+    // badesteder viste 16-24 "dage uden data" i Historik-panelet, selvom
+    // badestedets EGEN side samme dag viser "Lav risiko"/grønt):
+    // computeBadevandRiskCascade() sætter BEVIDST bact:null/viral:null for
+    // et badested UDEN bekræftet aktiv forureningskilde (source ===
+    // 'ingen-bekraeftet'/'nedstroms-bekraeftet', eller 'ingen' UDEN
+    // noDataMatch) — men "ingen bekræftet kilde" betyder ellers OVERALT i
+    // appen "sikkert", ikke "ukendt", se colorBadevandByRisk() i dansk-
+    // overloeb-kort.html (linje ~4136-4137, den kanoniske definition,
+    // holdt i sync her) og riskInfo() i badested-skilt.html. Uden denne
+    // patch akkumulerede BÅDE den ugentlige push-digest OG Historik-
+    // panelet (app-metrics.js's buildWeeklyDigestMessage()/
+    // getRollingRiskBuckets()) disse dage som "ingen data" — i modstrid
+    // med badestedets egen, samtidige visning. Patches KUN til selve
+    // akkumuleringen (en lokal kopi, `accumulationInput`) — IKKE
+    // `result.badevand` selv, som badevandRiskCache/badevandByIdCache
+    // fortsat skal vise med den oprindelige, ærlige bact:null (den
+    // eksisterende source-baserede UI-logik oversætter allerede DEN
+    // korrekt til "Lav risiko" ved visning). Kun FREMADRETTET — allerede
+    // gemte "ingen data"-dage for disse badesteder kan ikke rettes
+    // bagudrettet, da source ikke er gemt pr. dag i badevand_daily_risk.
+    const accumulationInput = result.badevand.map(b => {
+      const confirmedSafeNoSource = b.source === 'ingen-bekraeftet' || b.source === 'nedstroms-bekraeftet'
+        || (b.source === 'ingen' && !b.noDataMatch);
+      return confirmedSafeNoSource ? { ...b, bact: b.bact ?? 0, viral: b.viral ?? 0 } : b;
+    });
     // NYT: akkumulerer dette tjeks bact/viral/algae/forecast pr. badested ind
     // i det persisterede daglige løbende gennemsnit — se app-metrics.js's
     // filhoved for hvorfor dette er en direkte SQL-UPSERT pr. tjek, ikke en
     // in-memory-sum der ville forsvinde ved næste genstart/deploy.
-    await appMetrics.accumulateDailyBadevandRisk(result.badevand);
+    await appMetrics.accumulateDailyBadevandRisk(accumulationInput);
   } catch (e) {
     console.warn('computeBadevandRiskCascade fejlede:', e.message);
     // Bevidst INGEN nulstilling af badevandRiskCache til tomt her — en
