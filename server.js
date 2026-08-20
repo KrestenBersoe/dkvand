@@ -748,6 +748,13 @@ app.get('/admin/dashboard', tenantAdmin.requireTenantSession, async (req, res) =
       trialExpiresAt: tenant.trial_expires_at,
       agreementSignedAt: tenant.agreement_signed_at,
       authMethod: req.tenant.authMethod,
+      // NYT (bruger-krav 2026-08-20 — "selve dashboard skal bruge dette
+      // logo"): samme "klientens browser henter direkte fra logo_url"-
+      // mønster som skiltenes ?kommunelogo=1 og det kommunale varsel-
+      // banner allerede bruger — ingen server-side hentning nødvendig her
+      // (kun PDF-genereringen har brug for logo-fetch.js's SSRF-sikrede
+      // udgave, fordi DEN skal læse selve billed-bytes).
+      logoUrl: tenant.logo_url || null,
     });
     const html = fs.readFileSync(path.join(STATIC_DIR, 'admin-dashboard.html'), 'utf8')
       .replace('%%TENANT_JSON%%', tenantJson);
