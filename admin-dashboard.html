@@ -597,8 +597,7 @@ function render() {
     <div class="tab-panel" id="tab-badevand">
     <nav class="dash-toc">
       <a href="#card-status">Status</a>
-      <a href="#card-historik">Badevandshistorik</a>
-      <a href="#card-badested-stat">Badested-statistik</a>
+      <a href="#card-badevandssteder">Badevandssteder</a>
       <a href="#card-varsel">Kommunalt Varsel</a>
       <a href="#card-statistik">Statistik</a>
       <a href="#card-vurderinger">Borgerindberetninger</a>
@@ -613,17 +612,17 @@ function render() {
       ${t.agreementSignedAt ? `<div class="row"><span>Aftale underskrevet</span><span>${fmtDate(t.agreementSignedAt)}</span></div>` : ''}
     </div>
 
-    <div class="card" id="card-historik">
-      <h2>Badevandshistorik</h2>
-      <div class="hist-controls">
-        <label for="f-month">Måned</label>
-        <input type="month" id="f-month" value="${currentMonthStr()}" onchange="loadHistory(this.value)">
-      </div>
-      <div id="hist-content">Indlæser…</div>
-    </div>
-
-    <div class="card" id="card-badested-stat">
-      <h2>Badested-statistik</h2>
+    <!-- RETTET (bruger-krav 2026-08-20 — "fusionér panelerne Badevandshistorik
+         og badested-statistik til et samlet panel med navnet Badevandssteder"):
+         de to kort er slået sammen til ét. Periode-vælgeren styrer fortsat
+         varsel-/abonnenttallene (uændret fra badested-statistik), månedsvælgeren
+         (tidligere Badevandshistoriks egen, separate kalendermåneds-bjælke pr.
+         badested) er flyttet IND i hver rækkes fold-ud (se
+         toggleBadestedHistory()) som en tredje sektion ved siden af de
+         eksisterende "Sidste 7/30 dage"-donuts, i stedet for en separat,
+         altid-synlig liste for ALLE badesteder på én gang. -->
+    <div class="card" id="card-badevandssteder">
+      <h2>Badevandssteder</h2>
       <div class="stat-controls">
         <label for="stat-period">Periode</label>
         <select id="stat-period" onchange="onStatPeriodChange()">
@@ -793,7 +792,6 @@ function render() {
     <button onclick="location.href='/admin/settings/oauth'">⚙️ OAuth-opsætning</button>
     <button onclick="logout()">Log ud</button>
   `;
-  loadHistory(currentMonthStr());
   loadOverrideBadesteder().then(loadActiveOverrides);
   loadKommuneStats();
   loadAlertStats();
@@ -1610,58 +1608,52 @@ function copySkiltEmbed(btn) {
 }
 
 /**
- * Henter og viser grøn/gul/rød-fordelingen for kommunens badesteder i den
- * valgte måned — se server.js's GET /admin/api/badested-history og
- * app-metrics.js's getMonthlyRiskBuckets() for selve beregningen. Al
- * beregning sker server-side, denne funktion renderer udelukkende de
- * færdige tal (samme server-autoritative princip som resten af appen).
+ * RETTET (bruger-krav 2026-08-20 — fusioneret ind i Badevandssteder-
+ * panelet): viste tidligere en altid-synlig liste for ALLE badesteder i
+ * sit eget kort (Badevandshistorik). Henter nu i stedet ÉT samlet kald pr.
+ * måned (cached, se _monthBucketsCache), slået op pr. badested når en
+ * række foldes ud i toggleBadestedHistory() — se buildMonthBarHtml().
+ * Server-siden (GET /admin/api/badested-history,
+ * app-metrics.js's getMonthlyRiskBuckets()) er uændret.
  */
-async function loadHistory(month) {
-  const histEl = document.getElementById('hist-content');
-  histEl.textContent = 'Indlæser…';
+const _monthBucketsCache = new Map(); // 'YYYY-MM' -> Map<badestedId, {green,yellow,red,noData}>
+async function getMonthBuckets(month) {
+  if (_monthBucketsCache.has(month)) return _monthBucketsCache.get(month);
+  const map = new Map();
   try {
     const resp = await fetch(`/admin/api/badested-history?month=${encodeURIComponent(month)}`, { cache: 'no-store' });
     const data = await resp.json();
-    if (!resp.ok) {
-      histEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente historik.')}</div>`;
-      return;
+    if (resp.ok && Array.isArray(data.badesteder)) {
+      for (const b of data.badesteder) map.set(String(b.id), b);
     }
-    if (data.warning) {
-      histEl.innerHTML = `<div class="hist-warning">${escHtml(data.warning)}</div>`;
-      return;
-    }
-    if (!data.badesteder || data.badesteder.length === 0) {
-      histEl.innerHTML = '<div class="hist-empty">Ingen badesteder fundet.</div>';
-      return;
-    }
-    histEl.innerHTML = data.badesteder.map(b => {
-      // NYT: procenterne er bevidst af (green+yellow+red+noData), IKKE kun
-      // af de dage der HAR data — en måned med mest noData skal vise en
-      // synligt kort farvet bjælke, ikke misvisende strække få reelle
-      // dage ud til at udfylde hele bjælken.
-      const total = (b.green || 0) + (b.yellow || 0) + (b.red || 0) + (b.noData || 0);
-      const pct = n => total > 0 ? Math.round(100 * n / total) : 0;
-      return `
-        <div class="hist-row">
-          <div class="hist-name">${escHtml(b.navn)}</div>
-          <div class="hist-bar">
-            <div class="hist-seg-green"  style="width:${pct(b.green)}%"  title="${b.green} grønne dage"></div>
-            <div class="hist-seg-yellow" style="width:${pct(b.yellow)}%" title="${b.yellow} gule dage"></div>
-            <div class="hist-seg-red"    style="width:${pct(b.red)}%"    title="${b.red} røde dage"></div>
-          </div>
-          <div class="hist-counts">🟢 ${b.green}&nbsp;&nbsp;🟡 ${b.yellow}&nbsp;&nbsp;🔴 ${b.red}${b.noData ? `&nbsp;&nbsp;· ${b.noData} dage uden data` : ''}</div>
-        </div>
-      `;
-    }).join('');
-  } catch (e) {
-    histEl.innerHTML = '<div class="err">Kunne ikke hente historik — tjek din forbindelse.</div>';
-  }
+  } catch (e) { /* getMonthBarHtml() falder tilbage til "ingen data" nedenfor */ }
+  _monthBucketsCache.set(month, map);
+  return map;
+}
+
+// NYT: procenterne er bevidst af (green+yellow+red+noData), IKKE kun af de
+// dage der HAR data — en måned med mest noData skal vise en synligt kort
+// farvet bjælke, ikke misvisende strække få reelle dage ud til at udfylde
+// hele bjælken. Samme visuelle sprog (.hist-bar/.hist-seg-*) som det
+// tidligere separate Badevandshistorik-kort brugte.
+function buildMonthBarHtml(b) {
+  if (!b) return '<div style="font-size:.75rem;color:var(--ink-soft)">Ingen data for denne måned.</div>';
+  const total = (b.green || 0) + (b.yellow || 0) + (b.red || 0) + (b.noData || 0);
+  const pct = n => total > 0 ? Math.round(100 * n / total) : 0;
+  return `
+    <div class="hist-bar">
+      <div class="hist-seg-green"  style="width:${pct(b.green)}%"  title="${b.green} grønne dage"></div>
+      <div class="hist-seg-yellow" style="width:${pct(b.yellow)}%" title="${b.yellow} gule dage"></div>
+      <div class="hist-seg-red"    style="width:${pct(b.red)}%"    title="${b.red} røde dage"></div>
+    </div>
+    <div class="hist-counts">🟢 ${b.green}&nbsp;&nbsp;🟡 ${b.yellow}&nbsp;&nbsp;🔴 ${b.red}${b.noData ? `&nbsp;&nbsp;· ${b.noData} dage uden data` : ''}</div>
+  `;
 }
 
 // NYT (Kommunepakke, modul 6) — badested-statistik: viser #stat-month KUN
 // når "Måned" er valgt (native <input type="month"> tillader i sig selv
 // ENHVER måned, også uden data — se GET /admin/api/badested-alert-stats'
-// computeAlertStatsRange(), samme frie mønster som #f-month ovenfor).
+// computeAlertStatsRange()).
 function onStatPeriodChange() {
   const period = document.getElementById('stat-period').value;
   document.getElementById('stat-month').style.display = period === 'month' ? '' : 'none';
@@ -1739,12 +1731,18 @@ async function toggleBadestedHistory(badestedId) {
   el.innerHTML = '<div style="color:var(--ink-soft);font-size:.8rem;padding:.4rem 0">Indlæser…</div>';
   try {
     let summary = _badestedHistoryCache.get(badestedId);
-    if (!summary) {
+    const summaryPromise = summary ? Promise.resolve(summary) : (async () => {
       const resp = await fetch(`/api/badested-history-summary/${encodeURIComponent(badestedId)}`, { cache: 'no-store' });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      summary = await resp.json();
-      _badestedHistoryCache.set(badestedId, summary);
-    }
+      const data = await resp.json();
+      _badestedHistoryCache.set(badestedId, data);
+      return data;
+    })();
+    // NYT (bruger-krav 2026-08-20 — fusioneret Badevandshistorik ind her):
+    // kørt PARALLELT med summary-opslaget ovenfor, ikke sekventielt bagefter.
+    const monthPromise = getMonthBuckets(currentMonthStr());
+    const [resolvedSummary, monthBuckets] = await Promise.all([summaryPromise, monthPromise]);
+    summary = resolvedSummary;
     const block = (title, counts) => {
       if (!counts || counts.daysFound === 0) {
         return `<div class="bv-history-block">
@@ -1757,7 +1755,13 @@ async function toggleBadestedHistory(badestedId) {
         <div class="bv-history-inner">${buildRiskDonutSvg(counts)}${buildRiskLegendHtml(counts)}</div>
       </div>`;
     };
-    el.innerHTML = `<div class="bv-history-summary">${block('Sidste 7 dage', summary.week)}${block('Sidste 30 dage', summary.month)}</div>`;
+    el.innerHTML = `
+      <div class="bv-history-summary">${block('Sidste 7 dage', summary.week)}${block('Sidste 30 dage', summary.month)}</div>
+      <div style="margin-top:.6rem">
+        <div class="bv-history-block-title">Denne måned</div>
+        ${buildMonthBarHtml(monthBuckets.get(String(badestedId)))}
+      </div>
+    `;
     el.dataset.loaded = '1';
   } catch (e) {
     el.innerHTML = '<div style="color:var(--ink-soft);font-size:.8rem;padding:.4rem 0">Kunne ikke hente historik lige nu.</div>';
