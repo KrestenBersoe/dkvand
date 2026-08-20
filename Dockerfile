@@ -86,6 +86,12 @@ COPY overloeb-status.js ./
 # samme "crasher øjeblikkeligt uden denne linje"-fælde som de øvrige lokale
 # moduler i denne fil.
 COPY overloeb-events.js ./
+# NYT (bruger-krav 2026-08-20) — server.js kræver nu også
+# (require('./page-views')) dette modul ved opstart, samme "crasher
+# øjeblikkeligt uden denne linje"-fælde som de øvrige lokale moduler i
+# denne fil (se tenant-admin.js's kommentar ovenfor for den fulde
+# forklaring, og server.js:1787220... produktionsudfaldet fra samme dag).
+COPY page-views.js ./
 # NYT: Kommune Dashboard, "Skilte"-fanen — server.js kræver nu også
 # (require('./skilte'), require('./logo-fetch')) disse to moduler ved
 # opstart, samme "crasher øjeblikkeligt uden denne linje"-fælde som de

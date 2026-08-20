@@ -58,6 +58,10 @@ const appMetrics   = require('./app-metrics');
 // her i stedet for direkte i selve ruterne nedenfor.
 const overloebStatus = require('./overloeb-status');
 const overloebEvents = require('./overloeb-events');
+// NYT (bruger-krav 2026-08-20 — "der skal nu opsamles tæller for antal
+// visninger per badested", Statistik-panelets "# Visninger"): se
+// page-views.js's filhoved.
+const pageViews = require('./page-views');
 // NYT (Kommune Dashboard-udvidelse, "Skilte"-fanen) — PDF/QR-genererings-
 // logik (ren funktion, se dens filhoved) og SSRF-sikker logo-hentning.
 const skilte = require('./skilte');
@@ -183,6 +187,11 @@ function mapSubscriptionRow(row) {
     installId: row.install_id,
     platform: row.platform,
     notifiedState: row.notified_state || {},
+    // NYT (bruger-krav 2026-08-20 — "abonnenter over tid"-grafen i
+    // Statistik-panelet): push_subscriptions.created_at fandtes allerede i
+    // skemaet (sat af Postgres selv, DEFAULT now()), men blev aldrig
+    // udtrukket her før nu.
+    createdAt: row.created_at,
   };
 }
 
@@ -1131,16 +1140,29 @@ function computeAlertStatsRange(period, monthParam) {
   };
 }
 
+// NYT (bruger-krav 2026-08-20 — "Brugerdefineret" tilføjet til Badevandssteder-
+// panelets periode-vælger, samme mulighed Kommune-benchmark allerede har):
+// samme ?from=&to=-fald-igennem-mønster som GET /admin/api/kommune-benchmark
+// nedenfor bruger — se dens kommentar for hvorfor from/to har forrang over
+// period, når begge (fejlagtigt) skulle være angivet.
 app.get('/admin/api/badested-alert-stats', tenantAdmin.requireTenantSession, async (req, res) => {
   try {
-    const period = typeof req.query.period === 'string' ? req.query.period : '';
-    if (!VALID_ALERT_PERIODS.has(period)) {
-      return res.status(400).json({ error: `Ugyldig period — skal være én af: ${[...VALID_ALERT_PERIODS].join(', ')}.` });
-    }
-    const monthParam = typeof req.query.month === 'string' ? req.query.month : null;
-    const range = computeAlertStatsRange(period, monthParam);
-    if (!range) {
-      return res.status(400).json({ error: "Ugyldigt month-format, forventede 'YYYY-MM'." });
+    let range, period = null;
+    if (typeof req.query.from === 'string' && typeof req.query.to === 'string') {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(req.query.from) || !/^\d{4}-\d{2}-\d{2}$/.test(req.query.to)) {
+        return res.status(400).json({ error: "Ugyldigt from/to-format, forventede 'YYYY-MM-DD'." });
+      }
+      range = { from: req.query.from, to: req.query.to };
+    } else {
+      period = typeof req.query.period === 'string' ? req.query.period : '';
+      if (!VALID_ALERT_PERIODS.has(period)) {
+        return res.status(400).json({ error: `Ugyldig period — skal være én af: ${[...VALID_ALERT_PERIODS].join(', ')}, eller angiv ?from=&to=.` });
+      }
+      const monthParam = typeof req.query.month === 'string' ? req.query.month : null;
+      range = computeAlertStatsRange(period, monthParam);
+      if (!range) {
+        return res.status(400).json({ error: "Ugyldigt month-format, forventede 'YYYY-MM'." });
+      }
     }
 
     const tenant = await tenantAdmin.getTenant(req.tenant.tenantId);
@@ -1195,15 +1217,6 @@ app.get('/admin/api/stats', tenantAdmin.requireTenantSession, async (req, res) =
     }
     const ids = badesteder.map(b => b.id);
 
-    const [vurderinger, subscriberCounts, alertRows, vurderingTrendRows] = await Promise.all([
-      badestedObs.getVurderingStatsForBadestedIds(ids),
-      getSubscriberCountsForBadestedIds(ids),
-      appMetrics.getAlertRowsForBadestedIds(ids),
-      badestedObs.getVurderingTrendForBadestedIds(ids, 90),
-    ]);
-
-    const subscribers = [...subscriberCounts.values()].reduce((a, b) => a + b, 0);
-
     // RETTET: /stats' "24t"-kolonne er en RULLENDE 24-timers-vindue (fra
     // push_send_log's tidsstemplede rækker) — badested_alert_daily har KUN
     // dags-granularitet (ingen klokkeslæt), så det bedste ærlige modstykke
@@ -1214,6 +1227,31 @@ app.get('/admin/api/stats', tenantAdmin.requireTenantSession, async (req, res) =
     const sevenDaysAgoStr = new Date(Date.now() - 6  * 24 * 3600 * 1000).toISOString().slice(0, 10);
     const ninetyDaysAgoStr= new Date(Date.now() - 89 * 24 * 3600 * 1000).toISOString().slice(0, 10);
 
+    // NYT (bruger-krav 2026-08-20 — "# Visninger (badesteder ELLER
+    // overløb)"): begge id-rum tælles med i visnings-totalen/-grafen, i
+    // modsætning til resten af denne rute (som kun kender badested-id'er).
+    // Samme kommune-scoping-filter som overloeb-status.js's udloeb-mapping
+    // (municipality-feltet på selve PULS-punktet) — bevidst dupliceret
+    // fremfor at importere fra overloeb-status.js, som er kablet til
+    // computeOverloebStatusForTenant()s samlede input/output-facon.
+    const tenantKeyForViews = slugIndex.normalizeKommuneKey(tenant.name);
+    const udloebIds = (riskScoresCache.points || [])
+      .filter(pt => pt.municipality && slugIndex.normalizeKommuneKey(pt.municipality) === tenantKeyForViews)
+      .map(pt => pt.id);
+    const viewEntityIds = [...ids, ...udloebIds];
+
+    const [vurderinger, subscriberCounts, alertRows, vurderingTrendRows, viewsTotal, viewsTrend] = await Promise.all([
+      badestedObs.getVurderingStatsForBadestedIds(ids),
+      getSubscriberCountsForBadestedIds(ids),
+      appMetrics.getAlertRowsForBadestedIds(ids),
+      badestedObs.getVurderingTrendForBadestedIds(ids, 90),
+      pageViews.getTotalViews(viewEntityIds, ninetyDaysAgoStr, todayStr),
+      pageViews.getViewTrend(viewEntityIds, ninetyDaysAgoStr, todayStr),
+      getSubscriberTrendForBadestedIds(ids, ninetyDaysAgoStr, todayStr),
+    ]);
+
+    const subscribers = [...subscriberCounts.values()].reduce((a, b) => a + b, 0);
+
     // Kun de tre typer, der reelt registreres pr. badested (se recordBadested
     // AlertSent()'s kaldesteder) — heartbeat/ugentlig-digest findes kun som
     // globale tal (push_send_log), ikke pr. badested, og udelades derfor her
@@ -1221,18 +1259,24 @@ app.get('/admin/api/stats', tenantAdmin.requireTenantSession, async (req, res) =
     const TRACKED_TYPES = [PUSH_SEND_TYPES.RISIKOVARSEL, PUSH_SEND_TYPES.NY_VURDERING, PUSH_SEND_TYPES.KOMMUNE_OVERRIDE];
     const byType = {};
     for (const t of TRACKED_TYPES) byType[t] = { today: 0, last7d: 0, total: 0 };
-    const risikovarselByDate = new Map();
+    // RETTET (bruger-krav 2026-08-20 — Statistik-panelets "# Varsler"-total
+    // og kombinerede graf erstatter den tidligere pr.-type-opdelte tabel):
+    // alertsByDate summerer nu ALLE TRACKED_TYPES, ikke kun risikovarsel,
+    // så headlinetallet og grafen viser PRÆCIS samme tal.
+    const alertsByDate = new Map();
+    let alertsTotal = 0;
     for (const row of alertRows) {
       const bucket = byType[row.type];
       if (!bucket) continue;
       bucket.total += row.count;
+      alertsTotal += row.count;
       if (row.date >= sevenDaysAgoStr) bucket.last7d += row.count;
       if (row.date === todayStr) bucket.today += row.count;
-      if (row.type === PUSH_SEND_TYPES.RISIKOVARSEL && row.date >= ninetyDaysAgoStr) {
-        risikovarselByDate.set(row.date, (risikovarselByDate.get(row.date) || 0) + row.count);
+      if (row.date >= ninetyDaysAgoStr) {
+        alertsByDate.set(row.date, (alertsByDate.get(row.date) || 0) + row.count);
       }
     }
-    const risikovarselTrend = [...risikovarselByDate.entries()]
+    const alertsTrend = [...alertsByDate.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([date, n]) => ({ date, value: n }));
 
@@ -1241,10 +1285,14 @@ app.get('/admin/api/stats', tenantAdmin.requireTenantSession, async (req, res) =
       badestedCount: badesteder.length,
       vurderinger,
       subscribers,
+      alertsTotal,
+      views: { total: viewsTotal },
       pushByType: byType,
       trends: {
         vurderinger: vurderingTrendRows.map(r => ({ date: r.date, value: r.n })),
-        risikovarsel: risikovarselTrend,
+        alerts: alertsTrend,
+        views: viewsTrend,
+        subscribers: subscriberTrend,
       },
       generatedAt: new Date().toISOString(),
     });
@@ -3882,6 +3930,27 @@ app.post('/api/weather/bulk', async (req, res) => {
   res.json(out);
 });
 
+// NYT (bruger-krav 2026-08-20 — "der skal nu opsamles tæller for antal
+// visninger per badested"): let, offentlig, fire-and-forget-tracking —
+// kaldt fra klienten (showBadevandPanel()/showUdlobPanel(), dansk-
+// overloeb-kort.html) ved SAMME tidspunkt som den eksisterende gtag()-
+// sporing, blot til vores EGEN, forespørgselsbare database (GA er ikke
+// tilgængelig for kommune-dashboardets Statistik-panel). Fejler ALDRIG
+// synligt for klienten ud over en 400 ved reel input-fejl — en mistet
+// visningstælling er lavrisiko nok til aldrig at afbryde selve
+// panelåbningen (se klientens .catch()-mønster ved kaldestedet).
+app.post('/api/track-view', async (req, res) => {
+  try {
+    const { entityId, entityType } = req.body || {};
+    await pageViews.recordView(entityId, entityType);
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.code === 'VALIDATION') return res.status(400).json({ error: e.message });
+    console.warn('track-view: fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke registrere visning.' });
+  }
+});
+
 // ── Save latest warnPoints for push evaluation ──────────────────────────────
 // The client POSTs its computed warnPoints after each render so the server
 // can send push notifications to subscribers who have matching favourites.
@@ -4051,6 +4120,48 @@ async function getSubscriberCountsForBadestedIds(badestedIds) {
     }
   }
   return result;
+}
+
+// NYT (bruger-krav 2026-08-20 — "abonnenter over tid" i Statistik-panelets
+// kombinerede graf): kumulativt abonnenttal pr. dag i [fromDate, toDate],
+// for de abonnementer der matcher tenantens EGNE badesteder (samme
+// coordIndex-baserede relevans-tjek som getSubscriberCountsForBadestedIds()
+// ovenfor). ⚠️ KENDT UNØJAGTIGHED (dokumenteret bevidst, ikke overset): et
+// abonnement der ER AFMELDT (DELETE FROM push_subscriptions, se POST
+// /api/push/unsubscribe) forsvinder HELT fra denne beregning, også for
+// datoer FØR afmeldingen — grafen viser derfor reelt "nuværende
+// abonnenters tilmeldingsdatoer, akkumuleret", ikke et sandt historisk
+// øjebliksbillede af abonnenttal på hver enkelt dag (som ville kræve en
+// daglig snapshot-tabel, ikke bygget her). Til en VÆKST-graf (formålet
+// her) er dette en acceptabel, ærlig tilnærmelse — den underdriver
+// historiske tal i det omfang folk siden er afmeldt.
+async function getSubscriberTrendForBadestedIds(badestedIds, fromDate, toDate) {
+  const idSet = new Set(badestedIds.map(String));
+  const coordIndex = getBadevandCoordIndex();
+  const subs = await getAllPushSubscriptions();
+  const countsByDate = new Map(); // 'YYYY-MM-DD' -> antal NYE relevante abonnementer den dag
+  for (const entry of subs) {
+    let relevant = false;
+    for (const group of (entry.badevandGroups || [])) {
+      if (group.lat == null || group.lng == null) continue;
+      const bvId = coordIndex.get(`${group.lat.toFixed(4)}:${group.lng.toFixed(4)}`);
+      if (bvId != null && idSet.has(String(bvId))) { relevant = true; break; }
+    }
+    if (!relevant || !entry.createdAt) continue;
+    const date = new Date(entry.createdAt).toISOString().slice(0, 10);
+    countsByDate.set(date, (countsByDate.get(date) || 0) + 1);
+  }
+  // Kumuleret løbende sum, KUN for datoer i det ønskede interval (men
+  // baseret på ALLE tilmeldinger nogensinde, også før `fromDate` — ellers
+  // ville grafen fejlagtigt starte fra 0 hver gang, uanset reelt abonnenttal).
+  const allDates = [...countsByDate.keys()].sort();
+  let running = 0;
+  const trend = [];
+  for (const date of allDates) {
+    running += countsByDate.get(date);
+    if (date >= fromDate && date <= toDate) trend.push({ date, value: running });
+  }
+  return trend;
 }
 
 // Samme danske labels som selve indsendelses-UI'en (bv-obs-btn-knapperne og
@@ -5101,7 +5212,7 @@ const DAILY_STATS_SNAPSHOT_INTERVAL_MS = 24 * 3600 * 1000;
 // ovenfor (rute-registrering, setInterval-opsætning, den forsinkede
 // warmCache()-opstart) kræver ikke databasen og kører uændret synkront —
 // kun selve lytte-starten er gated.
-Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, badestedOverrides.ready, overloebEvents.ready, schema])
+Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, badestedOverrides.ready, overloebEvents.ready, pageViews.ready, schema])
   .then(() => {
     app.listen(PORT, HOST, () => {
       console.log(`Overløbsrisiko server kører på http://${HOST}:${PORT}`);

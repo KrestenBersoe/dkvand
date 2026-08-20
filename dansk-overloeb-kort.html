@@ -9972,6 +9972,20 @@ async function renderBadestedHistorySummary(p) {
   }
 }
 
+// NYT (bruger-krav 2026-08-20 — "der skal nu opsamles tæller for antal
+// visninger per badested"): let, fire-and-forget POST til vores egen
+// database (POST /api/track-view, se server.js/page-views.js) — ved siden
+// af den eksisterende gtag()-sporing, IKKE i stedet for den. Fejler
+// stille (samme "en mistet tælling må aldrig afbryde selve panelåbningen"
+// -princip som gtag()'s egne try/catch-blokke ovenfor).
+function trackView(entityId, entityType) {
+  fetch('api/track-view', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entityId, entityType }),
+  }).catch(e => console.warn('trackView fejlede:', e.message));
+}
+
 async function showBadevandPanel(feature, skipUrlPush) {
   _currentBvFeature = feature;
   const p    = feature.properties || {};
@@ -10031,6 +10045,11 @@ async function showBadevandPanel(feature, skipUrlPush) {
       location_id: p.bathingwat ?? p.ov_id ?? p.id ?? null,
     });
   } catch (e) { console.warn('gtag badevand_location_view fejlede:', e); }
+  // NYT (bruger-krav 2026-08-20 — "der skal nu opsamles tæller for antal
+  // visninger per badested", Kommune Dashboard-Statistik-panelets "#
+  // Visninger"): egen, forespørgselsbar tælling ved siden af GA (som
+  // kommune-dashboardet ikke har adgang til) — se trackView()'s filhoved.
+  if (p.bathingwat) trackView(p.bathingwat, 'badested');
 
   try {
     // Opdater URL-hash så siden kan deles direkte — men IKKE hvis
@@ -10426,6 +10445,11 @@ async function showUdlobPanel(pt) {
   document.getElementById('ud-title').textContent = pt.name;
   document.getElementById('ud-subtitle').textContent =
     [pt.municipality, isPuls ? 'PULS-udløb' : 'VP3 RBU-punkt'].filter(Boolean).join(' · ');
+  // NYT (bruger-krav 2026-08-20 — "# Visninger (badesteder eller
+  // overløb)"): kun PULS-udløb spores (pt.id matcher server-siden
+  // riskScoresCache.points-id-rummet /admin/api/stats scoper visnings-
+  // totalen mod) — VP3 RBU-punkter har intet tilsvarende id-rum server-side.
+  if (isPuls && pt.id != null) trackView(pt.id, 'udloeb');
 
   const favBtn = document.getElementById('ud-fav-btn');
   if (isPuls) {

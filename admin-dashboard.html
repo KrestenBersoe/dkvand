@@ -32,6 +32,15 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
   .wrap { max-width: 640px; margin: 0 auto; }
+  /* NYT (bruger-krav 2026-08-20 — "Log ud knappen flyttes øverst til højre
+     i skærmbilledet"): fixed mod selve VIEWPORTET (ikke .wrap), så den
+     forbliver synlig uanset scroll og fanevalg. */
+  .dash-logout-fixed {
+    position: fixed; top: 1rem; right: 1rem; z-index: 100;
+    background: var(--card); border: 1px solid var(--border); color: var(--ink);
+    border-radius: 6px; padding: .4rem .75rem; font-size: .78rem; cursor: pointer;
+  }
+  .dash-logout-fixed:hover { background: rgba(255,255,255,.06); }
   h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
   .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
   /* NYT (bruger-krav 2026-08-20 — "selve dashboard skal bruge dette
@@ -437,6 +446,7 @@
 </style>
 </head>
 <body>
+<button type="button" class="dash-logout-fixed" onclick="logout()">Log ud</button>
 <div class="wrap">
   <div id="content">Indlæser…</div>
 </div>
@@ -504,6 +514,7 @@ function render() {
       <button type="button" class="tab-btn active" data-tab="overloeb" onclick="switchDashTab('overloeb')">Overløb</button>
       <button type="button" class="tab-btn" data-tab="badevand" onclick="switchDashTab('badevand')">Badevand</button>
       <button type="button" class="tab-btn" data-tab="skilte" onclick="switchDashTab('skilte')">Skilte</button>
+      <button type="button" class="tab-btn" data-tab="opsaetning" onclick="switchDashTab('opsaetning')">Opsætning</button>
     </div>
 
     <div class="tab-panel active" id="tab-overloeb">
@@ -612,7 +623,6 @@ function render() {
       <a href="#card-statistik">Statistik</a>
       <a href="#card-vurderinger">Borgerindberetninger</a>
       <a href="#card-benchmark">Kommune-benchmark</a>
-      <a href="#card-rapporter">Rapporter</a>
     </nav>
 
     <div class="card" id="card-status">
@@ -635,14 +645,28 @@ function render() {
       <h2>Badevandssteder</h2>
       <div class="stat-controls">
         <label for="stat-period">Periode</label>
+        <!-- RETTET (bruger-krav 2026-08-20 — standardiseret periode-vælger
+             på tværs af Badevandssteder/Kommune-benchmark): Dag/Uge/Måned/
+             Kvartal/År/Brugerdefineret. Værdierne (today/7d/quarter/year)
+             er UÆNDREDE — kun de danske labels er opdateret — for ikke at
+             skulle røre server.js's VALID_ALERT_PERIODS/
+             computeAlertStatsRange(). Brugerdefineret er NY her (fandtes
+             kun i Kommune-benchmark før), se stat-custom-range/
+             onStatPeriodChange() og server.js's ?from=&to=-udvidelse af
+             GET /admin/api/badested-alert-stats. -->
         <select id="stat-period" onchange="onStatPeriodChange()">
-          <option value="today">I dag</option>
-          <option value="7d">Sidste 7 dage</option>
+          <option value="today">Dag</option>
+          <option value="7d">Uge</option>
           <option value="month">Måned</option>
-          <option value="quarter">Sidste kvartal</option>
-          <option value="year">Sidste år</option>
+          <option value="quarter">Kvartal</option>
+          <option value="year">År</option>
+          <option value="custom">Brugerdefineret</option>
         </select>
         <input type="month" id="stat-month" value="${currentMonthStr()}" onchange="loadAlertStats()" style="display:none">
+        <span id="stat-custom-range" style="display:none">
+          <input type="date" id="stat-from" onchange="loadAlertStats()">
+          <input type="date" id="stat-to" onchange="loadAlertStats()">
+        </span>
       </div>
       <div id="stat-content">Indlæser…</div>
     </div>
@@ -734,12 +758,15 @@ function render() {
         </select>
         <span id="kb-period-controls">
           <label for="kb-period">Periode</label>
+          <!-- RETTET (bruger-krav 2026-08-20 — standardiseret periode-
+               vælger, se Badevandssteder-panelets tilsvarende kommentar):
+               kun labels ændret (Dag/Uge/Kvartal/År), værdier uændrede. -->
           <select id="kb-period" onchange="onKbPeriodChange()">
-            <option value="today">I dag</option>
-            <option value="7d">Sidste 7 dage</option>
+            <option value="today">Dag</option>
+            <option value="7d">Uge</option>
             <option value="month">Måned</option>
-            <option value="quarter" selected>Sidste kvartal</option>
-            <option value="year">Sidste år</option>
+            <option value="quarter" selected>Kvartal</option>
+            <option value="year">År</option>
             <option value="custom">Brugerdefineret</option>
           </select>
           <input type="month" id="kb-month" value="${currentMonthStr()}" onchange="loadKommuneBenchmark()" style="display:none">
@@ -750,15 +777,6 @@ function render() {
         </span>
       </div>
       <div id="kb-content">Indlæser…</div>
-    </div>
-
-    <div class="card" id="card-rapporter">
-      <h2>Rapporter</h2>
-      <div class="report-buttons">
-        <button type="button" disabled title="Kommer snart">📄 Myndighedsrapport</button>
-        <button type="button" disabled title="Kommer snart">🗺️ Hotspot-analyse</button>
-      </div>
-      <div class="placeholder-note">Bygges i de næste moduler.</div>
     </div>
     </div>
 
@@ -799,8 +817,20 @@ function render() {
       </div>
     </div>
 
-    <button onclick="location.href='/admin/settings/oauth'">⚙️ OAuth-opsætning</button>
-    <button onclick="logout()">Log ud</button>
+    <!-- NYT (bruger-krav 2026-08-20 — ny "Opsætning"-fane, OAuth-opsætning
+         flyttet hertil fra en løs knap nederst på siden; "Log ud" er
+         flyttet til øverst til højre i skærmbilledet, se .dash-topbar). -->
+    <div class="tab-panel" id="tab-opsaetning">
+      <div class="card" id="card-opsaetning-oauth">
+        <h2>OAuth-opsætning</h2>
+        <div class="ov-intro">
+          Lad jeres medarbejdere logge ind med kommunens eget OAuth/OIDC-
+          login i stedet for et midlertidigt trial-link.
+        </div>
+        <button type="button" onclick="location.href='/admin/settings/oauth'">⚙️ OAuth-opsætning</button>
+      </div>
+      <div class="ov-intro" style="margin-top:.5rem">Flere indstillinger følger senere.</div>
+    </div>
   `;
   loadOverrideBadesteder().then(loadActiveOverrides);
   loadKommuneStats();
@@ -1696,6 +1726,7 @@ function buildMonthBarHtml(b) {
 function onStatPeriodChange() {
   const period = document.getElementById('stat-period').value;
   document.getElementById('stat-month').style.display = period === 'month' ? '' : 'none';
+  document.getElementById('stat-custom-range').style.display = period === 'custom' ? '' : 'none';
   loadAlertStats();
 }
 
@@ -1813,8 +1844,20 @@ async function loadAlertStats() {
   statEl.textContent = 'Indlæser…';
   const period = document.getElementById('stat-period').value;
   const month = document.getElementById('stat-month').value;
-  const qs = new URLSearchParams({ period });
-  if (period === 'month' && month) qs.set('month', month);
+  const qs = new URLSearchParams();
+  if (period === 'custom') {
+    const from = document.getElementById('stat-from').value;
+    const to   = document.getElementById('stat-to').value;
+    if (!from || !to) {
+      statEl.innerHTML = '<div class="hist-warning">Vælg både fra- og til-dato for en brugerdefineret periode.</div>';
+      return;
+    }
+    qs.set('from', from);
+    qs.set('to', to);
+  } else {
+    qs.set('period', period);
+    if (period === 'month' && month) qs.set('month', month);
+  }
   try {
     const resp = await fetch(`/admin/api/badested-alert-stats?${qs.toString()}`, { cache: 'no-store' });
     const data = await resp.json();
@@ -2001,25 +2044,17 @@ function renderVarselBarChart(containerId, points) {
   `;
 }
 
-const KSTAT_PUSH_TYPE_LABELS = {
-  'risikovarsel':     'Risikovarsler',
-  'ny-vurdering':     'Badestedsindberetning',
-  'kommune-override': 'Kommunalt varsel',
-};
-
-function kstatPushTypeRows(byType) {
-  const entries = Object.entries(byType || {});
-  if (entries.length === 0) return '<tr><td colspan="4" style="color:var(--ink-soft)">Ingen push sendt endnu</td></tr>';
-  return entries.map(([type, n]) => `
-    <tr>
-      <td>${escHtml(KSTAT_PUSH_TYPE_LABELS[type] || type)}</td>
-      <td class="n">${n.today}</td>
-      <td class="n">${n.last7d}</td>
-      <td class="n">${n.total}</td>
-    </tr>
-  `).join('');
-}
-
+// RETTET (bruger-krav 2026-08-20 — "Samlet antal på tværs af badesteder:
+// # Visninger/# Abonnenter/# Indberetninger/# Varsler. Varselstype afsnit
+// fjernes. Graf for antal visninger, varsler og abonnenter over tid."):
+// den tidligere pr.-varselstype-tabel (kstatPushTypeRows()/
+// KSTAT_PUSH_TYPE_LABELS) er fjernet til fordel for ÉT samlet varsel-tal
+// (data.alertsTotal, se server.js) — og "Badestedsindberetninger over tid"/
+// "Risikovarsler over tid" er erstattet af tre small-multiple-grafer
+// (samme renderTrendChart()-komponent genbrugt tre gange, IKKE én graf med
+// tre skalaer på samme akse — se dataviz-begrundelsen i samtalen: tre
+// målestørrelser af vidt forskellig skala hører til tre grafer, ikke én
+// med dobbelt akse).
 async function loadKommuneStats() {
   const el = document.getElementById('kstat-content');
   if (!el) return;
@@ -2038,37 +2073,45 @@ async function loadKommuneStats() {
     el.innerHTML = `
       <div class="kstat-grid">
         <div class="kstat-box">
-          <div class="kstat-label">Borgerindberetninger</div>
+          <div class="kstat-label"># Visninger</div>
+          <div class="kstat-value">${data.views.total}</div>
+          <div class="kstat-note">Badesteder eller overløb, seneste 90 dage</div>
+        </div>
+        <div class="kstat-box">
+          <div class="kstat-label"># Abonnenter</div>
+          <div class="kstat-value">${data.subscribers}</div>
+          <div class="kstat-note">Webpush, på tværs af ${data.badestedCount} badested${data.badestedCount === 1 ? '' : 'er'}</div>
+        </div>
+        <div class="kstat-box">
+          <div class="kstat-label"># Indberetninger</div>
           <div class="kstat-value">${data.vurderinger.total}</div>
           <div class="kstat-note">${data.vurderinger.last7d} seneste 7 dage · ${data.vurderinger.last30d} seneste 30 dage</div>
         </div>
         <div class="kstat-box">
-          <div class="kstat-label">Webpush-abonnenter</div>
-          <div class="kstat-value">${data.subscribers}</div>
-          <div class="kstat-note">På tværs af ${data.badestedCount} badested${data.badestedCount === 1 ? '' : 'er'}</div>
+          <div class="kstat-label"># Varsler</div>
+          <div class="kstat-value">${data.alertsTotal}</div>
+          <div class="kstat-note">Risikovarsler, kommunale varsler og indberetningskvitteringer</div>
         </div>
       </div>
-
-      <table class="kstat-table">
-        <thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
-          <td>Varseltype</td><td class="n">I dag</td><td class="n">7d</td><td class="n">Total</td>
-        </tr></thead>
-        <tbody>${kstatPushTypeRows(data.pushByType)}</tbody>
-      </table>
 
       <div class="trend-grid">
         <div class="trend-card">
-          <h2>Badestedsindberetninger over tid</h2>
-          <div class="trend-chart-wrap" id="kstat-trend-vurderinger"></div>
+          <h2>Visninger over tid</h2>
+          <div class="trend-chart-wrap" id="kstat-trend-views"></div>
         </div>
         <div class="trend-card">
-          <h2>Risikovarsler over tid</h2>
-          <div class="trend-chart-wrap" id="kstat-trend-risikovarsel"></div>
+          <h2>Varsler over tid</h2>
+          <div class="trend-chart-wrap" id="kstat-trend-alerts"></div>
+        </div>
+        <div class="trend-card">
+          <h2>Abonnenter over tid</h2>
+          <div class="trend-chart-wrap" id="kstat-trend-subscribers"></div>
         </div>
       </div>
     `;
-    renderTrendChart('kstat-trend-vurderinger', data.trends.vurderinger, { label: 'Badestedsindberetninger' });
-    renderTrendChart('kstat-trend-risikovarsel', data.trends.risikovarsel, { label: 'Risikovarsler' });
+    renderTrendChart('kstat-trend-views', data.trends.views, { label: 'Visninger' });
+    renderTrendChart('kstat-trend-alerts', data.trends.alerts, { label: 'Varsler' });
+    renderTrendChart('kstat-trend-subscribers', data.trends.subscribers, { label: 'Abonnenter' });
   } catch (e) {
     el.innerHTML = '<div class="err">Kunne ikke hente statistik — tjek din forbindelse.</div>';
   }
