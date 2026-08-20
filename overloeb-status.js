@@ -47,8 +47,9 @@ function bucketForBadested(entry) {
  * @param {Array} p.riskScoresPoints  — riskScoresCache.points (server.js) — alle PULS-punkter, ukommune-scopet
  * @param {Array} p.badevandList      — badevandRiskCache.badevand (server.js)
  * @param {Array} p.tenantBadesteder  — tenantBadesteder.resolveTenantBadesteder()'s resultat, [{id,slug,navn,lat,lng}]
+ * @param {Map<string,number>} [p.subscriberCounts] — badestedId (string) -> antal webpush-abonnenter, se server.js's getSubscriberCountsForBadestedIds()
  */
-function computeOverloebStatusForTenant({ tenant, horizon, riskScoresPoints, badevandList, tenantBadesteder }) {
+function computeOverloebStatusForTenant({ tenant, horizon, riskScoresPoints, badevandList, tenantBadesteder, subscriberCounts }) {
   const horizonField = resolveHorizonField(horizon);
   const tenantKey = normalizeKommuneKey(tenant?.name || '');
 
@@ -83,6 +84,29 @@ function computeOverloebStatusForTenant({ tenant, horizon, riskScoresPoints, bad
         dataQuality: pt.dataQuality ?? null,
         weatherKey: pt.weatherKey ?? null,
         meanVolumePerEvent: pt.meanVolumePerEvent ?? null,
+        // NYT (bruger-krav 2026-08-20 — "samtlige puls data" i udløbs-
+        // detaljepanelet): resten af de rå PULS-stamdata, gennemstukket fra
+        // riskScoresPoints (se server.js's allPointRisks.push() for
+        // feltbeskrivelser og hvorfor `cod` bevidst er udeladt).
+        outfallId: pt.outfallId ?? null,
+        overflowProbBase: pt.overflowProbBase ?? null,
+        thresholdMm: pt.thresholdMm ?? null,
+        volumeM3: pt.volumeM3 ?? null,
+        eventsPerYear: pt.eventsPerYear ?? null,
+        reducedArea: pt.reducedArea ?? null,
+        type: pt.type ?? null,
+        sewerStructure: pt.sewerStructure ?? null,
+        latestDischargeYear: pt.latestDischargeYear ?? null,
+        bod: pt.bod ?? null,
+        nitrogen: pt.nitrogen ?? null,
+        phosphor: pt.phosphor ?? null,
+        normalYear: pt.normalYear ?? null,
+        normalVol: pt.normalVol ?? null,
+        normalEv: pt.normalEv ?? null,
+        normalCod: pt.normalCod ?? null,
+        normalBod: pt.normalBod ?? null,
+        normalNitrogen: pt.normalNitrogen ?? null,
+        normalPhosphor: pt.normalPhosphor ?? null,
       };
     });
 
@@ -124,6 +148,12 @@ function computeOverloebStatusForTenant({ tenant, horizon, riskScoresPoints, bad
       dataConfidence: entry?.dataConfidence ?? null,
       outletCount: Array.isArray(entry?.outlets) ? entry.outlets.length : 0,
       overrideInfo: entry?.overrideInfo ?? null,
+      // NYT (bruger-krav 2026-08-20 — "antal webpush abonnenter for det
+      // pågældende badested" i detaljepanelet): subscriberCounts er valgfri
+      // (undefined for kaldssteder der ikke har brug for det, se filhovedet)
+      // — falder tilbage til 0, aldrig undefined, så klienten altid kan
+      // vise et tal uden selv at skulle null-tjekke.
+      subscriberCount: subscriberCounts?.get(String(b.id)) ?? 0,
     };
   });
 

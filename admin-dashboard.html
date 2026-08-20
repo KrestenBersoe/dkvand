@@ -372,6 +372,16 @@
   .ovl-panel-bar-pct { flex: 0 0 3rem; text-align: right; font-variant-numeric: tabular-nums; }
   .ovl-panel-chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0; }
   .ovl-panel-stamdata { font-size: .82rem; line-height: 1.8; margin: .8rem 0; }
+  /* NYT (bruger-krav 2026-08-20) — "Fuld PULS-stamdata"-udfoldning i
+     udløbs-detaljepanelet, se ovlFullPulsDataHtml(). */
+  .ovl-panel-full-data { margin: .6rem 0; }
+  .ovl-panel-full-data summary {
+    cursor: pointer; font-size: .8rem; font-weight: 600; color: var(--ink-soft);
+    padding: .3rem 0;
+  }
+  .ovl-panel-full-data summary:hover { color: var(--ink); }
+  .ovl-panel-full-data[open] summary { color: var(--ink); }
+  .ovl-panel-full-data .ovl-panel-stamdata { margin-top: .3rem; }
   .ovl-panel-stamdata a { color: var(--accent); }
   .ovl-panel-rain-title { font-size: .72rem; color: var(--ink-soft); margin: .8rem 0 .3rem; text-transform: uppercase; letter-spacing: .05em; }
 
@@ -1130,11 +1140,55 @@ function openOvlUdlobPanel(u) {
       <div>📊 Datakvalitet: ${escHtml(qualityLabel)}</div>
       <div>🪣 Gennemsnitlig udledning: ${literTekst}</div>
     </div>
+    ${ovlFullPulsDataHtml(u)}
     <div class="ovl-panel-rain-title">Nedbør — seneste 7 dage</div>
     <div id="ovl-panel-rain">Indlæser…</div>
   `;
   panel.classList.add('open');
   loadOvlRainChart(u.weatherKey);
+}
+
+// NYT (bruger-krav 2026-08-20 — "vi skal inkludere samtlige puls data vi
+// har i dkvand appen"): resten af de rå PULS-felter, se server.js's
+// allPointRisks.push()/overloeb-status.js's udloeb-mapping for hvor de
+// kommer fra. Foldet sammen som standard (<details>, ingen ekstra JS
+// nødvendig) — panelet har allerede risikobjælker/stamdata øverst, denne
+// sektion er den fulde, uforarbejdede kildedata for dem der har brug for
+// det. ⚠️ cod (COD kg/år) er BEVIDST UDELADT — se server.js's
+// loadPulsPointsFull()-kommentar for den kendte row[13]-kollision med
+// tærskel-fletningen (afventer egen rettelse, ikke del af denne opgave).
+function ovlNum(n, unit) {
+  if (n == null) return '—';
+  return `${Number(n).toLocaleString('da-DK', { maximumFractionDigits: 2 })}${unit ? ' ' + unit : ''}`;
+}
+function ovlFullPulsDataHtml(u) {
+  const rows = [
+    ['Udløbstype', u.type || '—'],
+    ['Kloaksystem-kode', u.sewerStructure || '—'],
+    ['Reduceret opland', ovlNum(u.reducedArea, 'ha')],
+    ['Seneste registrerede udledningsår', u.latestDischargeYear ?? '—'],
+    [`Volumen (${u.latestDischargeYear ?? 'seneste år'})`, ovlNum(u.volumeM3, 'm³')],
+    [`Overløbshændelser (${u.latestDischargeYear ?? 'seneste år'})`, u.eventsPerYear ?? '—'],
+    ['Regntærskel (model)', ovlNum(u.thresholdMm, 'mm')],
+    ['Overløbssandsynlighed (basis)', u.overflowProbBase != null ? ovlNum(u.overflowProbBase * 100, '%') : '—'],
+    ['BOD (biokemisk iltforbrug)', ovlNum(u.bod, 'kg/år')],
+    ['Kvælstof (N)', ovlNum(u.nitrogen, 'kg/år')],
+    ['Fosfor (P)', ovlNum(u.phosphor, 'kg/år')],
+    [`Normalår-volumen (${u.normalYear ?? '—'})`, ovlNum(u.normalVol, 'm³')],
+    ['Normalår-hændelser', u.normalEv ?? '—'],
+    ['Normalår-COD', ovlNum(u.normalCod, 'kg/år')],
+    ['Normalår-BOD', ovlNum(u.normalBod, 'kg/år')],
+    ['Normalår-kvælstof', ovlNum(u.normalNitrogen, 'kg/år')],
+    ['Normalår-fosfor', ovlNum(u.normalPhosphor, 'kg/år')],
+    ['PULS outfallId', u.outfallId || '—'],
+  ];
+  return `
+    <details class="ovl-panel-full-data">
+      <summary>Fuld PULS-stamdata</summary>
+      <div class="ovl-panel-stamdata">
+        ${rows.map(([label, val]) => `<div>${escHtml(label)}: ${escHtml(String(val))}</div>`).join('')}
+      </div>
+    </details>`;
 }
 
 function closeOvlUdlobPanel() {
@@ -1194,6 +1248,7 @@ function openBadestedDetailPanel(b) {
       <div>🧭 Kilde: ${sourceLabel}</div>
       <div>📊 Datakonfidens: ${confidenceLabel}</div>
       <div>🚰 ${b.outletCount} udløb i nærheden</div>
+      <div>🔔 ${b.subscriberCount ?? 0} webpush-abonnent${(b.subscriberCount ?? 0) === 1 ? '' : 'er'}</div>
     </div>
     <div class="ovl-panel-rain-title">Historik</div>
     <div class="bv-history-summary" id="ovl-panel-history">Indlæser…</div>

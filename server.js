@@ -1306,12 +1306,20 @@ app.get('/admin/api/overloeb-status', tenantAdmin.requireTenantSession, async (r
     }
     const horizon = OVERLOEB_HORIZONS.has(req.query.horizon) ? req.query.horizon : 'nu';
     const tenantBadestederList = tenantBadesteder.resolveTenantBadesteder(tenant.name, kommuneKeyToBadesteder);
+    // NYT (bruger-krav 2026-08-20 — "antal webpush abonnenter for det
+    // pågældende badested" i badested-detaljepanelet): computeOverloebStatusForTenant()
+    // er bevidst en ren, DB-fri funktion (se dens filhoved) — abonnenttallet
+    // hentes derfor HER (ét samlet DB-opslag for ALLE tenantens badesteder,
+    // samme genbrugte funktion som /admin/api/badested-alert-stats allerede
+    // bruger) og gives ind som ren data, ligesom riskScoresPoints/badevandList.
+    const subscriberCounts = await getSubscriberCountsForBadestedIds(tenantBadestederList.map(b => b.id));
     const result = overloebStatus.computeOverloebStatusForTenant({
       tenant,
       horizon,
       riskScoresPoints: riskScoresCache.points,
       badevandList: badevandRiskCache.badevand,
       tenantBadesteder: tenantBadestederList,
+      subscriberCounts,
     });
     res.set('Cache-Control', 'no-store');
     res.json(result);
@@ -2543,6 +2551,23 @@ function loadPulsPointsFull() {
       // favoritter — det tidligere warnMap/outletHits — er fjernet efter
       // bruger-ønske 2026-08-12: push handler nu udelukkende om badesteder.)
       const outfallId = (r[8] != null && r[8] !== '') ? String(r[8]) : null;
+      // NYT (bruger-krav 2026-08-20 — "samtlige puls data vi har i
+      // dkvand-appen" i kommune-dashboardets udløbs-detaljepanel):
+      // resten af de bagvedliggende PULS-felter (se update-puls.js's
+      // filhoved for den fulde d[]-skema-liste), hidtil ALDRIG udtrukket
+      // her — kun brugt internt af scripts/compute-puls-udloeb-taerskler.js
+      // (reducedArea/type/sewerStructure) eller slet ikke (resten).
+      //
+      // ⚠️ BEVIDST UDELADT: cod (r[13]) — se scripts/merge-puls-
+      // thresholds.js's `row[13] = thresholdMm`-kollision med update-puls.
+      // js's NYERE cod-felt på SAMME index (opdaget 2026-08-20, afventer
+      // egen rettelse): for ~70% af udløbene (dem uden et faktisk merget
+      // tærskel-match) er r[13] stadig den ægte cod-værdi, men for de
+      // resterende ~30% er den overskrevet af en tærskel i mm — der er
+      // INGEN pålidelig måde at vide hvilken af de to r[13] rent faktisk
+      // er for et givet udløb, før selve kollisionen er rettet. Resten af
+      // feltnavnene nedenfor (bod/nitrogen/phosphor/normalår-sættet)
+      // rammes IKKE af denne kollision (egne, urørte indices).
       return {
         id: String(i),
         outfallId,
@@ -2561,6 +2586,24 @@ function loadPulsPointsFull() {
         // se computeKommuneBenchmark()): qualityCode fra PULS-grunddata,
         // se derivePulsFields()'s filhoved.
         dataQuality: derived.dataQuality,
+        // NYT (bruger-krav 2026-08-20) — rå stamdata, kun til visning
+        // (indgår ikke i nogen risikoberegning):
+        volumeM3: r[5] ?? null,               // seneste registrerede års udledte volumen (m³)
+        eventsPerYear: r[6] ?? null,           // seneste registrerede års antal overløbshændelser
+        reducedArea: r[9] ?? null,             // reduceret (befæstet) opland, hektar
+        type: r[10] ?? null,                   // udløbstype, allerede menneskelæsbar tekst fra PULS-kilden
+        sewerStructure: r[11] ?? null,         // kloaksystem-kode (SE/SF m.fl. — se PULS_NO_WASTEWATER_CODES)
+        latestDischargeYear: r[12] ?? null,
+        bod: r[14] ?? null,                    // biokemisk iltforbrug, kg/år
+        nitrogen: r[15] ?? null,               // kg/år
+        phosphor: r[16] ?? null,               // kg/år
+        normalYear: r[17] ?? null,             // MST's normalårs-referenceperiode
+        normalVol: r[18] ?? null,
+        normalEv: r[19] ?? null,
+        normalCod: r[20] ?? null,
+        normalBod: r[21] ?? null,
+        normalNitrogen: r[22] ?? null,
+        normalPhosphor: r[23] ?? null,
       };
     });
     console.log(`loadPulsPointsFull: ${_pulsPointsFull.length} PULS-punkter indlæst til push-evaluering`);
@@ -3062,6 +3105,21 @@ async function _evaluatePushNotificationsInner(testThresholds) {
       // sorteringsmulighed var derfor reelt ikke-funktionel. pt.
       // meanVolumePerEvent er allerede i scope (bruges i riskInput ovenfor).
       meanVolumePerEvent: pt.meanVolumePerEvent,
+      // NYT (bruger-krav 2026-08-20 — "samtlige puls data" i udløbs-
+      // detaljepanelet): gennemstik af loadPulsPointsFull()'s rå PULS-
+      // stamdata (se dens filhoved for feltbeskrivelser og hvorfor `cod`
+      // bevidst IKKE er med) — samme "allerede i scope på pt"-mønster som
+      // waterArea/dataQuality ovenfor.
+      outfallId: pt.outfallId,
+      overflowProbBase: pt.overflowProbBase,
+      thresholdMm: pt.thresholdMm,
+      volumeM3: pt.volumeM3, eventsPerYear: pt.eventsPerYear,
+      reducedArea: pt.reducedArea, type: pt.type, sewerStructure: pt.sewerStructure,
+      latestDischargeYear: pt.latestDischargeYear,
+      bod: pt.bod, nitrogen: pt.nitrogen, phosphor: pt.phosphor,
+      normalYear: pt.normalYear, normalVol: pt.normalVol, normalEv: pt.normalEv,
+      normalCod: pt.normalCod, normalBod: pt.normalBod,
+      normalNitrogen: pt.normalNitrogen, normalPhosphor: pt.normalPhosphor,
     });
 
     if ((foreRisk || 0) > minRisk) {
