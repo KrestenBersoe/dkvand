@@ -1,86 +1,156 @@
-# dkvand — samlet, deployment-klart repo
+# dkvand — ditbadevand.dk
 
-Sammensat fra `Badevand_1.zip` + `Badevand_2.zip` + de nyeste, testede
-filer fra denne samtale. Alle overlappende filer er krydstjekket for
-indhold (ikke kun filnavn/dato) — se "Kilde pr. fil" nedenfor.
+Nationalt badevands-/overløbsvarslingssystem for Danmark. Node.js/Express på
+Fly.io, Fly Managed Postgres. Beregner forureningsrisiko for badesteder og søer
+ud fra PULS-overløbsregisteret, nedbør/vejr (DMI/Open-Meteo) og havstrøm
+(CMEMS), sender webpush-varsler, og tilbyder et separat kommunalt
+admin-dashboard ("Kommunepakke") som betalt tenant-produkt.
 
-## Verificeret
+## Kernefunktioner
 
-- **Al kode** (JS, Python, Bash, indlejret JS i HTML) er syntakstjekket — 0 fejl
-- **14 automatiserede tests** (`scripts/id15/*.test.js`) — alle bestået
-- **Hver fil `Dockerfile` COPY'er** findes rent faktisk i arkivet
-- **Hver fil frontend'en henter (`fetch(...)`)** findes rent faktisk i arkivet
+**Offentlig side** (`dansk-overloeb-kort.html` + `server.js`)
+- Landsdækkende kort: badesteder, søer, PULS-overløbspunkter, risikofarvet
+  efter en delt risikoformel (`risk-model.js`, samme kode server- og
+  klientside — SKAL holdes i sync)
+- Havstrøms-animation (CMEMS, se "Strøm" nedenfor)
+- SSR-sider pr. badested/sø/udløb med JSON-LD (Place+Dataset), datatillids-niveau
+  (confidence tier), og borgerindberetninger (ét-tryks status + algeobservation)
+- Webpush-varsler ved risikoskift, styret af `risk-model.js` + `overloeb-events.js`
+- PDF-/EPS-/live digitale skilte pr. badested (`skilte.js`, `badested-skilt.html`)
 
-## Rettet undervejs
+**Kommunepakke** (`admin-dashboard.html` + tenant-modulerne i `server.js`)
+Separat, login-baseret kommunalt admin-produkt. OAuth eller trial-login,
+sessions cookie-baseret (`tenant-session.js`). Faner: **Overløb** (live
+overløbskort m. varselsringe, hændelseslog, prioriteret liste, fuldskærm/
+iframe-embed), **Badevand** (badested-/udløbs-kort med fuld PULS-stamdata,
+Badevandssteder-historik, kommune-benchmark, borgerindberetninger),
+**Skilte** (PDF/EPS/live-skilt-generering med kommunelogo), **Opsætning**
+(OAuth). Egen sales-portal (`internal-sales.html`,
+`internal-create-trial.html`) til at oprette trials og generere login-links.
 
-**Dockerfile manglede to `COPY`-linjer** for `rbu-lake-links.json` og
-`id15-lake-matches.json` — begge hentes af frontend'en, men var ikke med i
-nogen af de to uploadede versioner. Uden rettelsen ville billedet bygge og
-containeren køre helt uden fejl — men hele søernes RBU- og ID15-opstrøms-
-matching ville stille falde tilbage til navnematch/rumlig nærhed i
-produktion, uden nogen synlig fejlmeddelelse. Tjekket mod `server.js`:
-den generiske `express.static()`-fallback (linje 927) server filerne
-automatisk, når de findes i containeren — ingen ændring nødvendig i
-`server.js` selv.
+## Datagrundlag
 
-## Kilde pr. fil (hvor der var flere kandidater)
-
-| Fil | Brugt kilde | Begrundelse |
+| Kilde | Bruges til | Opdateres via |
 |---|---|---|
-| `id15-lake-matches.json` | Denne samtales sandkasse | Badevand_1's udgave manglede rejsetids-integration (`pulsPoints`/`travelTimeHours`/`stoppedAtLakes`) — ældre snapshot |
-| `match-lakes-via-id15.js` + test | Denne samtales sandkasse | Samme årsag — Badevand_1's udgave var 144 linjer vs. 232, uden rejsetids-logik |
-| `scripts/id15/compute-travel-times.js` + test | Denne samtales sandkasse | Fandtes slet ikke i nogen af de to arkiver |
-| `id15-travel-times.json`, `id15-area-centroid.json` | Denne samtales sandkasse | Samme årsag |
-| `package.json` | Badevand_2 | Badevand_1's udgave (60 bytes, kun `@xmldom/xmldom`) var en rest fra et scripts-undereksperiment, ikke den rigtige projekt-root-fil |
-| `Dockerfile` | Badevand_2 (identisk med B1), **rettet** | Se ovenfor |
-| Alt andet overlap (dansk-overloeb-kort.html, update-all-data.sh, build-rbu-lake-links.js, soe/puls-to-id15.json, id15-flow-graph.json m.fl.) | Verificeret byte-for-byte identisk på tværs af begge arkiver og denne samtales sandkasse | Ingen konflikt at løse |
+| PULS (Miljøstyrelsen) | Overløbs-/udledningspunkter, stamdata, tærskler | `update-puls.js` + `scripts/merge-puls-thresholds.js` |
+| VP3-geodata | Kystvande/søer/vandløb/badevandsområder/RBU | `fetch-vp3-all.js` |
+| Open-Meteo | Nedbør (observeret/prognose) | Løbende, in-memory cache i `server.js` |
+| DMI | Observeret nedbør (badested-niveau) | Løbende |
+| CMEMS (Copernicus Marine) | Havstrøm + havtemperatur | `fetch_currents.py`, hentet server-side hver time |
+| ID15/DHM-terrænmodel | Opstrøms sø-/vandløbsmatching | `scripts/id15/` (sjældent kørt) |
 
-## Bevidst udeladt
+### Strøm (CMEMS)
 
-- **`Update/`-undermappen** fra Badevand_2 — ældre, forældede kopier af `update-all-data.sh`/`fetch-vp3-all.js` (101 hhv. 31 linjers forskel til de korrekte rod-niveau-udgaver, tidsstemplet tidligere)
-- **`fetch-vp3-water-layers.js`, `download-vandomraader.js`** — begge er forgængere til `fetch-vp3-all.js` (bekræftet i sidstnævntes egen kildehenvisning), ikke refereret fra `update-all-data.sh`
-- **De rå `vp3_*_raw.geojson`-filer** (kystvande/rbu/soeer/vandlob, ~93 MB tilsammen) — mellemliggende output fra `fetch-vp3-all.js`, regenereres automatisk ved næste `update-all-data.sh`-kørsel
-- **Diverse løse filer fra Badevand_1** (`healthcheck.html`, `upload_log.json`, `upload_resultat.csv`, `upload_store_log.json`, "Claude answers", "Full site scraping with language", `byacre.md`) — ser ud til at være scratch/note-filer, ikke del af selve applikationen. Sig til hvis nogen af dem faktisk skal med.
+To produkter kombineres i `fetch_currents.py` til ét sammenhængende gitter:
 
-## Struktur
+- **Østersø-produktet** (`cmems_mod_bal_phy_anfc_PT1H-i`,
+  BALTICSEA_ANALYSISFORECAST_PHY_003_006) — hoveddækning, ca. 9–16,5°E.
+- **NWSHELF-produktet** (`cmems_mod_nws_phy-cur_anfc_1.5km-2D_PT1H-i_202511`
+  + tilhørende SST-datasæt) — supplerer VESTFOR Østersø-produktets grænse
+  (Vesterhavet/den jyske vestkyst, ned til 6°E), interpoleret onto PRÆCIS
+  samme gitter-spacing/oprindelse som Østersø-punkterne, så
+  `buildVelocityGridJSON()` i `server.js` (som antager ét regulært gitter)
+  kan flette dem uden videre.
+
+Farveskalaen i strøm-animationen (`windy-currents.js`) er RELATIV min/max
+over de faktiske temperaturer i det viste datasæt (beregnet klientside i
+`computeVelocityTempRangeK()`), ikke en fast skala — så begge produkters
+punkter altid falder inden for samme blå→røde farveinterval.
+
+## Arkitektur / struktur
 
 ```
 dkvand/
-├── Dockerfile                    RETTET (2 manglende COPY-linjer)
-├── fly.toml
-├── package.json / requirements.txt
-├── server.js / fetch_currents.py / overloeb-sw.js
-├── dansk-overloeb-kort.html
-├── puls-data.json / rbu-lake-links.json / id15-lake-matches.json
-├── vp3_*.geojson (5 simplificerede/slankede filer)
-├── update-all-data.sh            Jævnlig dataopdatering (15 trin)
-├── update-puls.js / fetch-vp3-all.js / slim-geojson.js
-├── risk-model.js                 Server-side risikoformel (delt med dansk-overloeb-kort.html, SKAL holdes i sync)
+├── server.js                     Hovedapplikation (Express, alle API-ruter)
+├── db.js                         Delt Postgres-pool (Fly Managed Postgres)
+├── risk-model.js                 Risikoformel — delt server/klient, SKAL holdes i sync
+├── badevand-risk.js               Badevands-risiko-kaskade (søer/kystvande/badesteder)
+├── badevand-risk-worker.js       Samme kaskade i egen worker_thread (event loop-aflastning)
+├── current-grid.js               Fælles CMEMS-gitter-opbygning/opslag (hoved- og worker-tråd)
+├── fetch_currents.py             CMEMS-hentning (Østersø + NWSHELF), se ovenfor
+├── overloeb-status.js            Beregner kommune-scopet overløbsstatus (Kommunepakke)
+├── overloeb-events.js            Hændelseslog + persisteret bucket-tilstand (Postgres)
+├── page-views.js                 Dagligt visningstæller-aggregat pr. badested/udløb
+├── app-metrics.js                Installations-telemetri, push-log, daglig risikohistorik
+├── badested-observations.js      Borgerindberetninger (status/algeobservation)
+├── slug-index.js / seo-pages.js  URL-slug-arkitektur + SSR-sideindhold
+├── water-classification.js       Sø/kystvand-klassificering
+├── skilte.js / logo-fetch.js     Skilt-generering (PDF/EPS/live) + kommunelogo (SVG→PNG)
+├── tenant-*.js, oauth-*.js       Kommunepakke: tenant-model, sessions, OAuth
+├── badested-overrides*.js        Kommunal manuel overstyring af badested-status
+├── dansk-overloeb-kort.html      Offentligt kort (Leaflet + windy-currents.js)
+├── admin-dashboard.html          Kommunalt admin-dashboard
+├── windy-currents.js             Vendoret strøm-animationsmotor (windy.js-afledt)
+├── puls-data.json                PULS-stamdata inkl. beregnede tærskler
+├── vp3_*.geojson                 Simplificerede VP3-lag
 └── scripts/
-    ├── build-rbu-lake-links.js
-    ├── dhm-schema-check.js       (debug-værktøj, ikke del af selve appen)
-    ├── fetch-puls-outlet-history.js        Trin 2: historisk nedbør pr. PULS-udløb
-    ├── compute-puls-udloeb-taerskler.js    Trin 3: udløbs-specifikke tærskler (se PULS-TAERSKLER-RAPPORT.md)
-    ├── merge-puls-thresholds.js            Trin 4: fletter tærskler ind i puls-data.json (row[13])
-    ├── diagnose-puls-taerskler.js          Stikprøvetjek af tærskeloutput, ikke del af pipelinen
-    └── id15/
-        ├── *.js, *.py, *.sh      Fulde ID15-terrænmodel-pipeline
-        ├── *.test.js             14 automatiserede tests
-        ├── ID15_VP3_II_2025.*    Rå shapefil (fandtes i intet af de to arkiver, kun her)
-        └── id15-*.json, *-to-id15.json   Forberegnede mellemresultater
+    ├── update-all-data.sh                  Fuld dataopdatering (flere trin)
+    ├── compute-puls-udloeb-taerskler.js    PULS-udløbstærskler (se PULS-TAERSKLER-RAPPORT.md)
+    ├── merge-puls-thresholds.js            Fletter tærskler ind i puls-data.json
+    └── id15/                               ID15-terrænmodel-pipeline (sjældent kørt)
 ```
 
 ## Deployment
 
 ```bash
-git init && git add . && git commit -m "Initial commit — samlet fra Badevand_1+2"
 fly deploy -a dkvand
 ```
 
-Husk `fly secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... MAPTILER_KEY=...`
-hvis de ikke allerede er sat på appen.
+Kræver bl.a. følgende `fly secrets`: `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`,
+`MAPTILER_KEY`, `CMEMS_USERNAME`/`CMEMS_PASSWORD`, `OBSERVATION_IP_SALT`,
+Postgres-forbindelsen (Fly Managed Postgres, tilknyttet automatisk).
+
+**Dockerfile-fælde** (gentagne gange årsag til produktionsudfald): hver ny
+lokal `require('./modul')` i `server.js` (eller transitivt) SKAL have sin
+egen `COPY modul.js ./`-linje i `Dockerfile` — ellers crasher containeren
+øjeblikkeligt ved opstart (`Cannot find module`). Tjek Dockerfile FØR deploy,
+ikke efter.
 
 ## Fremtidige dataopdateringer
 
 - **Jævnligt** (PULS opdateres): `./update-all-data.sh`
-- **Sjældent** (ID15-grænser/DHM-terræn ændrer sig): `DHM_APIKEY=xxx ./scripts/id15/setup-id15-terrain-model.sh`
+- **Sjældent** (ID15-grænser/DHM-terræn ændrer sig):
+  `DHM_APIKEY=xxx ./scripts/id15/setup-id15-terrain-model.sh`
+
+## Seneste udvikling (siden sidste dokumentationsopdatering, 2026-07-20)
+
+### Kommunepakke — nyt kommunalt admin-produkt (bygget fra bunden)
+Tenant-model, OAuth-selvbetjening + trial-login, sessions. Dashboard med
+Overløb-/Badevand-/Skilte-/Opsætning-faner: live overløbskort med
+varselsringe og klik-detaljepaneler (badested + udløb, fuld PULS-stamdata,
+webpush-abonnenttal, udløbsliste), hændelseslog, kommune-benchmark,
+borgerindberetninger, PDF/EPS/live-skilt-generering med kommunelogo
+(inkl. SVG-understøttelse), og en redesignet Statistik-fane (visningstæller
+pr. badested/udløb, samlet visninger/abonnenter/indberetninger/varsler,
+trendgrafer, standardiserede periodevælgere). Egen sales-portal til
+trial-oprettelse og login-links. GDPR-sikker kommunal overstyringsbanner.
+
+### PULS-datakvalitet — kritisk fejl fundet og rettet
+`row[13]` blev brugt til BÅDE cod-værdi og beregnet tærskel — kollisionen
+undervurderede overløbsrisikoen for ca. 70% af udløbene. Tærsklen flyttet til
+`row[24]`; dokumentation og tests rettet. En efterfølgende frisk PULS-hentning
+ødelagde indeksbaseret sø-/kystvands-matching (id15-*.json refererer punkter
+via array-indeks, ikke stabilt id) og blev akut revertet til sidste kendte
+gode datasæt. Fuld PULS-stamdata er nu synlig i Kommunepakkens udløbspanel.
+
+### Havstrøm — Østersø-produktets dækningshuller lukket
+Animationen gik gennem flere iterationer (fra statisk lag → vendoret windy.js
+-motor, diverse rendering-/farve-/maske-rettelser) og fik i dag suppleret
+Østersø-produktet med NWSHELF-produktet for at lukke to dækningshuller:
+Vesterhavet/den jyske vestkyst (intet Østersø-data vest for ~9°E) og
+farvandet øst for Bornholm (tidligere afskåret af en selvpålagt 15,0°E-grænse,
+udvidet til 16,5°E). Begge nye områder får ægte temperatur (ikke kun strøm),
+så den relative farveskala fortsat spænder korrekt. Samme udvidelse gav
+automatisk den eksisterende retningsbevidste kystvands-risikomodel (opstrøms/
+nedstrøms via strømvektor) reelle data for vestkysten, uden kodeændring.
+
+### SEO/indeksering
+Badested-/sø-sider fik unikt SSR-indhold (var næsten-duplikater pga. delt
+app-shell-boilerplate), JSON-LD udvidet til Place+Dataset, og et
+per-badested datatillidsniveau (confidence tier) tilføjet.
+
+### Øvrigt
+Borgervurderings-grænser hævet (5/dag, 50/dag ved GPS-bekræftet tilstedeværelse,
+den tidligere ét-badested-pr-dag-regel fjernet). Flere robusthedsrettelser
+(pg-pool/event-loop, worker_threads-aflastning af den tunge badevands-
+risikoberegning, gentagne Dockerfile-COPY-mangler efter nye moduler).
