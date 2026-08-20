@@ -1240,7 +1240,7 @@ app.get('/admin/api/stats', tenantAdmin.requireTenantSession, async (req, res) =
       .map(pt => pt.id);
     const viewEntityIds = [...ids, ...udloebIds];
 
-    const [vurderinger, subscriberCounts, alertRows, vurderingTrendRows, viewsTotal, viewsTrend] = await Promise.all([
+    const [vurderinger, subscriberCounts, alertRows, vurderingTrendRows, viewsTotal, viewsTrend, subscriberTrend] = await Promise.all([
       badestedObs.getVurderingStatsForBadestedIds(ids),
       getSubscriberCountsForBadestedIds(ids),
       appMetrics.getAlertRowsForBadestedIds(ids),

@@ -1,1 +1,7 @@
 copernicusmarine==2.4.1
+# xarray.Dataset.interp() (bruges til at flette NWSHELF-vestkystdata onto
+# Østersø-gitteret i fetch_currents.py) kræver scipy — ikke en transitiv
+# afhængighed af copernicusmarine/xarray i sig selv, uden denne linje fejler
+# .interp()-kaldet med "ModuleNotFoundError: No module named 'scipy'"
+# (set direkte i produktion, se fetch_currents.py's NWSHELF-udvidelse).
+scipy
