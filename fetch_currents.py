@@ -100,10 +100,21 @@ LON_MIN, LON_MAX = 8.0, 15.0
 # supplerende for det stykke vestkysten Østersø-produktet ikke selv dækker
 # (se west_lons-udregningen nedenfor). CMEMS holder strøm og temperatur i
 # SEPARATE datasæt for dette produkt (i modsætning til Østersø-produktet
-# ovenfor, hvor thetao er del af samme datasæt) — temperatur er derfor
-# bevidst UDELADT for vestkyst-punkterne i denne omgang, samme "graciøst
-# udeladt, ikke fejlende" mønster som thetao-fallback'en for Østersø-delen.
+# ovenfor, hvor thetao er del af samme datasæt) — begge hentes derfor hver
+# for sig nedenfor, samme variabelnavn (thetao) i begge, bekræftet direkte
+# mod produktionens CMEMS-login.
+#
+# RETTET (bruger-rapport 2026-08-20: "styling af strømkortlaget er ikke
+# gældende for det nye datagrundlag for vestkysten" — windy-currents.js'
+# farveskala er en RELATIV min/max over de faktiske temperaturer i det
+# viste datasæt, se computeVelocityTempRangeK() i dansk-overloeb-kort.html.
+# Uden reel temp fik ALLE vestkyst-punkter samme syntetiske gennemsnits-
+# faldback (fallbackTempC i server.js's buildVelocityGridJSON()), så hele
+# Vesterhavet tegnede som ÉN ensfarvet klat i stedet for samme blå→røde
+# gradient som resten af farvandet): henter nu ÆGTE SST for vestkyst-
+# punkterne fra samme NWSHELF-produkts SST-datasæt, se DATASET_ID_NWS_SST.
 DATASET_ID_NWS = "cmems_mod_nws_phy-cur_anfc_1.5km-2D_PT1H-i_202511"
+DATASET_ID_NWS_SST = "cmems_mod_nws_phy-sst_anfc_1.5km-2D_PT1H-i_202511"
 WEST_LON_MIN = 6.0  # dækker Vesterhavet ud til dansk søterritoriums vestgrænse
 
 # RETTET (fjorde/smalle bælter manglede næsten al strøm-animation, se
@@ -350,6 +361,60 @@ try:
                 west_uo = nws_interp["uo"].values
                 west_vo = nws_interp["vo"].values
 
+                # ── SST (thetao) til vestkyst-punkterne — SEPARAT datasæt, se
+                # DATASET_ID_NWS_SST-kommentaren ovenfor. Egen best-effort
+                # try/except: fejler DEN, mister vestkysten kun temp-farven
+                # (falder tilbage til samme gennemsnits-faldback som før denne
+                # rettelse), men beholder stadig selve strøm-animationen.
+                west_temp = None
+                try:
+                    sst_tmp_dir = tempfile.mkdtemp(prefix="cmems_nws_sst_subset_")
+                    try:
+                        copernicusmarine.subset(
+                            dataset_id=DATASET_ID_NWS_SST,
+                            username=USERNAME,
+                            password=PASSWORD,
+                            variables=["thetao"],
+                            minimum_longitude=WEST_LON_MIN - abs(dlon),
+                            maximum_longitude=baltic_lon_min + abs(dlon),
+                            minimum_latitude=float(lats.min()) - abs(dlat),
+                            maximum_latitude=float(lats.max()) + abs(dlat),
+                            start_datetime=start_dt,
+                            end_datetime=end_dt,
+                            output_directory=sst_tmp_dir,
+                            output_filename="sst_nws.nc",
+                            file_format="netcdf",
+                            disable_progress_bar=True,
+                            overwrite=True,
+                        )
+                        sst_files = glob.glob(os.path.join(sst_tmp_dir, "**", "*.nc"), recursive=True)
+                        if not sst_files:
+                            raise RuntimeError("NWSHELF SST subset gav ingen NetCDF-fil")
+
+                        sst_ds = xr.load_dataset(sst_files[0], engine="h5netcdf")
+                        sst_latest = sst_ds.isel(time=-1) if "time" in sst_ds.dims else sst_ds
+                        if "depth" in sst_latest.dims:
+                            sst_latest = sst_latest.isel(depth=0)
+                        elif "elevation" in sst_latest.dims:
+                            sst_latest = sst_latest.isel(elevation=0)
+
+                        sst_lat_name = "latitude" if "latitude" in sst_latest.coords else "lat"
+                        sst_lon_name = "longitude" if "longitude" in sst_latest.coords else "lon"
+
+                        sst_interp = sst_latest.interp({
+                            sst_lat_name: lats,
+                            sst_lon_name: west_lons,
+                        }).transpose(sst_lat_name, sst_lon_name)
+                        west_temp = sst_interp["thetao"].values
+                    finally:
+                        shutil.rmtree(sst_tmp_dir, ignore_errors=True)
+                except Exception as e:
+                    print(
+                        f"[warn] NWSHELF SST (vestkyst-temperatur) fejlede ({describe_exception(e)}) — "
+                        f"vestkyst-punkter fortsætter uden ægte temp",
+                        file=sys.stderr,
+                    )
+
                 west_count = 0
                 for i, lat in enumerate(lats):
                     for j, lon in enumerate(west_lons):
@@ -359,17 +424,22 @@ try:
                             continue
                         if abs(u) > 10 or abs(v) > 10:  # fill-value sentinel
                             continue
-                        points.append({
+                        point = {
                             "lat": round(float(lat), 4),
                             "lng": round(float(lon), 4),
                             "uo": round(u, 4),
                             "vo": round(v, 4),
-                            # temp bevidst udeladt, se DATASET_ID_NWS-kommentaren ovenfor
-                        })
+                        }
+                        if west_temp is not None:
+                            t = float(west_temp[i, j])
+                            if not math.isnan(t) and -5 < t < 40:
+                                point["temp"] = round(t, 2)
+                        points.append(point)
                         west_count += 1
                 print(
                     f"[debug] NWSHELF (vestkyst): {west_count} punkter tilføjet "
-                    f"fra {n_west} gitterkolonner ({WEST_LON_MIN}°E–{baltic_lon_min:.2f}°E)",
+                    f"fra {n_west} gitterkolonner ({WEST_LON_MIN}°E–{baltic_lon_min:.2f}°E), "
+                    f"temp: {'ja' if west_temp is not None else 'nej'}",
                     file=sys.stderr,
                 )
             finally:
