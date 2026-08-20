@@ -128,16 +128,36 @@ test('derivePulsFields: håndterer null eventsPerYear uden at crashe (division v
   assert.strictEqual(derived.meanVolumePerEvent, 500); // vol / max(0,1) = vol/1
 });
 
-test('derivePulsFields: thresholdMm er null, når row[13] mangler (kort række, gammelt/ufuldstændigt format)', () => {
+test('derivePulsFields: thresholdMm er null, når row[24] mangler (kort række, gammelt/ufuldstændigt format)', () => {
   const row = [55.0, 12.0, 'Test', 0, 0, 500, 10, 0];
   const derived = derivePulsFields(row);
   assert.strictEqual(derived.thresholdMm, null);
 });
 
-test('derivePulsFields: thresholdMm læses korrekt fra row[13], når til stede', () => {
-  const row = [55.0, 12.0, 'Test', 0, 0, 500, 10, 0, 'outfall-id', 1.5, 'type', 'SE', 2025, 16.35];
+// RETTET (2026-08-20 — kritisk databug): thresholdMm flyttet fra row[13]
+// til row[24] — se derivePulsFields()'s egen kommentar. row[13] var
+// oprindeligt tærsklens plads, men update-puls.js genbrugte den senere til
+// et helt andet felt (cod), uden at flytte tærsklen — se
+// scripts/merge-puls-thresholds.js's tilsvarende rettelse.
+test('derivePulsFields: thresholdMm læses korrekt fra row[24], når til stede', () => {
+  const row = [
+    55.0, 12.0, 'Test', 0, 0, 500, 10, 0, 'outfall-id', 1.5, 'type', 'SE', 2025,
+    /* 13 cod */ 312, /* 14 bod */ 37, /* 15 nitrogen */ 12, /* 16 phosphor */ 1.87,
+    /* 17 normalYear */ 2025, /* 18 normalVol */ 8160, /* 19 normalEv */ null,
+    /* 20 normalCod */ 408, /* 21 normalBod */ 82, /* 22 normalNitrogen */ 16, /* 23 normalPhosphor */ 2.45,
+    /* 24 thresholdMm */ 16.35,
+  ];
   const derived = derivePulsFields(row);
   assert.strictEqual(derived.thresholdMm, 16.35);
+});
+
+test('derivePulsFields: thresholdMm er IKKE forvekslet med cod (row[13]) efter row[13]/row[24]-rettelsen', () => {
+  // Regressionstest for selve bugfixet: en række med et cod-tal på
+  // position 13, men INTET tærskel-tal på position 24 — thresholdMm skal
+  // være null, IKKE den (forkerte) cod-værdi.
+  const row = [55.0, 12.0, 'Test', 0, 0, 500, 10, 0, 'outfall-id', 1.5, 'type', 'SE', 2025, 312];
+  const derived = derivePulsFields(row);
+  assert.strictEqual(derived.thresholdMm, null);
 });
 
 // ── estimateLastEventAge — erstatning for Math.random() ─────────────────────

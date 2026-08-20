@@ -4391,8 +4391,9 @@ function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 // ── computeIntensityFactor — fælles for computeRisk() og computeViralRisk() ─
 // SKAL holdes i sync med risk-model.js' identiske funktion. thresholdMm er
 // den udløbs-specifikke empiriske nedbørstærskel fra puls-data.json's
-// row[13] (se scripts/merge-puls-thresholds.js) — null/undefined giver
-// threshold=25/scale=5.
+// row[24] (se scripts/merge-puls-thresholds.js — RETTET 2026-08-20, flyttet
+// fra row[13] pga. en kollision med update-puls.js's nyere cod-felt på
+// samme position) — null/undefined giver threshold=25/scale=5.
 //
 // RETTET (2026-07-30): fallback hævet fra 5mm til 25mm, synkroniseret med
 // risk-model.js — se dét fils tilsvarende kommentar for fuld begrundelse

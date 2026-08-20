@@ -2558,16 +2558,10 @@ function loadPulsPointsFull() {
       // her — kun brugt internt af scripts/compute-puls-udloeb-taerskler.js
       // (reducedArea/type/sewerStructure) eller slet ikke (resten).
       //
-      // ⚠️ BEVIDST UDELADT: cod (r[13]) — se scripts/merge-puls-
-      // thresholds.js's `row[13] = thresholdMm`-kollision med update-puls.
-      // js's NYERE cod-felt på SAMME index (opdaget 2026-08-20, afventer
-      // egen rettelse): for ~70% af udløbene (dem uden et faktisk merget
-      // tærskel-match) er r[13] stadig den ægte cod-værdi, men for de
-      // resterende ~30% er den overskrevet af en tærskel i mm — der er
-      // INGEN pålidelig måde at vide hvilken af de to r[13] rent faktisk
-      // er for et givet udløb, før selve kollisionen er rettet. Resten af
-      // feltnavnene nedenfor (bod/nitrogen/phosphor/normalår-sættet)
-      // rammes IKKE af denne kollision (egne, urørte indices).
+      // RETTET (2026-08-20): cod (r[13]) er nu trygt at udtrække — se
+      // risk-model.js's derivePulsFields()/scripts/merge-puls-thresholds.js
+      // for selve rettelsen af den tidligere row[13]-kollision (thresholdMm
+      // flyttet til r[24], cod fik sin egen, urørte position tilbage).
       return {
         id: String(i),
         outfallId,
@@ -2594,6 +2588,7 @@ function loadPulsPointsFull() {
         type: r[10] ?? null,                   // udløbstype, allerede menneskelæsbar tekst fra PULS-kilden
         sewerStructure: r[11] ?? null,         // kloaksystem-kode (SE/SF m.fl. — se PULS_NO_WASTEWATER_CODES)
         latestDischargeYear: r[12] ?? null,
+        cod: r[13] ?? null,                    // kemisk iltforbrug, kg/år
         bod: r[14] ?? null,                    // biokemisk iltforbrug, kg/år
         nitrogen: r[15] ?? null,               // kg/år
         phosphor: r[16] ?? null,               // kg/år
@@ -3116,7 +3111,7 @@ async function _evaluatePushNotificationsInner(testThresholds) {
       volumeM3: pt.volumeM3, eventsPerYear: pt.eventsPerYear,
       reducedArea: pt.reducedArea, type: pt.type, sewerStructure: pt.sewerStructure,
       latestDischargeYear: pt.latestDischargeYear,
-      bod: pt.bod, nitrogen: pt.nitrogen, phosphor: pt.phosphor,
+      cod: pt.cod, bod: pt.bod, nitrogen: pt.nitrogen, phosphor: pt.phosphor,
       normalYear: pt.normalYear, normalVol: pt.normalVol, normalEv: pt.normalEv,
       normalCod: pt.normalCod, normalBod: pt.normalBod,
       normalNitrogen: pt.normalNitrogen, normalPhosphor: pt.normalPhosphor,

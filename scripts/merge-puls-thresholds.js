@@ -7,11 +7,22 @@
 //
 // Fletter den udløbs-specifikke empiriske nedbørstærskel
 // (puls-udloeb-taerskler.json) ind i puls-data.json som et nyt, bagestillet
-// row[13]-felt — samme mønster som outfallId/reducedArea/type/sewerStructure/
+// felt — samme mønster som outfallId/reducedArea/type/sewerStructure/
 // latestDischargeYear allerede blev tilføjet på (se update-puls.js's eget
-// filhoved). Ingen eksisterende forbruger destrukturerer mere end position 8
-// i dag, så dette er bagudkompatibelt; risk-model.js/dansk-overloeb-kort.html
-// læser nu row[13] eksplicit.
+// filhoved). risk-model.js læser feltet eksplicit.
+//
+// RETTET (2026-08-20 — kritisk databug, bruger-rapporteret): skrev
+// OPRINDELIGT til row[13] — men update-puls.js udvidede SENERE (samme
+// fils "2. runde"-kommentar) skemaet med cod/bod/nitrogen/fosfor/
+// normalårs-feltsættet, som OGSÅ lægger sig ved position 13 og fremefter,
+// uden at denne fil blev opdateret til at flytte sig. Resultat: for de
+// udløb, der IKKE fik et tærskel-match (row[13]=null-grenen nedenfor blev
+// aldrig ramt), stod update-puls.js's cod-værdi uændret tilbage på
+// position 13 — og risk-model.js's derivePulsFields() læste den stille som
+// en regntærskel i mm. For de udløb, der DID få et match, blev cod
+// omvendt overskrevet og tabt. Skriver nu til row[24] i stedet (efter hele
+// normalårs-feltsættet, position 17-23) — en position INGEN anden fil
+// nogensinde skriver til.
 //
 // SCOPE: kun tærskler med tillidsgrad 'high', 'medium' eller 'borrowed'
 // flettes ind — 'low' (kun 3-4 hændelser bag tallet) springes bevidst over
@@ -23,7 +34,7 @@
 // RAPPORT.md's valideringsafsnit (lånt gruppe: median 13,8% afvigelse —
 // for usikkert for 'low'-gruppens kun 3-4 hændelser).
 //
-// IDEMPOTENT: sætter row[13] eksplicit på HVER kørsel (nummer eller null),
+// IDEMPOTENT: sætter row[24] eksplicit på HVER kørsel (nummer eller null),
 // uafhængigt af hvad der stod der fra en tidligere kørsel — trygt at køre
 // gentagne gange, som resten af update-all-data.sh-pipelinen.
 // ═══════════════════════════════════════════════════════════════════════════
@@ -55,11 +66,11 @@ function main() {
       ? thresholdByOutfallId.get(outfallId)
       : null;
     if (thresholdMm !== null) matched++;
-    row[13] = thresholdMm;
+    row[24] = thresholdMm;
   }
 
   fs.writeFileSync(PULS_DATA_FILE, JSON.stringify(puls));
-  console.log(`merge-puls-thresholds: ${matched} af ${rows.length} udløb fik en tærskel flettet ind (row[13]).`);
+  console.log(`merge-puls-thresholds: ${matched} af ${rows.length} udløb fik en tærskel flettet ind (row[24]).`);
 }
 
 main();

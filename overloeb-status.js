@@ -97,6 +97,7 @@ function computeOverloebStatusForTenant({ tenant, horizon, riskScoresPoints, bad
         type: pt.type ?? null,
         sewerStructure: pt.sewerStructure ?? null,
         latestDischargeYear: pt.latestDischargeYear ?? null,
+        cod: pt.cod ?? null,
         bod: pt.bod ?? null,
         nitrogen: pt.nitrogen ?? null,
         phosphor: pt.phosphor ?? null,

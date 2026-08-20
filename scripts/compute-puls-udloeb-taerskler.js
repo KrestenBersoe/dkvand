@@ -400,14 +400,16 @@ faktisk andel er ${(groupCounts.q0/total*100).toFixed(1)}%.
 
 Disse tærskler bruges rent faktisk af appen, ikke kun en stående beregning:
 \`scripts/merge-puls-thresholds.js\` (Trin 4 i \`update-all-data.sh\`) fletter
-tærsklen ind som \`puls-data.json\`'s \`row[13]\`, for udløb med tillidsgrad
+tærsklen ind som \`puls-data.json\`'s \`row[24]\` (RETTET 2026-08-20 — stod
+oprindeligt på row[13], som en senere udvidelse af update-puls.js's skema
+kolliderede med, se filens egen kommentar), for udløb med tillidsgrad
 \`high\`, \`medium\` eller \`borrowed\` (IKKE \`low\` — kun 3-4 hændelser bag
 tallet er for usikkert til produktion). \`risk-model.js\`' og
 \`dansk-overloeb-kort.html\`'s \`computeIntensityFactor()\` centrerer derefter
 den bakterielle/virale risikosigmoide på udløbets EGEN tærskel i stedet for
-den tidligere generiske, flade 5mm-antagelse — udløb uden en tilstrækkeligt
+den tidligere generiske, flade 25mm-antagelse — udløb uden en tilstrækkeligt
 sikker tærskel (\`low\`-tillidsgrad eller slet ingen) falder fortsat tilbage
-til den generiske 5mm-model, uændret.
+til den generiske 25mm-model, uændret.
 
 ## Validering
 

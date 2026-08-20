@@ -218,7 +218,16 @@ function computeForecastViralRisk(pt) {
 const PULS_NO_WASTEWATER_CODES = new Set(['SE', 'SF']);
 function derivePulsFields(row) {
   const [lat, lng, name, authIdx, areaIdx, volumeM3, eventsPerYear] = row;
-  const thresholdMm = row[13] ?? null;
+  // RETTET (2026-08-20 — kritisk databug, bruger-rapporteret): thresholdMm
+  // stod tidligere på row[13], som update-puls.js SENERE genbrugte til et
+  // helt andet felt (cod, kemisk iltforbrug kg/år) uden at flytte tærsklen
+  // — for ~70% af udløbene (dem uden et faktisk tærskel-match, se
+  // scripts/merge-puls-thresholds.js) blev cod-værdien derfor stille
+  // fejlfortolket som en regntærskel i mm, hvilket kraftigt undervurderede
+  // deres overløbsrisiko. Flyttet til row[24] (næste ledige position, efter
+  // hele normalårs-feltsættet) — se merge-puls-thresholds.js's tilsvarende
+  // rettelse.
+  const thresholdMm = row[24] ?? null;
   const sewerStructure = row[11] ?? null;
   // NYT (bruger-ønske — kommune-benchmark-rapportens datakvalitets-KPI):
   // qualityCode(7) — 0=reelle data, 1=verificeret nul, 2=estimeret,

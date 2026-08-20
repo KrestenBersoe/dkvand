@@ -33,14 +33,25 @@ faktisk andel er 14.4%.
 
 Disse tærskler bruges rent faktisk af appen, ikke kun en stående beregning:
 `scripts/merge-puls-thresholds.js` (Trin 4 i `update-all-data.sh`) fletter
-tærsklen ind som `puls-data.json`'s `row[13]`, for udløb med tillidsgrad
+tærsklen ind som `puls-data.json`'s `row[24]` (RETTET 2026-08-20 — stod
+oprindeligt på row[13], som en senere udvidelse af update-puls.js's skema
+kolliderede med, se filens egen kommentar), for udløb med tillidsgrad
 `high`, `medium` eller `borrowed` (IKKE `low` — kun 3-4 hændelser bag
 tallet er for usikkert til produktion). `risk-model.js`' og
 `dansk-overloeb-kort.html`'s `computeIntensityFactor()` centrerer derefter
 den bakterielle/virale risikosigmoide på udløbets EGEN tærskel i stedet for
-den tidligere generiske, flade 5mm-antagelse — udløb uden en tilstrækkeligt
+den tidligere generiske, flade 25mm-antagelse — udløb uden en tilstrækkeligt
 sikker tærskel (`low`-tillidsgrad eller slet ingen) falder fortsat tilbage
-til den generiske 5mm-model, uændret.
+til den generiske 25mm-model, uændret.
+
+_RETTELSE (2026-08-20): denne rapport blev genereret før 2026-07-30-
+kalibreringen, der hævede den generiske fallback fra 5mm til 25mm — teksten
+ovenfor er efterfølgende opdateret manuelt til at afspejle det, uden en fuld
+gen-kørsel af beregningen. Tallene i tabellerne ovenfor (gruppeandele,
+validering) er derimod uændrede og stammer fra den oprindelige kørsel
+20. juli 2026 — se afsnittet "Sammenhæng med row[13]/cod-bugfixet" i
+samtalen for hvorfor disse tal ikke nødvendigvis matcher den aktuelle,
+live `puls-data.json` 1:1._
 
 ## Validering
 
