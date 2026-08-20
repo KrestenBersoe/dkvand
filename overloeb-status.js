@@ -101,14 +101,31 @@ function computeOverloebStatusForTenant({ tenant, horizon, riskScoresPoints, bad
     .sort((a, b) => (b.risk ?? -1) - (a.risk ?? -1));
 
   const badevandById = new Map((badevandList || []).map(e => [String(e.id), e]));
-  const badesteder = (tenantBadesteder || []).map(b => ({
-    id: b.id,
-    slug: b.slug,
-    navn: b.navn,
-    lat: b.lat,
-    lng: b.lng,
-    bucket: bucketForBadested(badevandById.get(String(b.id))),
-  }));
+  const badesteder = (tenantBadesteder || []).map(b => {
+    const entry = badevandById.get(String(b.id));
+    return {
+      id: b.id,
+      slug: b.slug,
+      navn: b.navn,
+      lat: b.lat,
+      lng: b.lng,
+      bucket: bucketForBadested(entry),
+      // NYT (klik-detaljepanel for badesteder, bruger-krav 2026-08-20 —
+      // "samtlige informationer tilgængelige for såvel badestrande som
+      // udløb ved klik"): samme princip som udløbenes ekstra felter
+      // ovenfor — panelet skal kunne vise fuld info uden et ekstra
+      // server-opslag pr. klik, `entry` er allerede i scope her.
+      bact: entry?.bact ?? null,
+      viral: entry?.viral ?? null,
+      algae: entry?.algae ?? null,
+      forecast: entry?.forecast ?? null,
+      source: entry?.source ?? null,
+      confirmReason: entry?.confirmReason ?? null,
+      dataConfidence: entry?.dataConfidence ?? null,
+      outletCount: Array.isArray(entry?.outlets) ? entry.outlets.length : 0,
+      overrideInfo: entry?.overrideInfo ?? null,
+    };
+  });
 
   return { horizon, totals, udloeb, varsler, badesteder };
 }

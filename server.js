@@ -1696,7 +1696,24 @@ app.get('/skilt/:slug', (req, res) => {
     // medbragt her, så klienten selv kan slå vejr (GET /api/weather/weekly)
     // og strøm (GET /api/current-at) op for PRÆCIS badestedets koordinat —
     // samme mønster som badested-panelets egen showBadevandPanel().
-    const skiltJson = JSON.stringify({ badestedId: info.id, navn: info.navn, slug: req.params.slug, lat: info.lat, lng: info.lng });
+    // RETTET (bruger-krav 2026-08-20 — "logo skal ALENE gælde skilte
+    // leveret via kommune dashboard, de almindelige skilte i dkvand-appen
+    // skal være uændrede"): logoet vises derfor KUN når ?kommunelogo=1 er
+    // sat — det ENESTE, der adskiller admin-dashboardets "Kopiér iframe"-
+    // link (toggleSkiltEmbed(), admin-dashboard.html) fra det almindelige,
+    // offentlige /skilt/:slug-link (fx det borgere selv udskriver fra
+    // badestedssiden). Opslag i den præ-beregnede kommuneLogoCache (se
+    // dens filhoved), IKKE en server-side hentning af selve billedet —
+    // samme "klientens browser henter direkte fra logo_url"-mønster som
+    // det eksisterende kommunale varsel-banner (dansk-overloeb-kort.html/
+    // seo-pages.js) allerede bruger, ikke logo-fetch.js's SSRF-sikrede
+    // server-hentning (den er kun nødvendig for PDF-genereringen, som selv
+    // skal LÆSE billed-bytes for at indlejre dem i PDF'en).
+    const wantsKommuneLogo = req.query.kommunelogo === '1';
+    const logoUrl = (wantsKommuneLogo && info.kommune)
+      ? kommuneLogoCache.get(slugIndex.normalizeKommuneKey(info.kommune)) || null
+      : null;
+    const skiltJson = JSON.stringify({ badestedId: info.id, navn: info.navn, slug: req.params.slug, lat: info.lat, lng: info.lng, logoUrl });
     const html = fs.readFileSync(path.join(STATIC_DIR, 'badested-skilt.html'), 'utf8')
       .replace('%%SKILT_JSON%%', skiltJson);
     res.set('Cache-Control', 'no-store');
@@ -2643,12 +2660,35 @@ let riskScoresCache = { ts: 0, points: [] };
 // NYT: se badevand-risk.js — { ts, lakes, kystvande, badevand }
 let badevandRiskCache = { ts: 0, lakes: {}, kystvande: {}, badevand: [] };
 
-// NYT (Overløb-fanen, hændelseslog — bruger-ønske 2026-08-19, opfølgning på
-// "gemmer vi varsler pr. udløb med timestamp") — huskes KUN i hukommelsen
-// (nulstilles ved genstart, se overloeb-events.js's shouldLogTransition()
-// for hvorfor det er bevidst harmløst: en "ukendt forrige tilstand" logges
-// aldrig som et skift). point_id -> seneste kendte 'nu'-bucket.
+// RETTET (bruger-krav 2026-08-20 — "må aldrig kun stå i hukommelsen, skal
+// altid kunne overleve en server-genstart"): stod tidligere KUN i
+// hukommelsen (nulstillet ved hver genstart/deploy), hvilket betød det
+// FØRSTE reelle bucket-skift for hvert punkt efter en genstart aldrig blev
+// opdaget (shouldLogTransition() kræver en kendt forrige bucket — se dens
+// filhoved i risk-model.js). Selve Map'en her er fortsat den HURTIGE
+// læsesti (21.563 opslag hver 15. minut skal ikke ramme databasen for
+// hvert eneste punkt) — men er nu bagvedliggende af
+// puls_point_last_bucket i Postgres (se overloeb-events.js), indlæst ved
+// opstart (_lastBucketsHydrated nedenfor) og opdateret der HVER GANG et
+// punkts bucket ændrer sig (eller ses for allerførste gang).
 let lastKnownBucketByPointId = new Map();
+// NYT: awaited i starten af _evaluatePushNotificationsInner() — garanterer
+// at Map'en er hydreret fra Postgres FØR første sammenligning, uanset om
+// den 2-sekunders opstarts-opvarmning (se WEATHER_CHECK_INTERVAL_MS's
+// kaldssteder) skulle nå at køre først. Fejler indlæsningen (forbigående
+// DB-hik ved opstart), fortsætter appen alligevel — Map'en forbliver da
+// blot tom for DENNE proces-levetid (samme "en forbigående fejl skal ikke
+// stoppe alt andet"-princip som resten af appen), og retter sig selv ved
+// næste succesfulde genstart.
+// RETTET: afventer eksplicit overloebEvents.ready (CREATE TABLE) FØRST —
+// uden dette kunne loadAllLastBuckets()' SELECT i sjældne tilfælde nå at
+// fyre af, før tabellen overhovedet var oprettet (begge køres synkront ved
+// modul-indlæsning, men CREATE TABLE'ens netværkskald resolver ikke
+// nødvendigvis før dette løber), og fejle med "relation does not exist".
+let _lastBucketsHydrated = overloebEvents.ready
+  .then(() => overloebEvents.loadAllLastBuckets())
+  .then(map => { lastKnownBucketByPointId = map; console.info(`overloeb-events: ${map.size} kendte bucket-tilstande indlæst fra Postgres`); })
+  .catch(e => console.warn('overloeb-events: kunne ikke indlæse puls_point_last_bucket ved opstart —', e.message));
 
 // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanen, bruger-krav: "live med
 // en socketforbindelse ... automatisk opdateres hver gang der er en
@@ -2845,6 +2885,11 @@ async function _evaluatePushNotificationsInner(testThresholds) {
   // RETTET og genindsat: se ensureWaterFlagsCache() — bruger nu den
   // ikke-blokerende udgave, som ikke længere kan fryse serveren.
   await ensureWaterFlagsCache();
+  // NYT (bruger-krav 2026-08-20): garanterer at lastKnownBucketByPointId er
+  // hydreret fra Postgres FØR nogen sammenligning nedenfor — se
+  // _lastBucketsHydrated's filhoved. Resolver øjeblikkeligt efter første
+  // vellykkede (eller mislykkede) opstartsindlæsning.
+  await _lastBucketsHydrated;
 
   const minRisk   = testThresholds?.minRisk   ?? 0.35;
 
@@ -2857,6 +2902,12 @@ async function _evaluatePushNotificationsInner(testThresholds) {
   // NYT (Overløb-fanen, hændelseslog) — samlet HER, ét bulk-INSERT efter
   // løkken, ikke ét pr. punkt. Se overloeb-events.js's filhoved.
   const bucketTransitions = [];
+  // NYT (bruger-krav 2026-08-20) — punkter hvis bucket ændrede sig ELLER ses
+  // for allerførste gang denne cyklus, til puls_point_last_bucket
+  // (holdbarhed på tværs af genstarter) — se upsertLastBuckets(). Bredere
+  // end bucketTransitions ovenfor (som kun tager RIGTIGE skift, ikke
+  // førstegangs-observationer, se shouldLogTransition()).
+  const bucketPersistUpdates = [];
 
   let cellMatched = 0, cellMissing = 0;
   let maxForecastMMSeen = 0, maxTodayMMSeen = 0, maxForeRiskSeen = 0;
@@ -2904,6 +2955,13 @@ async function _evaluatePushNotificationsInner(testThresholds) {
         risk: nowResult.risk,
         createdAt: Date.now(),
       });
+    }
+    // NYT (bruger-krav 2026-08-20): ovlPrevBucket !== ovlBucket dækker BÅDE
+    // et rigtigt skift OG et punkt set for allerførste gang (ovlPrevBucket
+    // undefined) — begge skal persisteres, ellers gentager hukommelses-
+    // tab-problemet sig for netop førstegangs-punkter ved næste genstart.
+    if (ovlPrevBucket !== ovlBucket) {
+      bucketPersistUpdates.push({ pointId: pt.id, bucket: ovlBucket, updatedAt: Date.now() });
     }
     lastKnownBucketByPointId.set(pt.id, ovlBucket);
     // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanens 72h-prognose) —
@@ -3022,6 +3080,18 @@ async function _evaluatePushNotificationsInner(testThresholds) {
   if (bucketTransitions.length > 0) {
     try { await overloebEvents.recordTransitions(bucketTransitions); }
     catch (e) { console.warn('overloeb-events: recordTransitions fejlede —', e.message); }
+  }
+  // RETTET (bruger-krav 2026-08-20 — "må aldrig kun stå i hukommelsen, skal
+  // altid kunne overleve en server-genstart"): persisterer den opdaterede
+  // bucket for hvert ændret/førstegangs-set punkt til Postgres, se
+  // lastKnownBucketByPointId's filhoved. Fejler den (DB-hik), stopper
+  // resten af cyklussen IKKE — Map'en i hukommelsen er allerede opdateret
+  // ovenfor, så DENNE proces' egen sammenligning næste cyklus er upåvirket;
+  // kun holdbarheden på tværs af en eventuel genstart mistes midlertidigt
+  // for lige netop denne cyklus' ændringer.
+  if (bucketPersistUpdates.length > 0) {
+    try { await overloebEvents.upsertLastBuckets(bucketPersistUpdates); }
+    catch (e) { console.warn('overloeb-events: upsertLastBuckets fejlede —', e.message); }
   }
 
   // NYT: se badevand-risk.js filhoved — server-side gengivelse af sø-/
@@ -3202,6 +3272,24 @@ async function refreshVurderingCount30dCache() {
   vurderingCount30dCache = next;
 }
 const VURDERING_COUNT_REFRESH_MS = 60 * 60 * 1000;
+
+// NYT (bruger-krav 2026-08-20 — "Når platformen har et link til kommunens
+// logo, skal ... live/iframe skilte" vise det): kommuneKey -> logo_url,
+// KUN for tenants med et udfyldt logo_url. Samme "præ-beregnet cache
+// fremfor pr.-request DB-kald"-princip som vurderingCount30dCache ovenfor
+// — GET /skilt/:slug rammes langt hyppigere end en admin-ændring af et
+// logo sker, så et opslag i denne Map (i stedet for en query pr. request)
+// er den rigtige afvejning. Genopfrisket periodisk (se
+// KOMMUNE_LOGO_REFRESH_MS), ikke kun ved opstart, så et nyt/ændret logo i
+// admin-dashboardet slår igennem på skiltene uden en redeploy.
+let kommuneLogoCache = new Map();
+async function refreshKommuneLogoCache() {
+  const { rows } = await query(`SELECT name, logo_url FROM tenants WHERE logo_url IS NOT NULL AND logo_url <> ''`);
+  const next = new Map();
+  for (const r of rows) next.set(slugIndex.normalizeKommuneKey(r.name), r.logo_url);
+  kommuneLogoCache = next;
+}
+const KOMMUNE_LOGO_REFRESH_MS = 10 * 60 * 1000;
 
 // NYT: leverer den server-beregnede risiko for alle PULS-punkter som ét,
 // kompakt JSON-svar — se riskScoresCache (bygget i evaluatePushNotifications())
@@ -4971,6 +5059,8 @@ Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, badestedOve
     setInterval(() => runDailyStatsSnapshotJob().catch(e => console.warn('runDailyStatsSnapshotJob fejl:', e.message)), DAILY_STATS_SNAPSHOT_INTERVAL_MS);
     refreshVurderingCount30dCache().catch(e => console.warn('refreshVurderingCount30dCache (opstart) fejl:', e.message));
     setInterval(() => refreshVurderingCount30dCache().catch(e => console.warn('refreshVurderingCount30dCache fejl:', e.message)), VURDERING_COUNT_REFRESH_MS);
+    refreshKommuneLogoCache().catch(e => console.warn('refreshKommuneLogoCache (opstart) fejl:', e.message));
+    setInterval(() => refreshKommuneLogoCache().catch(e => console.warn('refreshKommuneLogoCache fejl:', e.message)), KOMMUNE_LOGO_REFRESH_MS);
   })
   .catch(e => {
     console.error('Kunne ikke klargøre Postgres-skema ved opstart — serveren starter IKKE:', e.message);

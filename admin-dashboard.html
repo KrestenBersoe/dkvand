@@ -997,12 +997,19 @@ function renderOverloeb(data) {
     if (b.lat == null || b.lng == null) continue;
     bounds.push([b.lat, b.lng]);
     const color = OVL_BUCKET_COLOR[b.bucket] || OVL_BUCKET_COLOR['ingen-data'];
-    L.circleMarker([b.lat, b.lng], {
+    const marker = L.circleMarker([b.lat, b.lng], {
       radius: 8, fillColor: color, color: '#fff', weight: 2, fillOpacity: 0.9,
     }).bindTooltip(
       `<strong>🏖 ${escHtml(b.navn)}</strong><br>${escHtml(OVL_BUCKET_LABEL[b.bucket] || b.bucket)}`,
       { sticky: true }
     ).addTo(ovlBadestedLayer);
+    // NYT (bruger-krav 2026-08-20 — "samtlige informationer tilgængelige
+    // for såvel badestrande som udløb ved klik"): badested-prikker havde
+    // hidtil KUN et hover-tooltip, i modsætning til udløbenes fulde
+    // klik-detaljepanel (openOvlUdlobPanel ovenfor). Genbruger samme delte
+    // panel/overlay (#ovl-udlob-panel/#ovl-panel-sheet) — se
+    // openBadestedDetailPanel().
+    marker.on('click', () => openBadestedDetailPanel(b));
   }
 
   for (const u of data.udloeb) {
@@ -1132,6 +1139,101 @@ function openOvlUdlobPanel(u) {
 
 function closeOvlUdlobPanel() {
   document.getElementById('ovl-udlob-panel')?.classList.remove('open');
+}
+
+// NYT (bruger-krav 2026-08-20) — REQUIRED-SYNCED med dansk-overloeb-kort.html's
+// colorBadevandByRisk()/badested-skilt.html's riskInfo() — samme tre
+// særlige `source`-tilstande, samme menneskelæsbare betydning.
+const BADESTED_SOURCE_LABEL = {
+  'ingen-bekraeftet':     'Bekræftet ingen aktiv kilde (sikkert)',
+  'nedstroms-bekraeftet': 'Kendte udløb strømbekræftet nedstrøms (sikkert)',
+  'ingen':                'Intet bekræftet match',
+  'server-utilgaengelig': 'Serverdata utilgængelig',
+  kystvand:               'Kystvand',
+  soe:                    'Sø',
+};
+
+// NYT (bruger-krav 2026-08-20 — "samtlige informationer tilgængelige for
+// såvel badestrande som udløb ved klik på lokation på kortet"): badested-
+// modstykket til openOvlUdlobPanel() ovenfor, samme delte panel/overlay.
+// `b` er allerede beriget server-side (se overloeb-status.js's badesteder-
+// mapping) med bact/viral/algae/forecast/source/dataConfidence/outletCount/
+// overrideInfo — intet ekstra opslag nødvendigt for selve risikodelen.
+// Historik-sektionen (2 donuts) genbruger GET /api/badested-history-
+// summary/:id — samme offentlige endpoint som badested-detaljesiden og
+// Badested-statistik-rækkerne (se toggleBadestedHistory()).
+function openBadestedDetailPanel(b) {
+  const panel = document.getElementById('ovl-udlob-panel');
+  const sheet = document.getElementById('ovl-panel-sheet');
+  if (!panel || !sheet) return;
+  const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(b.lat)},${encodeURIComponent(b.lng)}`;
+  const publicUrl = b.slug ? `/badested/${encodeURIComponent(b.slug)}` : null;
+  const sourceLabel = BADESTED_SOURCE_LABEL[b.source] || (b.source ? escHtml(b.source) : 'Ukendt');
+  const confidenceLabel = b.dataConfidence ? escHtml(b.dataConfidence) : 'Ukendt';
+  const overrideHtml = b.overrideInfo?.message
+    ? `<div class="ovl-alert-chip risk-${b.overrideInfo.bucket === 'roed' ? 'roed' : b.overrideInfo.bucket === 'gul' ? 'gul' : 'groen'}" style="display:block;margin-top:.5rem">📢 Kommunalt varsel: ${escHtml(b.overrideInfo.message)}</div>`
+    : '';
+  sheet.innerHTML = `
+    <div class="ovl-panel-top">
+      <div>
+        <div class="ovl-panel-title">🏖 ${escHtml(b.navn)}</div>
+        <div class="ovl-panel-sub">${escHtml(OVL_BUCKET_LABEL[b.bucket] || b.bucket)} · Badested</div>
+      </div>
+      <button type="button" class="ovl-panel-close" onclick="closeOvlUdlobPanel()">✕</button>
+    </div>
+    <div class="ovl-panel-bars">
+      ${ovlBarRow('Bakteriel (nu)', b.bact)}
+      ${ovlBarRow('Viral (nu)', b.viral)}
+      ${ovlBarRow('Alger', b.algae)}
+      ${ovlBarRow('24h prognose', b.forecast)}
+    </div>
+    ${overrideHtml}
+    <div class="ovl-panel-stamdata">
+      <div>📍 <a href="${mapsUrl}" target="_blank" rel="noopener">Se på Google Maps</a></div>
+      ${publicUrl ? `<div>🔗 <a href="${publicUrl}" target="_blank" rel="noopener">Se badestedets offentlige side</a></div>` : ''}
+      <div>🧭 Kilde: ${sourceLabel}</div>
+      <div>📊 Datakonfidens: ${confidenceLabel}</div>
+      <div>🚰 ${b.outletCount} udløb i nærheden</div>
+    </div>
+    <div class="ovl-panel-rain-title">Historik</div>
+    <div class="bv-history-summary" id="ovl-panel-history">Indlæser…</div>
+  `;
+  panel.classList.add('open');
+  loadBadestedDetailHistory(b.id);
+}
+
+// NYT (bruger-krav 2026-08-20) — udskilt fra toggleBadestedHistory() (som
+// er til Badested-statistik-rækkernes fold-ud), da denne altid henter FRISK
+// ved hver panel-åbning i stedet for kun ved allerførste fold-ud — samme
+// _badestedHistoryCache genbruges dog stadig for at undgå et dobbelt-opslag
+// hvis brugeren lige har foldet SAMME badested ud i Badested-statistik.
+async function loadBadestedDetailHistory(badestedId) {
+  const el = document.getElementById('ovl-panel-history');
+  if (!el) return;
+  try {
+    let summary = _badestedHistoryCache.get(badestedId);
+    if (!summary) {
+      const resp = await fetch(`/api/badested-history-summary/${encodeURIComponent(badestedId)}`, { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      summary = await resp.json();
+      _badestedHistoryCache.set(badestedId, summary);
+    }
+    const block = (title, counts) => {
+      if (!counts || counts.daysFound === 0) {
+        return `<div class="bv-history-block">
+          <div class="bv-history-block-title">${title}</div>
+          <div style="font-size:.75rem;color:var(--ink-soft);padding:.6rem 0">Endnu ingen historik.</div>
+        </div>`;
+      }
+      return `<div class="bv-history-block">
+        <div class="bv-history-block-title">${title}</div>
+        <div class="bv-history-inner">${buildRiskDonutSvg(counts)}${buildRiskLegendHtml(counts)}</div>
+      </div>`;
+    };
+    el.innerHTML = `${block('Sidste 7 dage', summary.week)}${block('Sidste 30 dage', summary.month)}`;
+  } catch (e) {
+    el.innerHTML = '<div style="color:var(--ink-soft);font-size:.8rem">Kunne ikke hente historik lige nu.</div>';
+  }
 }
 
 // NYT — genbruger det eksisterende, OFFENTLIGE GET /api/weather/weekly
@@ -1408,7 +1510,13 @@ function toggleSkiltEmbed(badestedId) {
   box.style.display = isOpen ? 'none' : 'block';
   if (!isOpen && !box.dataset.built) {
     box.dataset.built = '1';
-    const url = `${location.origin}/skilt/${b.slug}`;
+    // NYT (bruger-krav 2026-08-20 — "logo skal alene gælde skilte leveret
+    // via kommune dashboard, de almindelige skilte i dkvand-appen skal
+    // være uændrede"): ?kommunelogo=1 er den ENESTE forskel fra det
+    // almindelige, offentlige /skilt/:slug-link (fx det borgere selv kan
+    // udskrive fra badestedssiden) — server.js's rute viser kun logoet,
+    // når netop dette parameter er sat, se dens filhoved.
+    const url = `${location.origin}/skilt/${b.slug}?kommunelogo=1`;
     const snippet = `<iframe src="${url}" style="width:100%;height:100%;min-height:400px;border:0" title="Badevand — ${b.navn}"></iframe>`;
     box.innerHTML = `
       <div class="skilte-embed-box">

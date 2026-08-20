@@ -82,12 +82,34 @@
      eksplicit bruger-ønske om at have selve risikovurderingen øverst. */
   #banner {
     grid-area: banner;
+    position: relative;
     border-radius: 1.4vh; padding: .8vh 2vw;
     background-color: #1a6faf; transition: background-color .6s;
     box-shadow: 0 .5vh 1.6vh rgba(0,0,0,.18);
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     text-align: center; gap: .3vh;
     min-height: 0;
+  }
+  /* NYT (bruger-krav 2026-08-20 — kommunelogo på live-skiltet): absolut
+     positioneret i hjørnet, UDENFOR selve flex-flowet (order:-2/-1
+     ovenfor styrer allerede risikostatus/lokation) — påvirker derfor
+     intet af den eksisterende, finjusterede auto-skalering. Hvid
+     baggrundsplade (samme princip som skilte.js's PDF-logo, som ligger på
+     hvid baggrund) sikrer læsbarhed for ethvert logo, uanset dets egne
+     farver, mod #banner's mørkeblå-grønne farveflade. display:none som
+     standard — vist kun via JS, hvis SKILT.logoUrl findes (kun badesteder
+     hvor kommunen har uploadet et logo har noget at vise). */
+  #banner-logo {
+    display: none;
+    position: absolute;
+    top: .8vh; right: 1vw;
+    max-height: 6vh;
+    max-width: 24%;
+    background: #fff;
+    border-radius: .6vh;
+    padding: .4vh .6vw;
+    box-shadow: 0 .2vh .6vh rgba(0,0,0,.2);
+    object-fit: contain;
   }
   /* RETTET (bruger-ønske — "risikovurderingen dobbelt op i størrelse"):
      label FORDOBLET (4.4vw→8.8vw) — se #wrap's grid-template-rows for den
@@ -162,6 +184,7 @@
 <body>
 <div id="wrap">
   <div id="banner">
+    <img id="banner-logo" alt="">
     <div class="brand">🐬 National Badevandsvarsel</div>
     <div class="location" id="skilt-navn"></div>
     <div class="label" id="banner-label">Indlæser…</div>
@@ -231,6 +254,21 @@ const SKILT = %%SKILT_JSON%%;
 
 document.getElementById('skilt-navn').textContent = SKILT.navn;
 document.title = `${SKILT.navn} — badevand live`;
+
+// NYT (bruger-krav 2026-08-20) — SKILT.logoUrl er KUN sat af server.js,
+// når linket blev åbnet med ?kommunelogo=1 (se GET /skilt/:slug's
+// filhoved) — dvs. udelukkende via admin-dashboardets "Kopiér iframe"-
+// link. Det almindelige, offentlige /skilt/:slug-link (uden parameteret)
+// får ALDRIG et logoUrl-felt, og denne blok gør derfor ingenting for det.
+// onerror skjuler billedet igen ved et ugyldigt/utilgængeligt logo_url —
+// samme "vis skiltet alligevel"-filosofi som PDF-genereringens
+// try/catch om doc.image() (skilte.js).
+if (SKILT.logoUrl) {
+  const logoEl = document.getElementById('banner-logo');
+  logoEl.src = SKILT.logoUrl;
+  logoEl.style.display = 'block';
+  logoEl.onerror = () => { logoEl.style.display = 'none'; };
+}
 
 const skiltUrl = `${location.origin}/badested/${SKILT.slug}`;
 // Samme gratis, nøglefri QR-genereringstjeneste som det eksisterende
