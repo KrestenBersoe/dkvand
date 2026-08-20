@@ -113,6 +113,18 @@ COPY dansk-overloeb-kort.html ./
 COPY windy-currents.js ./
 COPY leaflet-canvas-layer.js ./
 COPY badevand-risk.js ./
+# RETTET (produktionsudfald 2026-08-20 — samme "crasher øjeblikkeligt uden
+# denne linje"-fælde som resten af de lokale moduler i denne fil, se
+# tenant-admin.js's kommentar ovenfor for den fulde forklaring på hvorfor):
+# server.js kræver nu (require('./current-grid')), og badevand-risk-
+# worker.js (kørt via worker_threads, se server.js's
+# runBadevandRiskCascadeInWorker()) kræver BÅDE badevand-risk.js og denne.
+# Manglede oprindeligt her — fik containeren til at crashe i et tæt
+# genstarts-loop i produktion (Node: "Cannot find module './current-grid'"),
+# eskaleret af Fly's egen rate-limiting på gentagne maskine-genstarter til
+# et fuldt udfald af hele siden.
+COPY current-grid.js ./
+COPY badevand-risk-worker.js ./
 # NYT: borgerobservationer (ét-tryks status + algeobservation) — server.js
 # kræver (require('./badested-observations')) dette modul ved opstart,
 # samme "crasher øjeblikkeligt uden denne linje"-fælde som risk-model.js
