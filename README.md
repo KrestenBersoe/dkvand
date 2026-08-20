@@ -76,6 +76,23 @@ temperatur for et område ville det området vises som én ensfarvet klat i
 stedet for en gradient, derfor hentes SST separat for NWSHELF-punkterne
 fremfor at lade dem falde tilbage til en syntetisk gennemsnitsværdi.
 
+### Borgerindberetninger (rate limits)
+
+Ét-tryks status + algeobservation (`badested-observations.js`, kaldt via
+`POST /api/badested-observation` i `server.js`). Misbrugsbeskyttelse pr.
+hashet IP (`OBSERVATION_IP_SALT`, HMAC — den rå IP gemmes aldrig),
+rullende 24 timer, ikke kalenderdøgn:
+
+- **5 vurderinger/dag** som standard (`MAX_VURDERINGER_PER_IP_PER_DAY`).
+- **50 vurderinger/dag** (`MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED`) når
+  klientens GPS-koordinater ligger inden for `NEAR_BADESTED_METERS = 300`
+  meter af det pågældende badested (`isNearBadested()` i `server.js`) — et
+  blødt tillidssignal, ikke en hård garanti (koordinaterne kan i princippet
+  forfalskes af en klient, der taler direkte til API'et uden om selve GPS'en).
+- Foto pr. indberetning maks. `MAX_PHOTO_BYTES = 5 MB`.
+- Den tidligere regel om maks. ét badested pr. dag pr. bruger er fjernet
+  (blokerede reelle brugere med flere badesteder, fx sommerhusgæster).
+
 ## Arkitektur / struktur
 
 ```
