@@ -91,6 +91,21 @@ DATASET_ID = "cmems_mod_bal_phy_anfc_PT1H-i"
 LAT_MIN, LAT_MAX = 54.0, 58.0
 LON_MIN, LON_MAX = 8.0, 15.0
 
+# NYT (2026-08-20 — lukker "ingen strømdata vest for ~9°E"-hullet, se memory
+# "west-jutland-currents-gap"): Østersø-produktet ovenfor dækker slet ikke
+# Vesterhavet/den jyske vestkyst — dets grid stopper reelt omkring ~9°E, alt
+# vest for det er NaN/uden for modellens maske, ikke bare grov opløsning. NWS-
+# produktet (NWSHELF_ANALYSISFORECAST_PHY_004_013) dækker Nordsøen/Kanalen/
+# tilstødende shelf-farvande ved 1,5 km opløsning og bruges HERUNDER, kun
+# supplerende for det stykke vestkysten Østersø-produktet ikke selv dækker
+# (se west_lons-udregningen nedenfor). CMEMS holder strøm og temperatur i
+# SEPARATE datasæt for dette produkt (i modsætning til Østersø-produktet
+# ovenfor, hvor thetao er del af samme datasæt) — temperatur er derfor
+# bevidst UDELADT for vestkyst-punkterne i denne omgang, samme "graciøst
+# udeladt, ikke fejlende" mønster som thetao-fallback'en for Østersø-delen.
+DATASET_ID_NWS = "cmems_mod_nws_phy-cur_anfc_1.5km-2D_PT1H-i_202511"
+WEST_LON_MIN = 6.0  # dækker Vesterhavet ud til dansk søterritoriums vestgrænse
+
 # RETTET (fjorde/smalle bælter manglede næsten al strøm-animation, se
 # dansk-overloeb-kort.html's currents-sektion): windy-currents.js springer
 # en HEL gittercelle over, hvis blot ÉT af dens fire hjørner mangler data
@@ -186,6 +201,7 @@ try:
 
     try:
         import xarray as xr
+        import numpy as np
 
         nc_files = glob.glob(os.path.join(tmp_dir, "**", "*.nc"), recursive=True)
         if not nc_files:
@@ -262,6 +278,108 @@ try:
                     if not math.isnan(t) and -5 < t < 40:
                         point["temp"] = round(t, 2)
                 points.append(point)
+
+        # ── Supplerende: Vesterhavet/vestkyst-punkter fra NWSHELF-produktet ──
+        # Best-effort: en fejl her (nyt, endnu ikke produktions-verificeret
+        # datasæt/variabelnavn — kan IKKE testes lokalt, CMEMS-login findes
+        # kun som Fly-secret) må ALDRIG vælte hele strøm-hentningen. Fejler
+        # dette, falder scriptet blot tilbage til de hidtidige Østersø-punkter,
+        # præcis som før denne udvidelse.
+        try:
+            dlat = float(lats[1] - lats[0]) if len(lats) > 1 else -0.05
+            dlon = float(lons[1] - lons[0]) if len(lons) > 1 else 0.08
+            baltic_lon_min = float(lons.min())
+            n_west = int((baltic_lon_min - WEST_LON_MIN) / abs(dlon))
+            if n_west < 1:
+                raise ValueError(
+                    "intet rum mellem WEST_LON_MIN og Østersø-gitterets vestkant"
+                )
+
+            # Målgitter, PRÆCIST aligned med Østersø-gitteret (samme dlon-
+            # skridt, umiddelbart vest for dets vestligste kolonne, og samme
+            # breddegrad-rækker som Østersø-punkterne) — afgørende for at
+            # buildVelocityGridJSON() i server.js (som antager ÉT
+            # sammenhængende regulært gitter på tværs af ALLE punkter) kan
+            # flette de to datasæt uden at gitteret bliver uregelmæssigt.
+            west_lons = baltic_lon_min - abs(dlon) * np.arange(n_west, 0, -1)
+
+            nws_tmp_dir = tempfile.mkdtemp(prefix="cmems_nws_subset_")
+            try:
+                copernicusmarine.subset(
+                    dataset_id=DATASET_ID_NWS,
+                    username=USERNAME,
+                    password=PASSWORD,
+                    variables=["uo", "vo"],
+                    minimum_longitude=WEST_LON_MIN - abs(dlon),
+                    maximum_longitude=baltic_lon_min + abs(dlon),
+                    minimum_latitude=float(lats.min()) - abs(dlat),
+                    maximum_latitude=float(lats.max()) + abs(dlat),
+                    start_datetime=start_dt,
+                    end_datetime=end_dt,
+                    output_directory=nws_tmp_dir,
+                    output_filename="currents_nws.nc",
+                    file_format="netcdf",
+                    disable_progress_bar=True,
+                    overwrite=True,
+                )
+                nws_files = glob.glob(os.path.join(nws_tmp_dir, "**", "*.nc"), recursive=True)
+                if not nws_files:
+                    raise RuntimeError("NWSHELF subset gav ingen NetCDF-fil")
+
+                nws_ds = xr.load_dataset(nws_files[0], engine="h5netcdf")
+                nws_latest = nws_ds.isel(time=-1) if "time" in nws_ds.dims else nws_ds
+                if "depth" in nws_latest.dims:
+                    nws_latest = nws_latest.isel(depth=0)
+                elif "elevation" in nws_latest.dims:
+                    nws_latest = nws_latest.isel(elevation=0)
+
+                nws_lat_name = "latitude" if "latitude" in nws_latest.coords else "lat"
+                nws_lon_name = "longitude" if "longitude" in nws_latest.coords else "lon"
+
+                print(f"[debug] NWSHELF-variable: {list(nws_latest.data_vars)}", file=sys.stderr)
+
+                # Interpolér NWSHELF's eget (finere, 1,5 km) native grid over
+                # på PRÆCIS Østersø-gitterets breddegrader + de nye west_lons
+                # — .transpose() sikrer aksehåndtering (lat, lon), uafhængigt
+                # af dette (endnu uverificerede) datasæts interne dim-orden.
+                nws_interp = nws_latest.interp({
+                    nws_lat_name: lats,
+                    nws_lon_name: west_lons,
+                }).transpose(nws_lat_name, nws_lon_name)
+
+                west_uo = nws_interp["uo"].values
+                west_vo = nws_interp["vo"].values
+
+                west_count = 0
+                for i, lat in enumerate(lats):
+                    for j, lon in enumerate(west_lons):
+                        u = float(west_uo[i, j])
+                        v = float(west_vo[i, j])
+                        if math.isnan(u) or math.isnan(v):
+                            continue
+                        if abs(u) > 10 or abs(v) > 10:  # fill-value sentinel
+                            continue
+                        points.append({
+                            "lat": round(float(lat), 4),
+                            "lng": round(float(lon), 4),
+                            "uo": round(u, 4),
+                            "vo": round(v, 4),
+                            # temp bevidst udeladt, se DATASET_ID_NWS-kommentaren ovenfor
+                        })
+                        west_count += 1
+                print(
+                    f"[debug] NWSHELF (vestkyst): {west_count} punkter tilføjet "
+                    f"fra {n_west} gitterkolonner ({WEST_LON_MIN}°E–{baltic_lon_min:.2f}°E)",
+                    file=sys.stderr,
+                )
+            finally:
+                shutil.rmtree(nws_tmp_dir, ignore_errors=True)
+        except Exception as e:
+            print(
+                f"[warn] NWSHELF vestkyst-udvidelse fejlede ({describe_exception(e)}) — "
+                f"fortsætter med kun Østersø-punkter (uændret hidtidig adfærd)",
+                file=sys.stderr,
+            )
 
         if not points:
             fail("no current points extracted from dataset")
