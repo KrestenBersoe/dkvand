@@ -89,7 +89,16 @@ DATASET_ID = "cmems_mod_bal_phy_anfc_PT1H-i"
 
 # Dansk farvand (samme bbox som tidligere JS-implementering)
 LAT_MIN, LAT_MAX = 54.0, 58.0
-LON_MIN, LON_MAX = 8.0, 15.0
+# RETTET (bruger-rapport 2026-08-20 — "mangler data for strøm øst for
+# Bornholm"): LON_MAX var sat til 15.0, men Bornholm selv strækker sig til
+# ca. 15,2°E — den gamle grænse skar altså tværs gennem øen og udelod al
+# åben Østersø-vand østfor. Østersø-produktet (DATASET_ID) dækker i sig
+# selv langt videre østpå (dets NATIVE grid går til ~30°E, bekræftet i
+# produktion), så dette er, ligesom vestkyst-hullet, en selvpålagt
+# bbox-grænse, IKKE en begrænsning i selve CMEMS-produktet. Sat til 16.5°E
+# — dækker denmark_sea_simplified.geojson's egen østgrænse (16.0°E, bruges
+# til strøm-lagets vandmaske) med en smule margin.
+LON_MIN, LON_MAX = 8.0, 16.5
 
 # NYT (2026-08-20 — lukker "ingen strømdata vest for ~9°E"-hullet, se memory
 # "west-jutland-currents-gap"): Østersø-produktet ovenfor dækker slet ikke
