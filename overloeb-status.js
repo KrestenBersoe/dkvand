@@ -148,6 +148,15 @@ function computeOverloebStatusForTenant({ tenant, horizon, riskScoresPoints, bad
       confirmReason: entry?.confirmReason ?? null,
       dataConfidence: entry?.dataConfidence ?? null,
       outletCount: Array.isArray(entry?.outlets) ? entry.outlets.length : 0,
+      // NYT (bruger-krav 2026-08-20 — "de data om det enkelte overløb som
+      // er tilgængelige i dkvand for brugerne er ikke tilgængelig i
+      // kommunalt dashboard badevand kortet ... i tillæg til de øvrige
+      // data"): det fulde udløbs-array, samme felter (id/navn/kommune/
+      // afstand/risiko/type) som den offentlige badested-panels "Vis
+      // udløb"-liste (dansk-overloeb-kort.html) allerede viser til
+      // borgerne — kommune-dashboardet skal ikke vise MINDRE end det
+      // offentlige site. `entry` er allerede i scope, intet ekstra opslag.
+      outlets: Array.isArray(entry?.outlets) ? entry.outlets : [],
       overrideInfo: entry?.overrideInfo ?? null,
       // NYT (bruger-krav 2026-08-20 — "antal webpush abonnenter for det
       // pågældende badested" i detaljepanelet): subscriberCounts er valgfri

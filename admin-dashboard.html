@@ -394,6 +394,16 @@
   .ovl-panel-full-data summary:hover { color: var(--ink); }
   .ovl-panel-full-data[open] summary { color: var(--ink); }
   .ovl-panel-full-data .ovl-panel-stamdata { margin-top: .3rem; }
+  /* NYT (bruger-krav 2026-08-20 — "de data om det enkelte overløb som er
+     tilgængelige i dkvand for brugerne skal også være tilgængelige i
+     kommunalt dashboard"): udløbslisten i badested-klikpanelet, samme
+     visuelle mønster (farvet prik + navn + afstand + risiko%) som det
+     offentlige site's #bv-outlets, tema-tilpasset til dette mørke
+     dashboard. */
+  .bv-outlet-row { display: flex; align-items: center; gap: .6rem; padding: .45rem 0; border-bottom: 1px solid var(--border); }
+  .bv-outlet-row:last-child { border-bottom: none; }
+  .bv-outlet-name { font-size: .82rem; font-weight: 600; }
+  .bv-outlet-sub { font-size: .7rem; color: var(--ink-soft); }
   .ovl-panel-stamdata a { color: var(--accent); }
   .ovl-panel-rain-title { font-size: .72rem; color: var(--ink-soft); margin: .8rem 0 .3rem; text-transform: uppercase; letter-spacing: .05em; }
 
@@ -1230,6 +1240,34 @@ const BADESTED_SOURCE_LABEL = {
 // Historik-sektionen (2 donuts) genbruger GET /api/badested-history-
 // summary/:id — samme offentlige endpoint som badested-detaljesiden og
 // Badested-statistik-rækkerne (se toggleBadestedHistory()).
+// NYT (bruger-krav 2026-08-20 — "de data om det enkelte overløb som er
+// tilgængelige i dkvand for brugerne er ikke tilgængelig i kommunalt
+// dashboard badevand kortet"): samme visning som det offentlige site's
+// #bv-outlets-liste (dansk-overloeb-kort.html, se dens showBadevandPanel())
+// — farvet risiko-prik, navn, kommune/afstand, risiko%, sorteret højeste
+// risiko først, top 15. `b.outlets` kommer allerede beriget fra
+// overloeb-status.js (samme kilde som det offentlige site læser).
+function buildOutletListHtml(outlets) {
+  if (!Array.isArray(outlets) || outlets.length === 0) {
+    return '<div style="font-size:.8rem;color:var(--ink-soft);padding:.4rem 0">Ingen individuelle udløb matchet.</div>';
+  }
+  return [...outlets].sort((a, b) => (b.riskScore || 0) - (a.riskScore || 0)).slice(0, 15).map(pt => {
+    const risk = pt.riskScore || 0;
+    const color = risk >= 0.6 ? '#c84b1f' : risk >= 0.2 ? '#d4a020' : '#2d7d4f';
+    const subParts = [escHtml(pt.municipality || '—')];
+    if (pt.travelTimeHours != null) subParts.push(`${(pt.travelTimeHours / 24).toFixed(1)} dages rejsetid`);
+    else if (pt.dist != null) subParts.push(`${pt.dist.toFixed(1)} km`);
+    return `<div class="bv-outlet-row">
+      <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></div>
+      <div style="flex:1;min-width:0">
+        <div class="bv-outlet-name">${escHtml(pt.name)}</div>
+        <div class="bv-outlet-sub">${subParts.join(' · ')}</div>
+      </div>
+      <span style="font-size:.78rem;font-weight:700;color:${color}">${Math.round(risk * 100)}%</span>
+    </div>`;
+  }).join('');
+}
+
 function openBadestedDetailPanel(b) {
   const panel = document.getElementById('ovl-udlob-panel');
   const sheet = document.getElementById('ovl-panel-sheet');
@@ -1261,9 +1299,10 @@ function openBadestedDetailPanel(b) {
       ${publicUrl ? `<div>🔗 <a href="${publicUrl}" target="_blank" rel="noopener">Se badestedets offentlige side</a></div>` : ''}
       <div>🧭 Kilde: ${sourceLabel}</div>
       <div>📊 Datakonfidens: ${confidenceLabel}</div>
-      <div>🚰 ${b.outletCount} udløb i nærheden</div>
       <div>🔔 ${b.subscriberCount ?? 0} webpush-abonnent${(b.subscriberCount ?? 0) === 1 ? '' : 'er'}</div>
     </div>
+    <div class="ovl-panel-rain-title">🚰 Udløb der påvirker badevandet (${b.outletCount})</div>
+    <div class="ovl-panel-stamdata">${buildOutletListHtml(b.outlets)}</div>
     <div class="ovl-panel-rain-title">Historik</div>
     <div class="bv-history-summary" id="ovl-panel-history">Indlæser…</div>
   `;
