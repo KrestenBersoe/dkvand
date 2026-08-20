@@ -31,11 +31,34 @@
 'use strict';
 const https = require('https');
 const dns = require('dns');
+const sharp = require('sharp');
 const oauthValidation = require('./oauth-config-validation');
 
 const LOGO_FETCH_TIMEOUT_MS = 5000;
 const LOGO_MAX_BYTES = 3 * 1024 * 1024;
-const ALLOWED_CONTENT_TYPES = new Set(['image/png', 'image/jpeg']); // pdfkit's doc.image()-understøttelse
+// RETTET (bruger-krav 2026-08-20 — "vi skal kunne understøtte svg format i
+// tillæg til jpg og png"): flere kommuners logo_url peger på en SVG (fx
+// Bornholms Regionskommune) — blev tidligere stille afvist her, hvilket
+// betød PDF-skiltet blev genereret UDEN logo, uden nogen fejl nogen
+// steder (samme "vis skiltet alligevel"-filosofi gjorde fejlen usynlig).
+// pdfkit's doc.image() understøtter selv KUN PNG/JPEG (ingen SVG/vektor-
+// understøttelse) — SVG rastereres derfor til PNG nedenfor (se
+// rasterizeIfSvg()), FØR bufferen når skilte.js.
+const ALLOWED_CONTENT_TYPES = new Set(['image/png', 'image/jpeg', 'image/svg+xml']);
+
+// NYT — rasterer en SVG-buffer til PNG ved 300 DPI (print-kvalitet, rigelig
+// margin til skilte.js's `fit: [120, 50]`-nedskalering — pdfkit skalerer
+// NED fra en skarp kilde, aldrig op fra en sløret). Ikke-SVG-buffere
+// returneres UÆNDREDE. Kaster ALDRIG — samme "returnér null/uændret i
+// stedet for at vælte kaldestedet"-filosofi som resten af denne fil.
+async function rasterizeIfSvg(buffer, contentType) {
+  if (contentType !== 'image/svg+xml') return buffer;
+  try {
+    return await sharp(buffer, { density: 300 }).png().toBuffer();
+  } catch (e) {
+    return null;
+  }
+}
 
 /**
  * @param {string} rawUrl
@@ -92,9 +115,12 @@ async function fetchTenantLogo(rawUrl) {
         }
         chunks.push(chunk);
       });
-      res.on('end', () => {
+      res.on('end', async () => {
         if (settled) return;
-        settle({ ok: true, buffer: Buffer.concat(chunks) });
+        const raw = Buffer.concat(chunks);
+        const png = await rasterizeIfSvg(raw, contentType);
+        if (png === null) { settle({ ok: false }); return; }
+        settle({ ok: true, buffer: png });
       });
       res.on('error', () => settle({ ok: false }));
     });
