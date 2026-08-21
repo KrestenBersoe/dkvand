@@ -1334,6 +1334,7 @@ app.get('/admin/api/vurderinger', tenantAdmin.requireTenantSession, async (req, 
       createdAt: Number(r.created_at),
       types: r.types || [],
       algaeLevel: r.algae_level || null,
+      brandmaendLevel: r.brandmaend_level || null,
       photoUrl: r.photo_path || null,
     }));
     res.set('Cache-Control', 'no-store');
@@ -3516,7 +3517,7 @@ app.post('/api/badested-observation', (req, res) => {
       return res.status(400).json({ error: 'Kunne ikke behandle foto-upload (for stort, eller ugyldigt format).' });
     }
     try {
-      const { badestedId, algaeLevel, userLat, userLng } = req.body || {};
+      const { badestedId, algaeLevel, brandmaendLevel, userLat, userLng } = req.body || {};
       // NYT: klienten sender flere valgte statustyper som ÉN vurdering, se
       // badested-observations.js's recordVurdering() — JSON-kodet i ét
       // formfelt (fremfor gentagne 'observationTypes[]'-felter) for at
@@ -3528,13 +3529,21 @@ app.post('/api/badested-observation', (req, res) => {
       } catch (parseErr) {
         observationTypes = [];
       }
+      // NYT (bruger-ønske 2026-08-21 — Brandmænd kun for kystnære badesteder):
+      // 'source' på badevandByIdCache's cachede kaskaderesultat er PRÆCIS
+      // samme klassificering, resten af appen allerede bruger til at skelne
+      // sø fra kystvand (se badevand-risk.js's source:'soe'/'kystvand') —
+      // genbruges her fremfor at indføre en ny, separat klassificering.
+      const isKystvand = badevandByIdCache.get(String(badestedId))?.source === 'kystvand';
       const result = await badestedObs.recordVurdering({
         badestedId,
         observationTypes,
         algaeLevel: algaeLevel || null,
+        brandmaendLevel: brandmaendLevel || null,
         photoBuffer: req.file ? req.file.buffer : null,
         rawIp: getClientIp(req),
         isNearBadested: isNearBadested(badestedId, userLat, userLng),
+        isKystvand,
       });
       // NYT (bruger-ønske): dagens ALLERFØRSTE vurdering af et badested
       // (se _insertVurderingTxn()'s isFirstToday, badested-observations.js)
@@ -3543,7 +3552,7 @@ app.post('/api/badested-observation', (req, res) => {
       // (fx VAPID ikke konfigureret), skal selve vurderingen stadig gemmes
       // korrekt — derfor sit eget try/catch, adskilt fra hovedstien.
       if (result.isFirstToday) {
-        try { await broadcastFirstVurderingOfDay(badestedId, observationTypes, algaeLevel || null); }
+        try { await broadcastFirstVurderingOfDay(badestedId, observationTypes, algaeLevel || null, brandmaendLevel || null); }
         catch (e) { console.warn('broadcastFirstVurderingOfDay fejlede:', e.message); }
       }
       res.json({ ok: true, createdAt: result.createdAt });
@@ -4168,12 +4177,15 @@ async function getSubscriberTrendForBadestedIds(badestedIds, fromDate, toDate) {
 // bv-algae-level-btn-knapperne i dansk-overloeb-kort.html) — HOLD I SYNC,
 // så push-beskeden aldrig kan afvige fra hvad brugeren faktisk trykkede på.
 const VURDERING_TYPE_LABELS = {
-  ser_fint_ud: 'Ser fint ud',
-  alger_set:   'Alger set',
-  uklart_vand: 'Uklart vand',
-  affald:      'Affald',
+  ser_fint_ud:    'Ser fint ud',
+  alger_set:      'Alger set',
+  uklart_vand:    'Uklart vand',
+  affald:         'Affald',
+  brandmaend_set: 'Brandmænd set',
 };
-const ALGAE_LEVEL_LABELS = { ingen: 'Ingen', faa: 'Få', mange: 'Mange' };
+// RETTET: omdøbt fra ALGAE_LEVEL_LABELS — samme tre niveau-labels bruges nu
+// også for brandmaend_set, se badested-observations.js's LEVEL_VALUES.
+const LEVEL_LABELS = { ingen: 'Ingen', faa: 'Få', mange: 'Mange' };
 
 // ── Besked ved dagens FØRSTE badestedsvurdering ─────────────────────────────
 // Kaldes fra POST /api/badested-observation når badestedObs.recordVurdering()
@@ -4181,15 +4193,19 @@ const ALGAE_LEVEL_LABELS = { ingen: 'Ingen', faa: 'Få', mange: 'Mange' };
 // Kun DENNE ene indsendelse pr. badested pr. dag udløser en besked; ingen
 // afsender-identificerbar info medtages (kun de valgte statustyper, som er
 // det eneste badestedObs kender om indsendelsen).
-async function broadcastFirstVurderingOfDay(badestedId, observationTypes, algaeLevel) {
+async function broadcastFirstVurderingOfDay(badestedId, observationTypes, algaeLevel, brandmaendLevel) {
   if (!VAPID_PUBLIC_KEY) return;
   const matches = await getSubscriptionsForBadested(badestedId);
   if (matches.length === 0) return;
 
   const typeLabels = (observationTypes || []).map(t => VURDERING_TYPE_LABELS[t]).filter(Boolean);
-  if (observationTypes?.includes('alger_set') && algaeLevel && ALGAE_LEVEL_LABELS[algaeLevel]) {
+  if (observationTypes?.includes('alger_set') && algaeLevel && LEVEL_LABELS[algaeLevel]) {
     const idx = typeLabels.indexOf(VURDERING_TYPE_LABELS.alger_set);
-    if (idx !== -1) typeLabels[idx] = `Alger set (${ALGAE_LEVEL_LABELS[algaeLevel]})`;
+    if (idx !== -1) typeLabels[idx] = `Alger set (${LEVEL_LABELS[algaeLevel]})`;
+  }
+  if (observationTypes?.includes('brandmaend_set') && brandmaendLevel && LEVEL_LABELS[brandmaendLevel]) {
+    const idx = typeLabels.indexOf(VURDERING_TYPE_LABELS.brandmaend_set);
+    if (idx !== -1) typeLabels[idx] = `Brandmænd set (${LEVEL_LABELS[brandmaendLevel]})`;
   }
   const body = typeLabels.length > 0 ? typeLabels.join(', ') : 'Ny observation indsendt';
   const now = Date.now();

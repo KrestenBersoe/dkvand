@@ -733,6 +733,7 @@ function render() {
           <option value="affald">Kun affald</option>
           <option value="uklart_vand">Kun uklart vand</option>
           <option value="ser_fint_ud">Kun "ser fint ud"</option>
+          <option value="brandmaend_set">Kun brandmænd</option>
         </select>
       </div>
       <div id="vurd-content">Indlæser…</div>
@@ -2124,10 +2125,15 @@ async function loadKommuneStats() {
 // isFlagged() nedenfor — fordi de er dem der reelt kan udløse en fysisk
 // besigtigelse (bruger-krav), ikke en teknisk egenskab ved dataene.
 const VURD_TYPE_META = {
-  ser_fint_ud: { icon: '✓',  color: '#2d7d4f', label: 'Ser fint ud' },
-  alger_set:   { icon: '🌿', color: '#d4a020', label: 'Alger set' },
-  uklart_vand: { icon: '💧', color: '#c84b1f', label: 'Uklart vand' },
-  affald:      { icon: '🗑', color: '#5a6b78', label: 'Affald' },
+  ser_fint_ud:    { icon: '✓',  color: '#2d7d4f', label: 'Ser fint ud' },
+  alger_set:      { icon: '🌿', color: '#d4a020', label: 'Alger set' },
+  uklart_vand:    { icon: '💧', color: '#c84b1f', label: 'Uklart vand' },
+  affald:         { icon: '🗑', color: '#5a6b78', label: 'Affald' },
+  // NYT (bruger-ønske 2026-08-21): kun for kystnære badesteder, se
+  // dansk-overloeb-kort.html's isKystvandBadested() — søer sender aldrig
+  // denne type, men badgen defineres her uændret så visningen er konsistent
+  // hvis/når data findes.
+  brandmaend_set: { icon: '🪼', color: '#c0392b', label: 'Brandmænd set' },
 };
 const VURD_FLAGGED_TYPES = new Set(['alger_set', 'affald']);
 const VURD_ALGAE_LEVEL_LABELS = { ingen: 'Ingen', faa: 'Få', mange: 'Mange' };
@@ -2195,7 +2201,8 @@ function renderVurderinger() {
     const flagged = isFlaggedVurdering(v);
     const badgesHtml = v.types.map(t => {
       const meta = VURD_TYPE_META[t] || { icon: '•', color: 'var(--ink-soft)', label: t };
-      return `<span class="vurd-type-badge" style="color:${meta.color}">${meta.icon} ${escHtml(meta.label)}${t === 'alger_set' && v.algaeLevel ? ` (${escHtml(VURD_ALGAE_LEVEL_LABELS[v.algaeLevel] || v.algaeLevel)})` : ''}</span>`;
+      const level = t === 'alger_set' ? v.algaeLevel : (t === 'brandmaend_set' ? v.brandmaendLevel : null);
+      return `<span class="vurd-type-badge" style="color:${meta.color}">${meta.icon} ${escHtml(meta.label)}${level ? ` (${escHtml(VURD_ALGAE_LEVEL_LABELS[level] || level)})` : ''}</span>`;
     }).join('');
     const nameHtml = v.badestedSlug
       ? `<a href="/badested/${encodeURIComponent(v.badestedSlug)}" target="_blank" rel="noopener">${escHtml(v.badestedNavn)}</a>`

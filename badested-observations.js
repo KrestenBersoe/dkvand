@@ -113,13 +113,29 @@ const PHOTO_MAGIC_BYTES = [
   { ext: 'webp', sig: [0x52, 0x49, 0x46, 0x46], offset: 0, secondarySig: { sig: [0x57, 0x45, 0x42, 0x50], offset: 8 } },
 ];
 
-const LAYER1_TYPES = ['ser_fint_ud', 'alger_set', 'uklart_vand', 'affald'];
+// NYT (bruger-ønske 2026-08-21): 'brandmaend_set' (vandmænd/brandmænd,
+// samme mængde-niveau-mønster som alger — se LEVEL_VALUES) er bevidst KUN
+// tilladt for badesteder, der er bekræftet kystvand (source === 'kystvand'
+// i badevand-risk.js's kaskaderesultat) — søer får aldrig brandmænd, jf.
+// produktbeslutning. Håndhævelsen sker server-side her (recordVurdering()'s
+// isKystvand-parameter, beregnet af server.js FØR kaldet, se dens
+// filhoved for hvorfor klassificeringen ikke bør duplikeres i dette modul)
+// — IKKE kun som en skjult UI-knap, så et direkte API-kald mod et
+// sø-badested afvises på samme måde som et ugyldigt algeniveau.
+const LAYER1_TYPES = ['ser_fint_ud', 'alger_set', 'uklart_vand', 'affald', 'brandmaend_set'];
 // Legacy observation_type fra FØR algeniveau/foto blev lagt direkte på
 // 'alger_set'-rækken (se recordVurdering()) — findes kun i ældre data på
 // volumen, aldrig skrevet af koden længere. weightedCounts() skal stadig
 // kunne læse den, så gammel historik ikke bare forsvinder fra panelet.
 const ALGAE_TYPE    = 'algeobservation';
-const ALGAE_LEVELS  = ['ingen', 'faa', 'mange'];
+// RETTET: omdøbt fra ALGAE_LEVELS — samme tre værdier (Ingen/Få/Mange)
+// bruges nu også af 'brandmaend_set', ikke kun alger. Databasekolonnen
+// hedder fortsat `algae_level` (se CREATE TABLE nedenfor) — bevidst IKKE
+// omdøbt for at undgå en migrering af eksisterende produktionsdata; den
+// rummer nu blot niveauet for HVILKEN SOM HELST "niveau-bærende"
+// observationstype på den pågældende række (kun ét pr. række, da hver
+// valgt statustype altid får sin egen række, se entries-opbygningen).
+const LEVEL_VALUES  = ['ingen', 'faa', 'mange'];
 const OBSERVATION_TYPES = [...LAYER1_TYPES, ALGAE_TYPE];
 
 // ── Foto-lagring — fortsat lokal filsystem, IKKE en del af Postgres-
@@ -314,15 +330,19 @@ async function insertVurderingTxn(badestedId, entries, ipHash, now, maxPerDay) {
  *
  * @param {object} p
  * @param {string} p.badestedId          — samme nøgle som badevandsvurderingen (bathingwat/DKBW-kode)
- * @param {string[]} p.observationTypes  — 1-4 unikke værdier fra LAYER1_TYPES
- * @param {string|null} p.algaeLevel     — én af ALGAE_LEVELS, PÅKRÆVET hvis 'alger_set' er blandt observationTypes, ellers skal den være null
+ * @param {string[]} p.observationTypes  — 1-5 unikke værdier fra LAYER1_TYPES
+ * @param {string|null} p.algaeLevel     — én af LEVEL_VALUES, PÅKRÆVET hvis 'alger_set' er blandt observationTypes, ellers skal den være null
+ * @param {string|null} p.brandmaendLevel — én af LEVEL_VALUES, PÅKRÆVET hvis 'brandmaend_set' er blandt observationTypes, ellers skal den være null
  * @param {Buffer|null} p.photoBuffer    — valgfrit foto, kun gyldigt sammen med 'alger_set' (UI'en skjuler pt. denne mulighed)
  * @param {string} p.rawIp               — klientens rå IP (hashes her, gemmes ALDRIG i klartekst)
  * @param {boolean} [p.isNearBadested]   — beregnet af server.js ud fra klientens GPS-koordinater sammenholdt
  *   med badestedets EGNE, server-kendte koordinater — se MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED ovenfor.
  *   Denne funktion stoler blindt på værdien (den rummer selv ingen geo-data); et blødt tillidssignal, ikke en garanti.
+ * @param {boolean} [p.isKystvand]       — beregnet af server.js ud fra badevand-risk.js's kaskaderesultat
+ *   (source === 'kystvand' for dette badested-id). Håndhæver at 'brandmaend_set' kun kan indberettes for
+ *   bekræftede kystvands-badesteder, aldrig søer — se LAYER1_TYPES-kommentaren ovenfor.
  */
-async function recordVurdering({ badestedId, observationTypes, algaeLevel, photoBuffer, rawIp, isNearBadested }) {
+async function recordVurdering({ badestedId, observationTypes, algaeLevel, brandmaendLevel, photoBuffer, rawIp, isNearBadested, isKystvand }) {
   if (typeof badestedId !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(badestedId)) {
     const err = new Error('Ugyldigt badested-id'); err.code = 'VALIDATION'; throw err;
   }
@@ -334,7 +354,7 @@ async function recordVurdering({ badestedId, observationTypes, algaeLevel, photo
     const err = new Error('Ugyldig observationstype'); err.code = 'VALIDATION'; throw err;
   }
   const hasAlgae = uniqueTypes.includes('alger_set');
-  if (hasAlgae && !ALGAE_LEVELS.includes(algaeLevel)) {
+  if (hasAlgae && !LEVEL_VALUES.includes(algaeLevel)) {
     const err = new Error('Vælg mængden af alger (Ingen/Få/Mange)'); err.code = 'VALIDATION'; throw err;
   }
   if (!hasAlgae && algaeLevel != null) {
@@ -342,6 +362,17 @@ async function recordVurdering({ badestedId, observationTypes, algaeLevel, photo
   }
   if (photoBuffer && !hasAlgae) {
     const err = new Error('Foto er kun understøttet sammen med alger_set'); err.code = 'VALIDATION'; throw err;
+  }
+
+  const hasBrandmaend = uniqueTypes.includes('brandmaend_set');
+  if (hasBrandmaend && !isKystvand) {
+    const err = new Error('Brandmænd kan kun indberettes for badesteder ved kysten/saltvand'); err.code = 'VALIDATION'; throw err;
+  }
+  if (hasBrandmaend && !LEVEL_VALUES.includes(brandmaendLevel)) {
+    const err = new Error('Vælg mængden af brandmænd (Ingen/Få/Mange)'); err.code = 'VALIDATION'; throw err;
+  }
+  if (!hasBrandmaend && brandmaendLevel != null) {
+    const err = new Error('brandmaend_level må kun angives sammen med brandmaend_set'); err.code = 'VALIDATION'; throw err;
   }
 
   let photoPath = null;
@@ -353,9 +384,13 @@ async function recordVurdering({ badestedId, observationTypes, algaeLevel, photo
   // scripts/build-badevand-analyseresultater.js, blot her ved selve
   // INDSÆTTELSEN i stedet for ved indlæsning af historiske data).
   const now = Date.now();
+  // RETTET: algae_level-kolonnen (se CREATE TABLE) bærer nu niveauet for
+  // ENTEN alger_set ELLER brandmaend_set, aldrig begge på samme række — der
+  // findes altid højst én af de to typer pr. række, se LEVEL_VALUES-
+  // kommentaren ovenfor.
   const entries = uniqueTypes.map(t => ({
     observationType: t,
-    algaeLevel: t === 'alger_set' ? algaeLevel : null,
+    algaeLevel: t === 'alger_set' ? algaeLevel : (t === 'brandmaend_set' ? brandmaendLevel : null),
     photoPath:  t === 'alger_set' ? photoPath  : null,
   }));
   const maxPerDay = isNearBadested ? MAX_VURDERINGER_PER_IP_PER_DAY_NEAR_BADESTED : MAX_VURDERINGER_PER_IP_PER_DAY;
@@ -385,8 +420,11 @@ async function weightedCounts(badestedId) {
   const layer1 = {};
   for (const t of LAYER1_TYPES) layer1[t] = 0;
   const algaeLevels = {};
-  for (const l of ALGAE_LEVELS) algaeLevels[l] = 0;
+  for (const l of LEVEL_VALUES) algaeLevels[l] = 0;
+  const brandmaendLevels = {};
+  for (const l of LEVEL_VALUES) brandmaendLevels[l] = 0;
   let latestAlgae = null;
+  let latestBrandmaend = null;
   // NYT (bruger-ønske): tidsstemplet for den SENESTE vurdering af enhver
   // type (ikke kun algeobservationer, se latestAlgae ovenfor) — rows er
   // allerede ORDER BY created_at DESC, så rows[0] er entydigt den nyeste.
@@ -399,10 +437,21 @@ async function weightedCounts(badestedId) {
     // Algeniveau: enten fra en 'alger_set'-række (niveauet ligger direkte på
     // rækken, se recordVurdering()) eller — for ældre data fra FØR denne
     // sammenlægning — en selvstændig legacy 'algeobservation'-række.
-    if (row.algae_level && algaeLevels[row.algae_level] != null) {
+    // RETTET: algae_level-kolonnen bærer nu OGSÅ brandmaend_set-niveauet
+    // (se recordVurdering()) — grenet på observation_type her, så en
+    // brandmænd-række aldrig fejlagtigt tælles med i algeLevels, og omvendt.
+    const isAlgaeRow      = row.observation_type === 'alger_set' || row.observation_type === ALGAE_TYPE;
+    const isBrandmaendRow = row.observation_type === 'brandmaend_set';
+    if (isAlgaeRow && row.algae_level && algaeLevels[row.algae_level] != null) {
       algaeLevels[row.algae_level] += weight;
       if (!latestAlgae) {
         latestAlgae = { level: row.algae_level, createdAt: Number(row.created_at), photoUrl: row.photo_path || null };
+      }
+    }
+    if (isBrandmaendRow && row.algae_level && brandmaendLevels[row.algae_level] != null) {
+      brandmaendLevels[row.algae_level] += weight;
+      if (!latestBrandmaend) {
+        latestBrandmaend = { level: row.algae_level, createdAt: Number(row.created_at) };
       }
     }
     if (row.observation_type !== ALGAE_TYPE && layer1[row.observation_type] != null) {
@@ -410,7 +459,7 @@ async function weightedCounts(badestedId) {
     }
   }
 
-  return { layer1, algaeLevels, latestAlgae, latestObservationAt, rawCount: rows.length };
+  return { layer1, algaeLevels, brandmaendLevels, latestAlgae, latestBrandmaend, latestObservationAt, rawCount: rows.length };
 }
 
 /**
@@ -422,11 +471,11 @@ async function weightedCounts(badestedId) {
  * at ændre den officielle risikofarve).
  */
 async function getObservationSummary(badestedId) {
-  const { layer1, algaeLevels, latestAlgae, latestObservationAt, rawCount } = await weightedCounts(badestedId);
+  const { layer1, algaeLevels, brandmaendLevels, latestAlgae, latestBrandmaend, latestObservationAt, rawCount } = await weightedCounts(badestedId);
   return {
     badestedId,
     generatedAt: Date.now(),
-    layer1,       // { ser_fint_ud, alger_set, uklart_vand, affald } → henfaldsvægtet sum, "X rapporter"-tal
+    layer1,       // { ser_fint_ud, alger_set, uklart_vand, affald, brandmaend_set } → henfaldsvægtet sum, "X rapporter"-tal
     // NYT: rå (u-vægtet) antal rækker inden for lookback-vinduet — bruges af
     // klienten til at afgøre "er der overhovedet nogen data" UAFHÆNGIGT af
     // om den henfaldsvægtede sum er rundet ned til 0. Uden dette kunne en
@@ -442,6 +491,14 @@ async function getObservationSummary(badestedId) {
     algae: {
       levels: algaeLevels,   // { ingen, faa, mange } → henfaldsvægtet sum pr. niveau
       latest: latestAlgae,   // seneste algeobservation (rå, ikke vægtet) eller null
+    },
+    // NYT (bruger-ønske 2026-08-21): kun meningsfuldt for kystnære badesteder
+    // (se LAYER1_TYPES-kommentaren), men returneres ubetinget her — et
+    // sø-badested vil blot altid have alle niveauer på 0/latest:null, samme
+    // "vis de færdige tal, opfind intet" princip som resten af modulet.
+    brandmaend: {
+      levels: brandmaendLevels,
+      latest: latestBrandmaend,
     },
   };
 }
@@ -557,7 +614,8 @@ async function getVurderingListForBadestedIds(badestedIds, { limit = 300 } = {})
   const { rows } = await query(`
     SELECT v.id, v.badested_id, v.created_at,
            array_remove(array_agg(DISTINCT o.observation_type), NULL) AS types,
-           (array_agg(o.algae_level)  FILTER (WHERE o.algae_level  IS NOT NULL))[1] AS algae_level,
+           (array_agg(o.algae_level)  FILTER (WHERE o.observation_type = 'alger_set'))[1] AS algae_level,
+           (array_agg(o.algae_level)  FILTER (WHERE o.observation_type = 'brandmaend_set'))[1] AS brandmaend_level,
            (array_agg(o.photo_path)   FILTER (WHERE o.photo_path   IS NOT NULL))[1] AS photo_path
     FROM badested_vurderinger v
     LEFT JOIN badested_observations o ON o.vurdering_id = v.id
@@ -584,7 +642,7 @@ module.exports = {
   OBSERVATION_TYPES,
   LAYER1_TYPES,
   ALGAE_TYPE,
-  ALGAE_LEVELS,
+  LEVEL_VALUES,
   MAX_PHOTO_BYTES,
   // NYT (bruger-ønske): eksporteret så server.js kan formulere en KONKRET
   // fejlbesked ved rate limiting (se dens .code==='RATE_LIMITED'-gren) i

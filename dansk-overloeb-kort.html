@@ -2430,9 +2430,9 @@
       <section id="doc-badestedsvurdering" class="doc-section">
         <h2>Badestedsvurdering</h2>
         <p>Ud over den beregnede risikoscore kan alle brugere indberette deres egen oplevelse af et badested — vist som selvstændig, mærket information ved siden af modellen, <strong>uden at indgå i eller ændre risikoberegningen</strong> beskrevet ovenfor.</p>
-        <p>Indberetning sker via "⭐ Badestedsvurdering"-knappen i badevands-panelet — enten manuelt, eller ved at acceptere en prompt, der vises automatisk, når GPS bekræfter, at man fysisk befinder sig ved badestedet. Én vurdering kan indeholde <strong>flere valgte statustyper på én gang</strong>: "Ser fint ud", "Alger set", "Uklart vand" og "Affald" vælges som afkrydsning, ikke som fire uafhængige ét-tryks-knapper — man markerer alt det, der passer, og indsender det samlet med én "Indsend vurdering"-knap.</p>
-        <p>Vælges <strong>"Alger set"</strong>, vises et krav om at angive mængden af alger ("Ingen"/"Få"/"Mange") direkte i samme formular — vurderingen kan ikke indsendes, før niveauet er valgt. Muligheden for at vedhæfte et foto til algeobservationen findes stadig i koden, men er pt. skjult i brugerfladen. Efter en indsendelse vises en tydelig bekræftelse om, at vurderingen er modtaget og offentliggjort på badestedets side med det samme.</p>
-        <p>Det altid synlige "Badestedsvurdering"-panel på selve badevandssiden opsummerer de seneste indberetninger grafisk for de fire statustyper, med et samlet, henfaldsvægtet "X rapporter i dag"-tal i selve indsendelsesprompten — nyere indberetninger vejer mest (henfaldstid ét døgn), ældre toner gradvist ud uden at forsvinde brat. Al vægtning beregnes server-side; klienten viser udelukkende de færdige tal.</p>
+        <p>Indberetning sker via "⭐ Badestedsvurdering"-knappen i badevands-panelet — enten manuelt, eller ved at acceptere en prompt, der vises automatisk, når GPS bekræfter, at man fysisk befinder sig ved badestedet. Én vurdering kan indeholde <strong>flere valgte statustyper på én gang</strong>: "Ser fint ud", "Alger set", "Uklart vand" og "Affald" vælges som afkrydsning, ikke som uafhængige ét-tryks-knapper — man markerer alt det, der passer, og indsender det samlet med én "Indsend vurdering"-knap. For badesteder ved kysten/saltvand er der desuden en femte mulighed, <strong>"Brandmænd set"</strong> — søer får den ikke, da brandmænd/vandmænd ikke findes i ferskvand.</p>
+        <p>Vælges <strong>"Alger set"</strong> eller <strong>"Brandmænd set"</strong>, vises et krav om at angive mængden ("Ingen"/"Få"/"Mange") direkte i samme formular — vurderingen kan ikke indsendes, før niveauet for hver valgt type er angivet. Muligheden for at vedhæfte et foto til algeobservationen findes stadig i koden, men er pt. skjult i brugerfladen. Efter en indsendelse vises en tydelig bekræftelse om, at vurderingen er modtaget og offentliggjort på badestedets side med det samme.</p>
+        <p>Det altid synlige "Badestedsvurdering"-panel på selve badevandssiden opsummerer de seneste indberetninger grafisk for de gældende statustyper (fem for kystnære badesteder, fire for søer), med et samlet, henfaldsvægtet "X rapporter i dag"-tal i selve indsendelsesprompten — nyere indberetninger vejer mest (henfaldstid ét døgn), ældre toner gradvist ud uden at forsvinde brat. Al vægtning beregnes server-side; klienten viser udelukkende de færdige tal.</p>
         <div class="doc-callout"><strong>Maks. 5 vurderinger pr. bruger pr. dag, 50 hvis GPS bekræfter du fysisk er ved badestedet.</strong> Grænsen gælder på tværs af alle badesteder — man kan frit fordele sine vurderinger over flere forskellige badesteder samme dag. Håndhæves server-side pr. IP-adresse og er bevidst ikke synlig i selve brugerfladen (for ikke at gøre det nemmere for automatiseret spam at kalibrere sig efter den).</div>
         <div class="doc-callout"><strong>Borgerobservationer påvirker aldrig den officielle risikovurdering.</strong> De behandles som et helt separat, mærket lag — samme princip som algerisiko allerede er adskilt fra sikkerhedsvurderingen (se Badevandsvurdering ovenfor) — og fødes aldrig ind i risikoberegningen. De er et supplerende, øjebliksbilledebaseret signal fra folk, der faktisk er eller for nylig var ved vandet, ikke en kalibreret eller valideret datakilde.</div>
       </section>
@@ -2704,6 +2704,15 @@
         <button type="button" class="bv-obs-btn" id="bv-obs-btn-affald" onclick="toggleObservationType('affald')">
           <span class="bv-obs-icon" style="color:#5a6b78">🗑</span><span>Affald</span>
         </button>
+        <!-- NYT (bruger-ønske 2026-08-21): kun for badesteder ved kysten/
+             saltvand (søer får ikke brandmænd/vandmænd) — skjult som default
+             her, synliggjort af openObservationPrompt() ud fra samme
+             source==='kystvand'-klassificering som resten af appen allerede
+             bruger (isKystvandBadested()). Server-side håndhævet UANSET
+             denne UI-gating, se badested-observations.js's LAYER1_TYPES. -->
+        <button type="button" class="bv-obs-btn" id="bv-obs-btn-brandmaend_set" onclick="toggleObservationType('brandmaend_set')" style="display:none">
+          <span class="bv-obs-icon" style="color:#c0392b">🪼</span><span>Brandmænd set</span>
+        </button>
       </div>
 
       <!-- Algeniveau — kun synlig når "Alger set" er valgt herover, og skal
@@ -2723,6 +2732,24 @@
           </button>
           <button type="button" class="bv-algae-level-btn" data-level="mange" onclick="selectObsAlgaeLevel('mange')">
             <span class="bv-algae-dot" style="background:#c84b1f"></span><span>Mange — tæt algedække</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Brandmænd-niveau — samme mønster som algeniveauet ovenfor, kun
+           synlig når "Brandmænd set" er valgt (som selv kun er synlig/
+           valgbar for kystnære badesteder, se knappen ovenfor). -->
+      <div id="bv-obs-brandmaend-section" style="display:none;margin-top:14px">
+        <p style="font-size:13px;font-weight:500;color:#5a6b78;margin:0 0 10px">Hvor mange brandmænd ser du?</p>
+        <div style="display:flex;flex-direction:column;gap:8px" id="bv-obs-brandmaend-buttons">
+          <button type="button" class="bv-algae-level-btn" data-level="ingen" onclick="selectObsBrandmaendLevel('ingen')">
+            <span class="bv-algae-dot" style="background:#2d7d4f"></span><span>Ingen</span>
+          </button>
+          <button type="button" class="bv-algae-level-btn" data-level="faa" onclick="selectObsBrandmaendLevel('faa')">
+            <span class="bv-algae-dot" style="background:#d4a020"></span><span>Få</span>
+          </button>
+          <button type="button" class="bv-algae-level-btn" data-level="mange" onclick="selectObsBrandmaendLevel('mange')">
+            <span class="bv-algae-dot" style="background:#c0392b"></span><span>Mange</span>
           </button>
         </div>
       </div>
@@ -9383,8 +9410,20 @@ const OBSERVATION_PROMPT_DISMISSED_KEY  = 'dkv_observation_prompt_dismissed';  /
 let _bvSelectedAlgaeLevel = null;  // bruges KUN af det nu utilgængelige, men bevarede lag 2-foto-flow herunder
 
 // Aktivt vurderings-flow (multi-select, se toggleObservationType()) — nulstilles ved hver åbning af prompten.
-let _bvObsSelectedTypes = new Set();  // valgte statustyper for DEN igangværende vurdering
-let _bvObsAlgaeLevel    = null;       // valgt algeniveau, KUN relevant hvis 'alger_set' er iblandt _bvObsSelectedTypes
+let _bvObsSelectedTypes  = new Set();  // valgte statustyper for DEN igangværende vurdering
+let _bvObsAlgaeLevel     = null;       // valgt algeniveau, KUN relevant hvis 'alger_set' er iblandt _bvObsSelectedTypes
+let _bvObsBrandmaendLevel = null;      // valgt brandmænd-niveau, KUN relevant hvis 'brandmaend_set' er iblandt _bvObsSelectedTypes
+
+// NYT (bruger-ønske 2026-08-21): 'brandmaend_set' må kun vælges/vises for
+// badesteder, der er bekræftet kystvand — samme source-klassificering som
+// resten af appen (badevand-risk.js's source==='kystvand'). computeBadevandRisk()
+// tager reelt kun badevandId i brug (lat/lng-parametrene er vestigielle, se
+// dens eget filhoved), så et opslag her kræver kun selve id'et. Server-side
+// håndhæves grænsen UANSET denne UI-gating, se badested-observations.js.
+function isKystvandBadested(badestedId) {
+  if (!badestedId) return false;
+  return computeBadevandRisk(null, null, badestedId).source === 'kystvand';
+}
 
 // NYT: stille, IKKE-påtrængende baggrundstjek — fejler geolokation (afvist,
 // utilgængelig, timeout), sker der INTET synligt (ingen fejl-toast, i
@@ -9457,9 +9496,17 @@ function openObservationPrompt(feature, opts = {}) {
   // indsendt (eller droppet) vurdering må aldrig lække ind i en ny.
   _bvObsSelectedTypes.clear();
   _bvObsAlgaeLevel = null;
+  _bvObsBrandmaendLevel = null;
   document.querySelectorAll('#bv-obs-form .bv-obs-btn').forEach(b => b.classList.remove('selected'));
   document.querySelectorAll('#bv-obs-algae-buttons .bv-algae-level-btn').forEach(b => b.classList.remove('selected'));
+  document.querySelectorAll('#bv-obs-brandmaend-buttons .bv-algae-level-btn').forEach(b => b.classList.remove('selected'));
   document.getElementById('bv-obs-algae-section')?.style.setProperty('display', 'none');
+  document.getElementById('bv-obs-brandmaend-section')?.style.setProperty('display', 'none');
+  // NYT (bruger-ønske 2026-08-21): "Brandmænd set"-knappen vises kun for
+  // bekræftede kystvands-badesteder — søer beholder uændret de fire
+  // hidtidige valgmuligheder, se isKystvandBadested().
+  const brandmaendBtn = document.getElementById('bv-obs-btn-brandmaend_set');
+  if (brandmaendBtn) brandmaendBtn.style.display = isKystvandBadested(p.bathingwat) ? '' : 'none';
   document.getElementById('bv-obs-form')?.style.setProperty('display', '');
   document.getElementById('bv-obs-confirmation')?.style.setProperty('display', 'none');
   updateObsSubmitState();
@@ -9509,6 +9556,17 @@ function toggleObservationType(type) {
     _bvObsAlgaeLevel = null;
     document.querySelectorAll('#bv-obs-algae-buttons .bv-algae-level-btn').forEach(b => b.classList.remove('selected'));
   }
+
+  // Samme mønster for "Brandmænd set" — se knappens egen kystvand-gating
+  // i openObservationPrompt().
+  const brandmaendSection = document.getElementById('bv-obs-brandmaend-section');
+  if (_bvObsSelectedTypes.has('brandmaend_set')) {
+    if (brandmaendSection) brandmaendSection.style.display = '';
+  } else {
+    if (brandmaendSection) brandmaendSection.style.display = 'none';
+    _bvObsBrandmaendLevel = null;
+    document.querySelectorAll('#bv-obs-brandmaend-buttons .bv-algae-level-btn').forEach(b => b.classList.remove('selected'));
+  }
   updateObsSubmitState();
 }
 
@@ -9523,13 +9581,22 @@ function selectObsAlgaeLevel(level) {
   updateObsSubmitState();
 }
 
+function selectObsBrandmaendLevel(level) {
+  _bvObsBrandmaendLevel = level;
+  document.querySelectorAll('#bv-obs-brandmaend-buttons .bv-algae-level-btn').forEach(btn => {
+    btn.classList.toggle('selected', btn.dataset.level === level);
+  });
+  updateObsSubmitState();
+}
+
 // Indsend-knappen er inaktiv, indtil mindst én type er valgt — og, hvis
-// "Alger set" er blandt dem, indtil et algeniveau også er valgt.
+// "Alger set"/"Brandmænd set" er blandt dem, indtil deres niveau også er valgt.
 function updateObsSubmitState() {
   const btn = document.getElementById('bv-obs-submit-btn');
   if (!btn) return;
-  const missingAlgaeLevel = _bvObsSelectedTypes.has('alger_set') && !_bvObsAlgaeLevel;
-  btn.disabled = _bvObsSelectedTypes.size === 0 || missingAlgaeLevel;
+  const missingAlgaeLevel      = _bvObsSelectedTypes.has('alger_set') && !_bvObsAlgaeLevel;
+  const missingBrandmaendLevel = _bvObsSelectedTypes.has('brandmaend_set') && !_bvObsBrandmaendLevel;
+  btn.disabled = _bvObsSelectedTypes.size === 0 || missingAlgaeLevel || missingBrandmaendLevel;
 }
 
 function showObsConfirmation() {
@@ -9565,6 +9632,10 @@ async function submitVurdering() {
     showToast('⚠️ Vælg mængden af alger først (Ingen/Få/Mange)');
     return;
   }
+  if (_bvObsSelectedTypes.has('brandmaend_set') && !_bvObsBrandmaendLevel) {
+    showToast('⚠️ Vælg mængden af brandmænd først (Ingen/Få/Mange)');
+    return;
+  }
 
   const submitBtn = document.getElementById('bv-obs-submit-btn');
   if (submitBtn) submitBtn.disabled = true;
@@ -9574,6 +9645,7 @@ async function submitVurdering() {
     body.append('badestedId', badestedId);
     body.append('observationTypes', JSON.stringify(selectedTypes));
     if (_bvObsSelectedTypes.has('alger_set')) body.append('algaeLevel', _bvObsAlgaeLevel);
+    if (_bvObsSelectedTypes.has('brandmaend_set')) body.append('brandmaendLevel', _bvObsBrandmaendLevel);
     // NYT (bruger-ønske): sidst kendte brugerposition (samme mønster som
     // loadVarselData()'s uLat/uLng — globale variable fra locateUser(), med
     // sessionStorage-fallback fra en tidligere session) sendes med, så
@@ -9671,16 +9743,20 @@ function onAlgaePhotoSelected() {
 // sker her, og intet herfra må nogensinde påvirke den officielle
 // risikofarve ovenfor i panelet.
 //
-// NYT (efter eksplicit ønske): panelet viser UDELUKKENDE disse fire
-// kategorier — algeniveau-nedbrydningen (Ingen/Få/Mange), som tidligere
-// blev vist som selvstændige rækker herunder, er fjernet fra selve panelet
-// (niveauet indsamles stadig og ligger i summary.algae, se
+// NYT (efter eksplicit ønske): panelet viser UDELUKKENDE disse kategorier —
+// algeniveau-nedbrydningen (Ingen/Få/Mange), som tidligere blev vist som
+// selvstændige rækker herunder, er fjernet fra selve panelet (niveauet
+// indsamles stadig og ligger i summary.algae/summary.brandmaend, se
 // badested-observations.js, men vises ikke længere her).
+// brandmaend_set filtreres fra i renderBadestedVurderingPanel() for
+// søer (isKystvandBadested()) — den lever her i den fælles meta-liste, så
+// ikon/farve/label kun defineres ét sted.
 const BV_VURDERING_LAYER1_META = {
-  ser_fint_ud: { icon: '✓',  color: '#2d7d4f', label: 'Ser fint ud' },
-  alger_set:   { icon: '🌿', color: '#d4a020', label: 'Alger set' },
-  uklart_vand: { icon: '💧', color: '#c84b1f', label: 'Uklart vand' },
-  affald:      { icon: '🗑', color: '#5a6b78', label: 'Affald' },
+  ser_fint_ud:    { icon: '✓',  color: '#2d7d4f', label: 'Ser fint ud' },
+  alger_set:      { icon: '🌿', color: '#d4a020', label: 'Alger set' },
+  uklart_vand:    { icon: '💧', color: '#c84b1f', label: 'Uklart vand' },
+  affald:         { icon: '🗑', color: '#5a6b78', label: 'Affald' },
+  brandmaend_set: { icon: '🪼', color: '#c0392b', label: 'Brandmænd set' },
 };
 
 function bvVurderingRow(color, icon, label, value, maxValue) {
@@ -9760,8 +9836,15 @@ async function renderBadestedVurderingPanel(p) {
       return;
     }
 
-    const maxValue = Math.max(...Object.values(layer1));
-    let html = Object.entries(BV_VURDERING_LAYER1_META)
+    // RETTET: brandmaend_set filtreres væk for søer (isKystvandBadested()) —
+    // ellers ville hvert eneste sø-badested vise en evigt-tom "Brandmænd
+    // set: 0"-række, selvom typen aldrig kan indberettes der (se
+    // badested-observations.js's LAYER1_TYPES).
+    const isKyst = isKystvandBadested(badestedId);
+    const visibleLayer1Entries = Object.entries(BV_VURDERING_LAYER1_META)
+      .filter(([key]) => key !== 'brandmaend_set' || isKyst);
+    const maxValue = Math.max(...visibleLayer1Entries.map(([key]) => layer1[key] || 0));
+    let html = visibleLayer1Entries
       .map(([key, meta]) => bvVurderingRow(meta.color, meta.icon, meta.label, layer1[key] || 0, maxValue))
       .join('');
     // NYT (bruger-ønske): viser hvor gammel den seneste vurdering er, i
