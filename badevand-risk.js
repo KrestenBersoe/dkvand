@@ -1607,12 +1607,24 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
       const id = props.bathingwat ?? props.ov_id ?? props.id ?? null;
       if (id === null) continue;
 
+      // NYT (bruger-rapporteret 2026-08-22 — "brandmænd mangler for flere
+      // kystnære badesteder"): waterType er en RENT GEOMETRISK klassificering
+      // (hvilken loop matchede FØRST — sø, kystvand, eller vandløb), helt
+      // uafhængig af om der findes en BEKRÆFTET forureningskilde. Den
+      // tidligere gating brugte i stedet `source==='kystvand'`, som KUN er
+      // sand ved en AKTIV bekræftet kilde — et badested ved kysten uden
+      // aktuel udledningstrussel (source:'ingen-bekraeftet'/'nedstroms-
+      // bekraeftet', eller slet intet primært match men geometrisk nær et
+      // kystvand via noDataMatch nedenfor) blev derfor fejlagtigt udelukket,
+      // selvom det objektivt ligger i saltvand. Se badevand.push() nedenfor
+      // for hvor dette eksponeres til klienten/API'et.
+      let waterType = null;
       let result = null;
       for (const lake of lakeList) {
         const b = lake.bbox;
         if (lat < b.minLat - WATERBODY_MATCH_BUFFER_DEG || lat > b.maxLat + WATERBODY_MATCH_BUFFER_DEG ||
             lng < b.minLng - WATERBODY_MATCH_BUFFER_DEG || lng > b.maxLng + WATERBODY_MATCH_BUFFER_DEG) continue;
-        if (pointInOrNearGeometry(lat, lng, lake.geometry, WATERBODY_MATCH_BUFFER_DEG)) { result = computeIsotropicLakeResult(lat, lng, lake, tauBadevand, tauVBadevand); break; }
+        if (pointInOrNearGeometry(lat, lng, lake.geometry, WATERBODY_MATCH_BUFFER_DEG)) { result = computeIsotropicLakeResult(lat, lng, lake, tauBadevand, tauVBadevand); waterType = 'soe'; break; }
       }
       // NYT: skelner "intet kystvand matchet overhovedet" fra "kystvand
       // matchet, HAR kendte udløb, men samtlige blev bekræftet nedstrøms af
@@ -1639,7 +1651,7 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
           if (pointInOrNearGeometry(lat, lng, kyst.geometry, WATERBODY_MATCH_BUFFER_DEG)) {
             result = computeIsotropicKystvandResult(lat, lng, kyst, tauBadevand, tauVBadevand);
             if (!result && kyst.outlets && kyst.outlets.length > 0) allDownstreamKyst = kyst;
-            if (result || allDownstreamKyst) matchedKystOvId = kyst.ov_id;
+            if (result || allDownstreamKyst) { matchedKystOvId = kyst.ov_id; waterType = 'kystvand'; }
             break;
           }
         }
@@ -1660,7 +1672,7 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
             if (pt.viralScore != null && (viral === null || pt.viralScore > viral)) viral = pt.viralScore;
             if (pt.algaeScore != null && (algae === null || pt.algaeScore > algae)) algae = pt.algaeScore;
           }
-          if (bact !== null || viral !== null || algae !== null) { result = { bact, viral, algae, source: v.match.lowConfidence ? 'vandlob-usikker' : 'vandlob', outlets }; break; }
+          if (bact !== null || viral !== null || algae !== null) { result = { bact, viral, algae, source: v.match.lowConfidence ? 'vandlob-usikker' : 'vandlob', outlets }; waterType = 'vandlob'; break; }
         }
       }
 
@@ -1687,6 +1699,11 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
           if (pointInOrNearGeometry(lat, lng, kyst.geometry, WATERBODY_MATCH_BUFFER_DEG)) { noDataMatch = { type: 'kystvand', navn: kyst.navn }; break; }
         }
       }
+      // waterType er stadig null her, hvis intet PRIMÆRT match (sø/kystvand/
+      // vandløb-loopet ovenfor) fandtes — brug noDataMatch's geometriske
+      // klassificering som sidste udvej, den er lige så gyldig et signal om
+      // salt-/ferskvand som et primært match, blot uden bekræftet kilde.
+      if (!waterType && noDataMatch) waterType = noDataMatch.type === 'kystvand' ? 'kystvand' : 'soe';
 
       // NYT: outlets sendes nu med til klienten (se toOutlet()/resolveOutlets()
       // og lakes/kystvande ovenfor) — retter "Bekræftet vandområde fundet,
@@ -1727,6 +1744,12 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
         // klienten — endte derfor altid som null/undefined uanset årsag).
         confirmReason: result?.confirmReason ?? null,
         outlets: result?.outlets ?? [],
+        // NYT (bruger-rapporteret 2026-08-22): ren geometrisk salt-/ferskvand-
+        // klassificering, se waterType-opbygningen ovenfor — 'kystvand' er
+        // her det korrekte signal for "badested ved kysten/saltvand" (fx til
+        // badested-observations.js's brandmaend_set-gating), IKKE `source`
+        // (som kun er 'kystvand' ved en AKTIV bekræftet forureningskilde).
+        waterType,
         noDataMatch: result || allDownstreamKyst ? null : noDataMatch,
         allDownstreamMatch: allDownstreamKyst ? { type: 'kystvand', navn: allDownstreamKyst.navn } : null,
         // NYT (bruger-ønske — datakonfidens): se deriveDataConfidence()

@@ -2133,7 +2133,10 @@ const VURD_TYPE_META = {
   // dansk-overloeb-kort.html's isKystvandBadested() — søer sender aldrig
   // denne type, men badgen defineres her uændret så visningen er konsistent
   // hvis/når data findes.
-  brandmaend_set: { icon: '🪼', color: '#c0392b', label: 'Brandmænd set' },
+  // RETTET: 🪼 renderer blåt på stort set alle platforme (fuldfarve-emoji
+  // kan ikke omfarves via CSS) — "Brandmænd" er specifikt den røde art,
+  // samme lille inline SVG-silhuet som dansk-overloeb-kort.html bruger.
+  brandmaend_set: { icon: '<svg width="14" height="14" viewBox="0 0 24 24" style="vertical-align:-2px" xmlns="http://www.w3.org/2000/svg"><path d="M12 3c-4.4 0-8 3.4-8 7.5 0 1.6.9 2.5 2 2.5h12c1.1 0 2-.9 2-2.5C20 6.4 16.4 3 12 3z" fill="#c0392b"/><path d="M7 14c-.3 1.2-1 2-1 4M9.5 14c-.2 1.6-.7 3-.7 5M12 14c0 2-.3 3.5-.3 6M14.5 14c.2 1.6.7 3 .7 5M17 14c.3 1.2 1 2 1 4" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>', color: '#c0392b', label: 'Brandmænd set' },
 };
 const VURD_FLAGGED_TYPES = new Set(['alger_set', 'affald']);
 const VURD_ALGAE_LEVEL_LABELS = { ingen: 'Ingen', faa: 'Få', mange: 'Mange' };

@@ -3530,11 +3530,14 @@ app.post('/api/badested-observation', (req, res) => {
         observationTypes = [];
       }
       // NYT (bruger-ønske 2026-08-21 — Brandmænd kun for kystnære badesteder):
-      // 'source' på badevandByIdCache's cachede kaskaderesultat er PRÆCIS
-      // samme klassificering, resten af appen allerede bruger til at skelne
-      // sø fra kystvand (se badevand-risk.js's source:'soe'/'kystvand') —
-      // genbruges her fremfor at indføre en ny, separat klassificering.
-      const isKystvand = badevandByIdCache.get(String(badestedId))?.source === 'kystvand';
+      // RETTET (bruger-rapporteret 2026-08-22 — "brandmænd mangler for
+      // flere kystnære badesteder"): brugte oprindeligt 'source', som KUN
+      // er 'kystvand' ved en AKTIV bekræftet forureningskilde — et badested
+      // ved kysten uden aktuel udledningstrussel blev derfor fejlagtigt
+      // afvist server-side. 'waterType' er badevand-risk.js's rene
+      // geometriske sø-/kystvand-klassificering, uafhængig af bekræftelses-
+      // status — se dens egen filhoveds-kommentar for hele begrundelsen.
+      const isKystvand = badevandByIdCache.get(String(badestedId))?.waterType === 'kystvand';
       const result = await badestedObs.recordVurdering({
         badestedId,
         observationTypes,

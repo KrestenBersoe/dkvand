@@ -2711,7 +2711,7 @@
              bruger (isKystvandBadested()). Server-side håndhævet UANSET
              denne UI-gating, se badested-observations.js's LAYER1_TYPES. -->
         <button type="button" class="bv-obs-btn" id="bv-obs-btn-brandmaend_set" onclick="toggleObservationType('brandmaend_set')" style="display:none">
-          <span class="bv-obs-icon" style="color:#c0392b">🪼</span><span>Brandmænd set</span>
+          <span class="bv-obs-icon"><svg width="16" height="16" viewBox="0 0 24 24" style="vertical-align:-3px" xmlns="http://www.w3.org/2000/svg"><path d="M12 3c-4.4 0-8 3.4-8 7.5 0 1.6.9 2.5 2 2.5h12c1.1 0 2-.9 2-2.5C20 6.4 16.4 3 12 3z" fill="#c0392b"/><path d="M7 14c-.3 1.2-1 2-1 4M9.5 14c-.2 1.6-.7 3-.7 5M12 14c0 2-.3 3.5-.3 6M14.5 14c.2 1.6.7 3 .7 5M17 14c.3 1.2 1 2 1 4" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg></span><span>Brandmænd set</span>
         </button>
       </div>
 
@@ -6677,11 +6677,11 @@ function computeBadevandRisk(lat, lng, badevandId) {
   // overhovedet") nu leveres FÆRDIG fra serveren i stedet.
   const serverFresh = badevandRiskData && (Date.now() - badevandRiskDataTs) < RISK_SCORES_MAX_AGE_MS;
   if (!serverFresh || badevandId == null) {
-    return { bact: null, viral: null, algae: null, source: 'server-utilgaengelig', outlets: [], geomMatchNoData: null };
+    return { bact: null, viral: null, algae: null, source: 'server-utilgaengelig', outlets: [], geomMatchNoData: null, waterType: null };
   }
   const sp = badevandRiskData.get(String(badevandId));
   if (!sp) {
-    return { bact: null, viral: null, algae: null, source: 'server-utilgaengelig', outlets: [], geomMatchNoData: null };
+    return { bact: null, viral: null, algae: null, source: 'server-utilgaengelig', outlets: [], geomMatchNoData: null, waterType: null };
   }
   if (sp.bact != null || sp.viral != null || sp.algae != null) {
     // RETTET (bruger-rapporteret — Vollerup Badebro: push-varsel viste
@@ -6698,7 +6698,7 @@ function computeBadevandRisk(lat, lng, badevandId) {
     // (de syntetiske værdier), rammer derfor altid DENNE gren, aldrig de
     // øvrige nedenfor. undefined for et upatchet badested, ikke null —
     // showBadevandPanel()'s banner-tjek bruger `if (sp.overrideInfo)`.
-    return { bact: sp.bact, viral: sp.viral, algae: sp.algae, forecast: sp.forecast, source: sp.source, outlets: sp.outlets || [], dataConfidence: sp.dataConfidence ?? null, overrideInfo: sp.overrideInfo };
+    return { bact: sp.bact, viral: sp.viral, algae: sp.algae, forecast: sp.forecast, source: sp.source, outlets: sp.outlets || [], dataConfidence: sp.dataConfidence ?? null, overrideInfo: sp.overrideInfo, waterType: sp.waterType ?? null };
   }
   // RETTET (KRITISK — se brugerrapport 2026-07-25, DKBW1031/Skanderborg Sø
   // Camping): denne funktion tjekkede kun 'nedstroms-bekraeftet' som en
@@ -6720,7 +6720,7 @@ function computeBadevandRisk(lat, lng, badevandId) {
     // confirmReason) — kun 'id15-empty' er faktisk ID15-terrænsporing af
     // et SØ-opland. confirmReason lader colorBadevandByRisk()/
     // showBadevandPanel() vise en tekst, der matcher den faktiske årsag.
-    return { bact: null, viral: null, algae: null, source: 'ingen-bekraeftet', confirmReason: sp.confirmReason || null, outlets: [], geomMatchNoData: null, dataConfidence: sp.dataConfidence ?? null };
+    return { bact: null, viral: null, algae: null, source: 'ingen-bekraeftet', confirmReason: sp.confirmReason || null, outlets: [], geomMatchNoData: null, dataConfidence: sp.dataConfidence ?? null, waterType: sp.waterType ?? null };
   }
   // NYT: 'nedstroms-bekraeftet' — tredje, POSITIV kategori (se
   // badevand-risk.js's allDownstreamKyst): kystvandet HAR kendte udløb, men
@@ -6729,13 +6729,13 @@ function computeBadevandRisk(lat, lng, badevandId) {
   // "ingen-bekraeftet" (source:'ingen-bekraeftet', grøn, kun søer/ID15-
   // opland uden udløb) — denne er kystvandenes strømdrevne modstykke.
   if (sp.source === 'nedstroms-bekraeftet') {
-    return { bact: null, viral: null, algae: null, source: 'nedstroms-bekraeftet', outlets: [], geomMatchNoData: null, allDownstreamMatch: sp.allDownstreamMatch || null, dataConfidence: sp.dataConfidence ?? null };
+    return { bact: null, viral: null, algae: null, source: 'nedstroms-bekraeftet', outlets: [], geomMatchNoData: null, allDownstreamMatch: sp.allDownstreamMatch || null, dataConfidence: sp.dataConfidence ?? null, waterType: sp.waterType ?? null };
   }
   // NYT: serveren sender nu selv skelnen mellem "vandområde matchet, men
   // ingen data" og "intet match overhovedet" (se badevand-risk.js's
   // allLakeGeoms/allKystvandGeoms + noDataMatch) — ingen lokal
   // geometri-genberegning nødvendig for at bevare denne besked.
-  return { bact: null, viral: null, algae: null, source: 'ingen', outlets: [], geomMatchNoData: sp.noDataMatch || null, dataConfidence: sp.dataConfidence ?? null };
+  return { bact: null, viral: null, algae: null, source: 'ingen', outlets: [], geomMatchNoData: sp.noDataMatch || null, dataConfidence: sp.dataConfidence ?? null, waterType: sp.waterType ?? null };
 }
 
 // NYT (Kommunepakke, modul 6): kommune-overstyrings-banner — se
@@ -9422,7 +9422,14 @@ let _bvObsBrandmaendLevel = null;      // valgt brandmænd-niveau, KUN relevant 
 // håndhæves grænsen UANSET denne UI-gating, se badested-observations.js.
 function isKystvandBadested(badestedId) {
   if (!badestedId) return false;
-  return computeBadevandRisk(null, null, badestedId).source === 'kystvand';
+  // RETTET (bruger-rapporteret 2026-08-22 — "brandmænd mangler for flere
+  // kystnære badesteder"): brugte tidligere `.source === 'kystvand'`, som
+  // KUN er sandt ved en AKTIV bekræftet forureningskilde — et badested ved
+  // kysten uden aktuel udledningstrussel (source:'ingen-bekraeftet'/
+  // 'nedstroms-bekraeftet'/'ingen' med et geometrisk kystvands-match) blev
+  // derfor fejlagtigt udelukket. `.waterType` er den rene geometriske
+  // klassificering (badevand-risk.js), uafhængig af bekræftelses-status.
+  return computeBadevandRisk(null, null, badestedId).waterType === 'kystvand';
 }
 
 // NYT: stille, IKKE-påtrængende baggrundstjek — fejler geolokation (afvist,
@@ -9756,7 +9763,13 @@ const BV_VURDERING_LAYER1_META = {
   alger_set:      { icon: '🌿', color: '#d4a020', label: 'Alger set' },
   uklart_vand:    { icon: '💧', color: '#c84b1f', label: 'Uklart vand' },
   affald:         { icon: '🗑', color: '#5a6b78', label: 'Affald' },
-  brandmaend_set: { icon: '🪼', color: '#c0392b', label: 'Brandmænd set' },
+  // NYT: 🪼 (vandmand-emoji) renderer i praksis BLÅT på stort set alle
+  // platforme — en fuldfarve-emoji kan ikke omfarves via CSS `color`, i
+  // modsætning til et enkelt tekst-glyf som ✓. "Brandmænd" betegner
+  // specifikt den røde/brændende art, ikke vandmænd generelt — brugt en
+  // lille inline SVG-silhuet i stedet, så ikonet FAKTISK er rødt (samme
+  // markup som knappen i #observation-prompt-overlay ovenfor).
+  brandmaend_set: { icon: '<svg width="14" height="14" viewBox="0 0 24 24" style="vertical-align:-2px" xmlns="http://www.w3.org/2000/svg"><path d="M12 3c-4.4 0-8 3.4-8 7.5 0 1.6.9 2.5 2 2.5h12c1.1 0 2-.9 2-2.5C20 6.4 16.4 3 12 3z" fill="#c0392b"/><path d="M7 14c-.3 1.2-1 2-1 4M9.5 14c-.2 1.6-.7 3-.7 5M12 14c0 2-.3 3.5-.3 6M14.5 14c.2 1.6.7 3 .7 5M17 14c.3 1.2 1 2 1 4" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>', color: '#c0392b', label: 'Brandmænd set' },
 };
 
 function bvVurderingRow(color, icon, label, value, maxValue) {
