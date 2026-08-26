@@ -7317,16 +7317,29 @@ async function _loadVP3LayersImpl() {
       console.info('VP3 badevand indlæst:', data.features?.length, 'features');
 
       // Farv badevandspunkter når risikodata er klar
+      // RETTET (bruger-rapporteret: Varsler-badge't kom først når man selv
+      // klikkede ind på Varsler-fanen, ikke ved første sidevisning): badge't
+      // opdateres allerede proaktivt af saveWarnPoints() (se dens kommentar)
+      // — men DEN kaldes fra renderMap() et par linjer over det AWAIT, der
+      // først tildeler vp3BadevandLayer (linje ~7286 herover). Ved første
+      // sidevisning kører getBadevandAlarmCandidates() derfor mod
+      // vp3BadevandLayer === null og returnerer altid 0 kandidater, uanset
+      // reelle varsler — badge't retter sig aldrig selv, før noget ANDET
+      // (fx et fane-skift) tilfældigvis genkalder loadVarselData(). Her,
+      // hvor vp3BadevandLayer rent faktisk er klar OG risikodata er til
+      // stede, er det korrekte tidspunkt at genberegne badge't proaktivt.
       (async () => {
         const deadline = Date.now() + 30000;
         while (Date.now() < deadline) {
           if (overflowPoints.length > 0 && overflowPoints.some(p => p.riskScore !== null)) {
             colorBadevandByRisk();
+            loadVarselData();
             return;
           }
           await new Promise(r => setTimeout(r, 400));
         }
         colorBadevandByRisk();
+        loadVarselData();
       })();
     }
   } catch(e) { console.warn('VP3 badevand fejl:', e.message); }
