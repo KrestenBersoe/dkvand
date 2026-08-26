@@ -185,9 +185,10 @@ function buildOverrideBannerHtml(overrideInfo) {
  */
 // Kommune- og afstands-baserede "andre badesteder"-lister (bruger-ønske
 // 2026-08-17, samme SEO-rettelse som getSsrShellHtml() — se dens filhoved):
-// begge peger på /badested/:slug og er derfor ægte, crawlbare interne links
-// (samme begrundelse som buildSitelinksHtml(), blot synlige her i stedet
-// for skjulte) — IKKE et forsøg på at duplikere selve kortets nabo-søgning,
+// begge peger på /badested/:slug og er derfor ægte, crawlbare interne links,
+// KONTEKSTUELLE til den enkelte side (til forskel fra buildHtmlSitemapContent()
+// nedenfor, som er hele site'ets fulde linkliste, samlet på sin egen side) —
+// IKKE et forsøg på at duplikere selve kortets nabo-søgning,
 // kun en tekst-liste. `items` er allerede filtreret/sorteret/afkortet af
 // kaldestedet (server.js) — denne funktion formaterer blot.
 function buildNearbyListHtml(heading, items) {
@@ -310,28 +311,38 @@ function buildOgSvg({ navn, kommune, label, color }) {
 }
 
 /**
- * Punkt 5 (planen) — "intern linking": et skjult, men EGTE crawlbart
- * <a href>-link pr. Tier 1/2-side, så Google kan crawle sig ind til alle
- * ~2.024 sider via almindelige links, ikke kun via sitemap.xml/JS-
- * klik-handlere på selve kort-markørerne (som ikke er rigtige DOM-anchors —
- * kortet er Canvas/SVG-renderet, se dansk-overloeb-kort.html's
- * pointsPane-filhoved). Bygges ÉN gang ved opstart (samme livscyklus som
- * slug-index/sitemap selv) og injiceres i den ALLEREDE cachede app-shell
- * (server.js's getCompressedHtml()) FØR gzip/brotli beregnes — nul
- * pr.-request-omkostning, samme princip som selve komprimeringen.
+ * Punkt 5 (planen) — "intern linking": ÉGTE crawlbare <a href>-links til
+ * alle ~2.024 badested-/sø-sider, så Google kan nå dem via almindelige
+ * links, ikke kun via sitemap.xml/JS-klik-handlere på selve kort-
+ * markørerne (som ikke er rigtige DOM-anchors — kortet er Canvas/SVG-
+ * renderet, se dansk-overloeb-kort.html's pointsPane-filhoved).
  *
- * Visuelt skjult (position:absolute, 1×1px, clip) — IKKE display:none
- * (som visse crawlere behandler som et signal om skjult/spam-indhold) —
- * standard, legitim teknik for navigation til indhold der ellers kun er
- * tilgængeligt via et Canvas-renderet kort, ikke en forsøg på cloaking:
- * indholdet (badested-/sø-navnet) er identisk med hvad en bruger reelt ser.
+ * TIDLIGERE injiceret som en skjult <nav> i app-shell'en og dermed
+ * duplikeret IDENTISK på ALLE ~23.000 sider (Tier 1+2+3 deler samme shell,
+ * se server.js's getCompressedHtml()/baseAppHtml()) — reelt samme klasse
+ * fejl som getSsrShellHtml()'s #tab-doc-rettelse (se dens filhoved):
+ * massiv, byte-for-byte identisk boilerplate på tværs af næsten alle sider
+ * får Google til at klynge dem som næsten-duplikater og udvander
+ * linkværdien pr. link, når listen alene er tusindvis af links lang.
+ * Findes derfor nu KUN som synligt indhold på sin egen, selvstændigt
+ * indekserbare /sitemap-side (se server.js), ikke injiceret alle steder —
+ * badested/soe-siderne har allerede bedre, kontekstuel intern linking via
+ * buildNearbyListHtml() ovenfor.
  */
-function buildSitelinksHtml(badestedSlugToInfo, soeSlugToInfo) {
+function buildHtmlSitemapContent(badestedSlugToInfo, soeSlugToInfo) {
   const badestedLinks = [...badestedSlugToInfo.entries()]
-    .map(([slug, info]) => `<a href="/badested/${slug}">${escHtml(info.navn)}</a>`).join('');
+    .map(([slug, info]) => `<li><a href="/badested/${slug}">${escHtml(info.navn)}</a></li>`).join('');
   const soeLinks = [...soeSlugToInfo.entries()]
-    .map(([slug, info]) => `<a href="/soe/${slug}">${escHtml(info.navn)}</a>`).join('');
-  return `<nav id="seo-sitelinks" aria-hidden="true" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap">${badestedLinks}${soeLinks}</nav>`;
+    .map(([slug, info]) => `<li><a href="/soe/${slug}">${escHtml(info.navn)}</a></li>`).join('');
+  return `
+<div id="ssr-content" style="max-width:640px;margin:0 auto;padding:2rem 1.2rem;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#1a2733">
+  <h1>Sitemap</h1>
+  <p>Alle badesteder og søer på Dit Badevand.</p>
+  <h2>Badesteder (${badestedSlugToInfo.size})</h2>
+  <ul>${badestedLinks}</ul>
+  <h2>Søer (${soeSlugToInfo.size})</h2>
+  <ul>${soeLinks}</ul>
+</div>`;
 }
 
 // FJERNET (bruger-ønske): priority (og changefreq/lastmod, der aldrig var
@@ -356,5 +367,5 @@ module.exports = {
   buildJsonLd,
   buildOgSvg,
   buildSitemapXml,
-  buildSitelinksHtml,
+  buildHtmlSitemapContent,
 };

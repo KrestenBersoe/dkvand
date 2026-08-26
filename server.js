@@ -393,16 +393,17 @@ function getCompressedHtml() {
   const filePath = path.join(STATIC_DIR, 'dansk-overloeb-kort.html');
   const stat = fs.statSync(filePath);
   if (_htmlCompressedCache && _htmlCompressedCache.mtimeMs === stat.mtimeMs) return _htmlCompressedCache;
-  // NYT (bruger-ønske 2026-08-10 — URL-arkitektur/SEO, punkt 5 "intern
-  // linking"): den skjulte, men egte crawlbare sitelinks-liste (se
-  // seo-pages.js's buildSitelinksHtml()) injiceres HER, FØR gzip/brotli
-  // beregnes — nul pr.-request-omkostning, samme princip som selve
-  // forkomprimeringen. Gælder derfor automatisk BÅDE '/' og de nye Tier
-  // 1/2/3-sider (som alle genbruger denne cache som base, se
-  // baseAppHtml()/de nye routes).
+  // RETTET (SEO — crawl-/indekseringsstruktur): den skjulte sitelinks-liste
+  // (punkt 5, "intern linking") lå tidligere HER og blev dermed injiceret
+  // identisk på ALLE ~23.000 sider, fordi '/' og samtlige Tier 1/2/3-sider
+  // deler denne samme cachede shell (se baseAppHtml()/de enkelte routes).
+  // Samme klasse fejl som getSsrShellHtml()'s #tab-doc-fjernelse (se dens
+  // filhoved) — massiv, byte-for-byte identisk boilerplate på tværs af
+  // næsten alle sider. Listen (nu seoPages.buildHtmlSitemapContent()) lever
+  // derfor i stedet alene på sin egen, selvstændigt indekserbare
+  // /sitemap-side.
   const rawFile = fs.readFileSync(filePath, 'utf8');
-  const withSitelinks = rawFile.replace('<body>', `<body>${seoPages.buildSitelinksHtml(badestedSlugToInfo, soeSlugToInfo)}`);
-  const raw    = Buffer.from(withSitelinks, 'utf8');
+  const raw    = Buffer.from(rawFile, 'utf8');
   const gzip   = zlib.gzipSync(raw, { level: 9 });
   const brotli = zlib.brotliCompressSync(raw, {
     params: {
@@ -2121,7 +2122,18 @@ app.get('/badested/:slug', (req, res) => {
   // (slug-index.js's buildBadestedSlugs), ingen ny data nødvendig.
   html = seoPages.injectBodyContent(html, ssrContent + seoPages.buildSsrRouteScript({ type: 'badested', lat: info.lat, lng: info.lng }));
 
-  res.set('Cache-Control', 'no-store');
+  // SEO-rettelse (crawl-omkostning) — risikodata er højst 15 min. gammelt
+  // (WEATHER_CHECK_INTERVAL_MS), så no-store på ALLE ~1.800 sider tvang både
+  // Googlebot og Cloudflare-laget foran appen (se getCompressedHtml()'s
+  // Vary-kommentar) til at genopbygge/genhente hver eneste side ved hver
+  // eneste anmodning. Kort delt cache retter det — MEN kun når der ikke er
+  // en aktiv kommune-override: buildOverrideBannerHtml()/Kommunepakke modul
+  // 6 er eksplicit designet til at vise en LUKKET-advarsel i det RÅ svar
+  // "uden at vente på klient-JS" (se buildSsrContent()'s kommentar) — en
+  // cachet, forældet side ville kunne skjule en reel lukning i op til
+  // cache-vinduet. /soe/:slug har ingen override-mekanisme og cachER derfor
+  // altid kort, se den route.
+  res.set('Cache-Control', entry?.overrideInfo ? 'no-store' : 'public, max-age=60, stale-while-revalidate=120');
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
 });
@@ -2166,7 +2178,11 @@ app.get('/soe/:slug', (req, res) => {
   });
   html = seoPages.injectBodyContent(html, ssrContent + seoPages.buildSsrRouteScript({ type: 'soe', navn: info.navn }));
 
-  res.set('Cache-Control', 'no-store');
+  // Samme crawl-omkostningsrettelse som /badested/:slug (se dens kommentar)
+  // — ingen override-mekanisme findes for søer (buildSsrContent() kaldes
+  // ovenfor uden overrideInfo), så her er der intet lukket-advarsels-hensyn
+  // at tage, og kort delt cache er ubetinget sikkert.
+  res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=120');
   res.set('Content-Type', 'text/html; charset=utf-8');
   res.send(html);
 });
@@ -2227,6 +2243,7 @@ app.get('/udloeb/:id', (req, res) => {
 // meta-taggen ovenfor, er den korrekte mekanisme).
 const _sitemapXml = seoPages.buildSitemapXml([
   { loc: `${seoPages.SITE_URL}/om` },
+  { loc: `${seoPages.SITE_URL}/sitemap` },
   ...[...badestedSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/badested/${slug}` })),
   ...[...soeSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/soe/${slug}` })),
 ]);
@@ -2234,6 +2251,24 @@ app.get('/sitemap.xml', (req, res) => {
   res.set('Cache-Control', 'public, max-age=86400');
   res.type('application/xml');
   res.send(_sitemapXml);
+});
+
+// Selvstændig, INDEKSERBAR HTML-sitemap-side — erstatter den tidligere
+// skjulte sitelinks-<nav> der lå på alle ~23.000 sider (se
+// getCompressedHtml()'s kommentar og seoPages.buildHtmlSitemapContent()'s
+// filhoved for hvorfor). Genbruger baseAppHtml() (den #tab-doc-beskårne
+// shell, samme som badested/soe) — samme livscyklus/cache-mtime-bundethed
+// som badested/soeSlugToInfo selv, ingen egen invalidering nødvendig.
+app.get('/sitemap', (req, res) => {
+  let html = seoPages.injectHead(baseAppHtml(), {
+    title: 'Sitemap – alle badesteder og søer | Dit Badevand',
+    description: `Fuld oversigt over alle ${badestedSlugToInfo.size} badesteder og ${soeSlugToInfo.size} søer på Dit Badevand.`,
+    canonicalPath: '/sitemap',
+  });
+  html = seoPages.injectBodyContent(html, seoPages.buildHtmlSitemapContent(badestedSlugToInfo, soeSlugToInfo));
+  res.set('Cache-Control', 'public, max-age=86400');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
 });
 
 app.get('/og/badested/:slug', (req, res) => {
