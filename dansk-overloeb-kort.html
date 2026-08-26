@@ -1964,7 +1964,7 @@
   <h1>National Badevandsvarsel</h1>
   <div id="tab-bar">
     <button class="tab-btn active" id="tab-btn-kort" onclick="switchTab('kort')">Kort</button>
-    <button class="tab-btn" id="tab-btn-varsler" onclick="switchTab('varsler')">Varsler<span class="tab-badge zero" id="varsler-badge">0</span></button>
+    <button class="tab-btn" id="tab-btn-varsler" onclick="switchTab('varsler')">Varsler<span class="tab-badge zero" id="varsler-badge" title="Samlet antal badesteder med aktivt varsel i hele Danmark — bredere end 'Varsler nær dig'-listen inde på fanen, som er afstands-filtreret til din lokation">0</span></button>
     <button class="tab-btn" id="tab-btn-doc" onclick="openDocTab()">Om</button>
     <button class="tab-btn" id="tab-btn-kommuner" onclick="openKommunerTab()">Kommuner</button>
   </div>
@@ -2653,9 +2653,18 @@
       </p>
       <p style="font-size:.88rem;line-height:1.65;color:var(--ink);margin-bottom:.9rem">Kontakt os på <a href="mailto:info@talefod.dk">info@talefod.dk</a> for spørgsmål.</p>
 
+      <!-- RETTET (bruger-rapporteret — Slides-linket virkede ikke): den
+           oprindelige URL brugte Google Slides' "/pub"-sti (den direkte
+           link-variant fra "Publicér til internettet"), som sender
+           X-Frame-Options: SAMEORIGIN og derfor UBETINGET nægter at blive
+           vist i et iframe på et andet domæne — tilføjelse af
+           "&embedded=true" ændrer intet ved dét. Google har en SEPARAT,
+           faktisk iframe-egnet sti, "/embed" (samme dokument-id), som IKKE
+           sender denne header — det er den, "Embed"-fanen i Slides'
+           publicér-dialog reelt genererer. -->
       <div style="position:relative;width:100%;padding-top:60%;margin-top:1.6rem;border-radius:10px;overflow:hidden;box-shadow:var(--shadow)">
         <iframe
-          src="https://docs.google.com/presentation/d/e/2PACX-1vSE6PDr6qaJ-uuI6PuS1HUwt-yxttg1mDDXw9PvcoxLr-tXjnavbVMPgDv96rAH-A/pub?start=false&loop=false&delayms=5000&embedded=true"
+          src="https://docs.google.com/presentation/d/e/2PACX-1vSE6PDr6qaJ-uuI6PuS1HUwt-yxttg1mDDXw9PvcoxLr-tXjnavbVMPgDv96rAH-A/embed?start=false&loop=false&delayms=5000"
           style="position:absolute;top:0;left:0;width:100%;height:100%;border:0"
           allowfullscreen="true" loading="lazy" title="Kommunepræsentation"></iframe>
       </div>
@@ -4288,10 +4297,19 @@ function locateUser() {
       hjemUserLng = lng;
       try { sessionStorage.setItem('userLat', lat); sessionStorage.setItem('userLng', lng); } catch(_) {}
 
-      // Opdater varsler-tab hvis den er åben
-      if (document.getElementById('tab-varsler')?.classList.contains('active')) {
-        loadVarselData();
-      }
+      // RETTET (bruger-rapporteret: Varsler-badge't kom stadig ikke ved
+      // første sidevisning, kun efter klik på Varsler-fanen, selv efter
+      // _loadVP3LayersImpl()'s tilsvarende rettelse ovenfor): DENNE
+      // betingelse var den anden, uafhængige årsag — loadVarselData()'s
+      // hasPos afhænger af hjemUserLat/-Lng, som først sættes HER, ved et
+      // GPS-fix. Betingelsen "kun hvis Varsler-fanen allerede er åben"
+      // betød at badge't aldrig blev genberegnet med den nu tilgængelige
+      // position, fordi standard-fanen ved opstart er Kort, ikke Varsler.
+      // Samme "proaktiv, uanset aktiv fane"-begrundelse som
+      // saveWarnPoints()/_loadVP3LayersImpl() allerede bruger — #alarm-grid
+      // m.fl. findes altid i DOM'en (skjult via CSS), så det er trygt at
+      // køre ubetinget.
+      loadVarselData();
 
       // Vis hele Danmark + brugerposition — zoom kun hvis kortet
       // stadig viser standard-udsigten (zoom ≤ 7)
@@ -11531,8 +11549,14 @@ async function loadVarselData() {
   }
 
   // ── Render ────────────────────────────────────────────────────────────
+  // RETTET (bruger-ønske): fane-badge't skal vise det TOTALE, landsdækkende
+  // antal aktive varsler (alarms.length) — IKKE "Varsler nær dig"s
+  // afstands-filtrerede/afkortede liste (filtered.length, som stadig
+  // bruges til selve "Varsler nær dig"-sektionen nedenfor, uændret). De to
+  // tal kan derfor legitimt afvige — badge't svarer på "hvor meget er der
+  // varslet i Danmark lige nu", sektionen på "hvad er relevant for mig".
   if (alarmCount) alarmCount.textContent = filtered.length;
-  updateVarslerBadge(filtered.length);
+  updateVarslerBadge(alarms.length);
   setVarselStatus(note);
   alarmGrid.innerHTML = '';
 
