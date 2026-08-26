@@ -1614,6 +1614,15 @@
      smal mobilskærm. max-width:100% + box-sizing sikrer selve wrap'pen
      aldrig bliver bredere end skærmen, uanset dens indhold. */
   #tab-doc { overflow-y: auto; overflow-x: hidden; background: var(--canvas); }
+  /* RETTET (bruger-rapporteret — hele Kommuner-siden var "for kort" til
+     præsentationen, uanset hvor høj selve iframe-boksen blev gjort): den
+     fælles .tab-panel-regel sætter overflow:hidden (nødvendigt for
+     #tab-kort's kortlag) — hver fane med mere indhold end den synlige
+     højde skal derfor selv slå scroll til, præcis som #tab-doc allerede
+     gør ovenfor. #tab-kommuner manglede denne regel helt, så alt under
+     panelets faste flex-højde var reelt usynligt og utilgængeligt, ikke
+     bare visuelt afskåret. */
+  #tab-kommuner { overflow-y: auto; overflow-x: hidden; background: var(--canvas); }
   .doc-wrap { max-width: 820px; margin: 0 auto; padding: 2rem 1.6rem 4rem; box-sizing: border-box; width: 100%; }
   /* :not(.doc-table):not(.doc-table *) — tabellen og dens indhold skal
      bevidst KUNNE blive bredere end containeren internt, ellers virker
