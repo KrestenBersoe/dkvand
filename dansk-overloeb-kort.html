@@ -557,37 +557,6 @@
   }
   #bv-back-btn:hover { background: var(--accent-bg); }
 
-  /* RETTET (klokke → toggle): et binært "modtag varsler for denne
-     lokation ja/nej"-valg formidles klarere af en standard on/off-switch
-     end af et ikon, der skifter form — brugere kender allerede mønsteret
-     fra telefoners egne indstillinger, og til/fra-tilstanden er synlig
-     med det samme, uden at skulle fortolke et symbol. */
-  .toggle-switch {
-    position: relative;
-    width: 44px; height: 26px;
-    border-radius: 13px;
-    background: #ccc;
-    border: none;
-    cursor: pointer;
-    padding: 0;
-    flex-shrink: 0;
-    transition: background .2s ease;
-  }
-  .toggle-switch[aria-checked="true"] {
-    background: #2d7d4f; /* samme grønne farve som resten af appens "aktiv abonnement"-sprog */
-  }
-  .toggle-switch:disabled { opacity: .5; cursor: not-allowed; }
-  .toggle-knob {
-    position: absolute;
-    top: 3px; left: 3px;
-    width: 20px; height: 20px;
-    border-radius: 50%;
-    background: #fff;
-    box-shadow: 0 1px 3px rgba(0,0,0,.3);
-    transition: transform .2s ease;
-    pointer-events: none;
-  }
-  .toggle-switch[aria-checked="true"] .toggle-knob { transform: translateX(18px); }
   #bv-title { font-size: 1.05rem; font-weight: 800; flex: 1; }
   #bv-subtitle { font-size: .72rem; color: var(--ink-soft); }
 
@@ -693,6 +662,11 @@
   .bv-btn.primary { background: var(--accent); color: #fff; }
   .bv-btn:hover { opacity: .85; }
   .bv-btn:disabled { opacity: .5; cursor: not-allowed; }
+  /* RETTET (bruger-ønske — samme model som ukwater): erstatter den
+     tidligere toggle-switch-knap. "Abonneret"-tilstand vises nu ved at
+     selve handlings-knappen skifter udseende/tekst — samme mønster som
+     ukwaters .dp-btn.subscribed. */
+  .bv-btn.subscribed { background: var(--accent-dk); color: #fff; border-color: var(--accent-dk); }
 
   /* ── Borgerobservationer (badested-observations.js) — lag 1 + lag 2 ────
      Genbruger .engage-overlay/.engage-card (se dens egen CSS længere nede)
@@ -1439,6 +1413,19 @@
     transition: border-color .15s;
   }
   .alarm-card:hover { border-color: rgba(26,107,138,.55); }
+  /* RETTET (bruger-ønske — samme model som ukwater): erstatter hjerte-
+     ikonet i favorit-/varselskortenes .card-top. dkvands .card-top er
+     allerede en flex-række (justify-content:space-between, se
+     buildBadevandFavCard()/buildVarselCard()), så — modsat ukwaters egen
+     absolut positionerede version — er en almindelig inline cirkel nok
+     her, ingen position:absolute nødvendig. */
+  .fav-remove {
+    width: 22px; height: 22px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 50%; color: var(--ink-soft); font-size: .7rem; cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .fav-remove:hover { background: var(--canvas); color: var(--warn); }
   .alarm-card.risk-high { border-left: 3px solid #c84b1f; }
   .alarm-card.risk-med  { border-left: 3px solid #d4a020; }
   .alarm-card.risk-low  { border-left: 3px solid #2a8a52; }
@@ -2157,7 +2144,7 @@
       <span class="section-count" id="fav-count">0</span>
     </div>
     <div class="card-grid" id="fav-grid">
-      <div class="v-empty"><span class="icon">🤍</span>Ingen favoritter — klik ❤️ på et punkt i kortet</div>
+      <div class="v-empty"><span class="icon">🔔</span>Ingen favoritter endnu — tryk "🔔 Modtag varsler" på et badested eller udløbs detaljeside</div>
     </div>
 
     <div class="section-head" style="margin-top:1.4rem">
@@ -4925,7 +4912,7 @@ function updatePanel(pt, risk, foreRisk) {
 
   document.getElementById('point-panel-title').innerHTML =
     `${escHtml(pt.name)} <span data-fav-id="${favKeyFor(pt)}" class="fav-btn"
-      onclick="event.stopPropagation();toggleFav('${favKeyFor(pt)}')" title="Favorit">${isFav(favKeyFor(pt))?'❤️':'🤍'}</span>`;
+      onclick="event.stopPropagation();toggleFav('${favKeyFor(pt)}')" title="Modtag varsler for dette udløbspunkt">${isFav(favKeyFor(pt))?'🔔':'🔕'}</span>`;
   document.getElementById('point-panel').classList.add('open');
   document.getElementById('point-panel-body').innerHTML = `
     <div class="field">
@@ -7627,7 +7614,7 @@ async function toggleFav(id) {
       const req = db.transaction(STORE_FAVS,'readwrite').objectStore(STORE_FAVS).delete(key);
       req.onsuccess = res; req.onerror = rej;
     });
-    showToast('💔 Fjernet fra favoritter');
+    showToast('🔕 Varsler slået fra');
     await syncPushSubscription();  // update server
   } else {
     _favSet.add(key);
@@ -7637,7 +7624,7 @@ async function toggleFav(id) {
                     .put({ name: pt?.name, municipality: pt?.municipality }, key);
       req.onsuccess = res; req.onerror = rej;
     });
-    showToast('❤️ Tilføjet til favoritter');
+    showToast('🔔 Varsler slået til');
     await requestPushPermission();
     await syncPushSubscription();  // update server with new favourite
   }
@@ -7647,16 +7634,18 @@ async function toggleFav(id) {
 
 function refreshFavIcons() {
   document.querySelectorAll('[data-fav-id]').forEach(el => {
-    // RETTET: satte tidligere ALTID .textContent — men #ud-fav-btn er nu
-    // en toggle-switch (samme mønster som badevands-panelet), og
-    // .textContent ville have overskrevet dens indre <span
-    // class="toggle-knob">. De resterende hjerte-ikoner (kortmarkører,
-    // Varsler-listen) er ikke ombygget til toggles og skal fortsat vise
-    // emoji-teksten.
-    if (el.classList.contains('toggle-switch')) {
-      el.setAttribute('aria-checked', isFav(el.dataset.favId) ? 'true' : 'false');
+    // RETTET (bruger-ønske — samme model som ukwater): #ud-fav-btn er nu
+    // en almindelig .bv-btn (samme mønster som badevands-panelets
+    // #bv-fav-btn) — knappens egen tekst/.subscribed ER status-visningen.
+    // #point-panel-title's kompakte ikon-toggle (kortklik-popuppen) er for
+    // lille til en fuld tekstknap og beholder derfor et rent ikon — nu
+    // 🔔/🔕 i stedet for et hjerte, samme sprog som resten af appen.
+    if (el.classList.contains('bv-btn')) {
+      const subscribed = isFav(el.dataset.favId);
+      el.classList.toggle('subscribed', subscribed);
+      el.textContent = subscribed ? '🔔 Varsler slået til' : '🔔 Modtag varsler';
     } else {
-      el.textContent = isFav(el.dataset.favId) ? '❤️' : '🤍';
+      el.textContent = isFav(el.dataset.favId) ? '🔔' : '🔕';
     }
   });
 }
@@ -8213,28 +8202,6 @@ async function registerSW() {
     registerPeriodicHeartbeatSync(_swReg).catch(() => {});
   } catch(e) {
     console.warn('SW unavailable:', e.message);
-  }
-}
-
-async function subscribeBadevandNotify() {
-  const btn = document.getElementById('bv-notify-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Aktiverer…'; }
-  try {
-    await requestPushPermission();
-    const body = document.getElementById('bv-body');
-    const ok = document.createElement('div');
-    ok.className = 'bv-notify-confirm';
-    ok.style.cssText = 'background:#edf7f0;border:1px solid #2d7d4f;border-radius:8px;padding:.65rem .9rem;font-size:.78rem;color:#1e5c39;margin-top:.6rem';
-    ok.innerHTML = '<strong>✅ Varsler aktiveret</strong><br>Du modtager push-notifikationer i denne browser når der er høj overløbsrisiko.';
-    if (body) body.appendChild(ok);
-    if (btn) btn.textContent = '✅ Aktiveret';
-  } catch(e) {
-    if (btn) { btn.disabled = false; btn.textContent = '🔔 Modtag varsler'; }
-    const body = document.getElementById('bv-body');
-    const err = document.createElement('div');
-    err.style.cssText = 'background:#fef0ee;border:1px solid #c84b1f;border-radius:8px;padding:.65rem .9rem;font-size:.78rem;color:#9a3518;margin-top:.6rem';
-    err.textContent = '⚠️ Notifikationer blokeret — tillad i browserindstillinger og prøv igen.';
-    if (body) body.appendChild(err);
   }
 }
 
@@ -9216,19 +9183,18 @@ async function toggleBadevandFav() {
     // ingen reference-tælling. Vurderet acceptabelt, da det kun kræver et
     // enkelt nyt klik at genoprette, og fejlretningen går i den sikre
     // retning (for lidt frem for for meget varsling uden brugerens viden).
-    // RETTET: brugte tidligere '🤍'/'❤' (hjerte), derefter '🔔'/'🔕'
-    // (klokke) til at vise abonnements-status. Et binært til/fra-valg
-    // formidles klarere af en rigtig toggle-switch end af et ikon, der
-    // skifter form — se .toggle-switch-CSS'en. aria-checked driver nu
-    // både visning og tilgængelighed (skærmlæsere annoncerer korrekt
-    // "til"/"fra", i modsætning til et rent emoji-ikon).
+    // RETTET (bruger-ønske — samme model som ukwater): brugte tidligere
+    // '🤍'/'❤' (hjerte), derefter en selvstændig toggle-switch. Nu er
+    // selve handlingsknappen (i .bv-actions) også status-visningen — samme
+    // knap skifter tekst/farve (.subscribed), ligesom ukwaters
+    // .dp-btn.subscribed — én knap, ingen separat kontrol at holde i sync.
     _favSet.delete(favKey);
     for (const id of _currentBvNearbyIds) _favSet.delete(String(id));
     await new Promise((res, rej) => {
       const req = db.transaction(STORE_FAVS, 'readwrite').objectStore(STORE_FAVS).delete(favKey);
       req.onsuccess = res; req.onerror = rej;
     });
-    if (btn) { btn.setAttribute('aria-checked', 'false'); }
+    if (btn) { btn.classList.remove('subscribed'); btn.textContent = '🔔 Modtag varsler'; }
     document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
     showToast('🔕 Varsler deaktiveret for lokationen');
     await syncPushSubscription();
@@ -9255,8 +9221,8 @@ async function toggleBadevandFav() {
       req.onsuccess = res; req.onerror = rej;
     });
     await syncPushSubscription();
-    if (btn) { btn.disabled = false; btn.setAttribute('aria-checked', 'true'); }
-    // Vis bekræftelse under toggle-switchen
+    if (btn) { btn.disabled = false; btn.classList.add('subscribed'); btn.textContent = '🔔 Varsler slået til'; }
+    // Vis bekræftelse under handlingsknappen
     document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
     const ok = document.createElement('div');
     ok.className = 'bv-notify-confirm';
@@ -9266,7 +9232,7 @@ async function toggleBadevandFav() {
     if (body) body.insertBefore(ok, body.firstChild);
     showToast('🔔 ' + escHtml(navn) + ' — varsler aktiveret');
   } catch(e) {
-    if (btn) { btn.disabled = false; btn.setAttribute('aria-checked', 'false'); }
+    if (btn) { btn.disabled = false; btn.classList.remove('subscribed'); btn.textContent = '🔔 Modtag varsler'; }
     showToast('⚠️ Tillad notifikationer i browserindstillinger');
   }
 }
@@ -9862,10 +9828,17 @@ async function renderBadestedVurderingPanel(p) {
     // så de to kan reelt være uenige (fx én vurdering for 15 dage siden:
     // hasAnyReports=false, count30d=1) — "ingen endnu" ville da modsige
     // "1 vurdering ... seneste 30 dage" lige under. Skelner derfor eksplicit.
+    // RETTET (bruger-ønske — saml handlinger ét sted, samme model som
+    // ukwater): denne opsummering var tidligere sit eget indgangspunkt til
+    // vurderingsprompten (en indlejret CTA-knap i tom-tilstanden) — nu hvor
+    // "⭐ Badestedsvurdering" altid står synligt i .bv-actions ovenfor,
+    // ville en ekstra knap her være en duplikeret indgang til samme
+    // handling. Ren tekst, ligesom ukwaters tilsvarende passive "Recent
+    // visitor reports"-opsummering.
     if (!summary.hasAnyReports) {
       div.innerHTML = count30d > 0
-        ? `<div style="font-size:.8rem;color:#5a6b78;padding:.2rem 0 .4rem">Ingen nye vurderinger den seneste uge.</div>${count30dHtml}<button class="bv-btn primary" style="width:100%;margin-top:.6rem" onclick="openObservationPrompt(_currentBvFeature)">⭐ Badestedsvurdering</button>`
-        : `<div style="font-size:.8rem;color:#5a6b78;padding:.2rem 0 .8rem">Ingen borgervurderinger endnu for dette badested — vær den første.</div><button class="bv-btn primary" style="width:100%" onclick="openObservationPrompt(_currentBvFeature)">⭐ Badestedsvurdering</button>`;
+        ? `<div style="font-size:.8rem;color:#5a6b78;padding:.2rem 0 .4rem">Ingen nye vurderinger den seneste uge.</div>${count30dHtml}`
+        : `<div style="font-size:.8rem;color:#5a6b78;padding:.2rem 0 .8rem">Ingen borgervurderinger endnu for dette badested — vær den første.</div>`;
       return;
     }
 
@@ -10206,24 +10179,15 @@ async function showBadevandPanel(feature, skipUrlPush) {
     const geo = feature.geometry?.coordinates;
     const favKey = geo ? `bv_${geo[1].toFixed(4)}_${geo[0].toFixed(4)}` : `bv_${navn}`;
     const favBtn = document.getElementById('bv-fav-btn');
-    if (favBtn) { favBtn.setAttribute('aria-checked', _favSet.has(favKey) ? 'true' : 'false'); favBtn.disabled = false; }
+    if (favBtn) {
+      favBtn.disabled = false;
+      favBtn.classList.toggle('subscribed', _favSet.has(favKey));
+      favBtn.textContent = _favSet.has(favKey) ? '🔔 Varsler slået til' : '🔔 Modtag varsler';
+    }
     document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
     maybeShowLocationPushPrompt(feature, favKey);
   }
   closePointPanel();
-  // RETTET: denne blok nulstillede tidligere UBETINGET ikonet til 🤍 her,
-  // uanset hvad koden lige ovenfor (som korrekt tjekker _favSet) havde
-  // sat det til — skrevet dengang knappen var ren kosmetik, før favorit-
-  // persistens fandtes. Det var netop DENNE linje, der fik et allerede
-  // korrekt gemt badested til altid at fremstå som "ikke favorit" ved
-  // hver åbning, uanset genindlæsning — selve _favSet-dataen var hele
-  // tiden korrekt, kun visningen var forkert. Fjernet fuldstændigt;
-  // ikon-opdateringen ovenfor er nu den eneste, der sætter denne tilstand.
-  document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
-  // Nulstil notifikationsknap for ny lokation
-  const _nb = document.getElementById('bv-notify-btn');
-  if (_nb) { _nb.disabled = false; _nb.textContent = '🔔 Modtag varsler'; }
-  document.querySelectorAll('.bv-notify-confirm').forEach(e => e.remove());
 
   // Nulstil risikobarer
   ['bv-bact-bar','bv-viral-bar','bv-algae-bar','bv-total-bar'].forEach(id => {
@@ -10573,10 +10537,12 @@ async function showUdlobPanel(pt) {
   if (isPuls) {
     favBtn.style.display = '';
     favBtn.setAttribute('data-fav-id', favKeyFor(pt));
-    // RETTET: brugte tidligere .textContent = '❤️'/'🤍' — knappen er nu en
-    // toggle-switch (samme mønster som badevands-panelet), og .textContent
-    // ville have overskrevet dens indre <span class="toggle-knob">.
-    favBtn.setAttribute('aria-checked', isFav(favKeyFor(pt)) ? 'true' : 'false');
+    // RETTET (bruger-ønske — samme model som ukwater): knappen selv er nu
+    // status-visningen (tekst/.subscribed), samme mønster som badevands-
+    // panelets #bv-fav-btn — se toggleBadevandFav()/toggleFav().
+    const subscribed = isFav(favKeyFor(pt));
+    favBtn.classList.toggle('subscribed', subscribed);
+    favBtn.textContent = subscribed ? '🔔 Varsler slået til' : '🔔 Modtag varsler';
   } else {
     favBtn.style.display = 'none';  // favoritter/varsler er pt. kun bygget til PULS-udløb
   }
@@ -11243,7 +11209,7 @@ function buildBadevandFavCard(rec, key) {
         <div class="card-name">${escHtml(rec.name || 'Badested')}</div>
         <div class="card-sub">Badested</div>
       </div>
-      <span class="fav-btn" onclick="removeVarselFav('${escHtml(String(key))}')" title="Fjern favorit">❤️</span>
+      <span class="fav-remove" onclick="event.stopPropagation();removeVarselFav('${escHtml(String(key))}')" title="Stop varsler for denne lokation" aria-label="Stop varsler for denne lokation">✕</span>
     </div>
     <div style="margin-bottom:.4rem">${chipHtml}</div>
     <div style="font-size:.78rem;color:var(--ink-soft);line-height:1.5">${escHtml(statusText)}</div>
@@ -11343,7 +11309,7 @@ function buildVarselCard(pt, isFavCard) {
         <div class="card-sub">${escHtml(pt.municipality)}${pt.waterArea ? ' · ' + escHtml(pt.waterArea) : ''}</div>
       </div>
       ${isFavCard
-        ? `<span class="fav-btn" onclick="removeVarselFav('${pt.id}')" title="Fjern favorit">❤️</span>`
+        ? `<span class="fav-remove" onclick="event.stopPropagation();removeVarselFav('${pt.id}')" title="Stop varsler for denne lokation" aria-label="Stop varsler for denne lokation">✕</span>`
         : `<span class="chip ${rl.cls}">${rl.label} ${risk}%</span>`
       }
     </div>
@@ -11561,7 +11527,7 @@ async function loadVarselData() {
     if (favCount) favCount.textContent = favKeys.length;
     favGrid.innerHTML = '';
     if (!favKeys.length) {
-      favGrid.innerHTML = '<div class="v-empty"><span class="icon">🤍</span>Ingen favoritter endnu — klik 🤍 på et udløbspunkt</div>';
+      favGrid.innerHTML = '<div class="v-empty"><span class="icon">🔔</span>Ingen favoritter endnu — tryk "🔔 Modtag varsler" på et badested eller udløbs detaljeside</div>';
     } else {
       for (const key of favKeys) {
         const rec = await dbGet_fav(key);
@@ -11773,10 +11739,6 @@ document.addEventListener('visibilitychange', () => {
       <div id="bv-title">Badevandslokalitet</div>
       <div id="bv-subtitle"></div>
     </div>
-    <button id="bv-fav-btn" class="toggle-switch" onclick="toggleBadevandFav()"
-      role="switch" aria-checked="false" title="Modtag varsler for denne lokation">
-      <span class="toggle-knob"></span>
-    </button>
   </div>
   <div id="bv-body">
 
@@ -11832,6 +11794,20 @@ document.addEventListener('visibilitychange', () => {
         <span class="bv-risk-pct" id="bv-forecast-pct">—</span>
       </div>
       <div style="font-size:.68rem;color:#5a6b78;margin-top:.3rem">Fremadskuende — kan afvige fra "nu"-tallene ovenfor, fx hvis regn er varslet men endnu ikke faldet. Push-varsler bruger dette tal, ikke "nu".</div>
+    </div>
+
+    <!-- RETTET (bruger-ønske — saml QR-skilt/Notifikation/Badestedsvurdering
+         i ét handlings-panel, samme model og placering som ukwaters
+         .dp-btn-row: umiddelbart efter 24h-prognosen, før de øvrige kort).
+         Erstatter BÅDE den tidligere toggle-switch i #bv-header (nu en
+         almindelig knap her, samme "abonneret"-visning som ukwaters
+         .dp-btn.subscribed) OG den tidligere selvstændige .bv-actions
+         nederst i panelet — se toggleBadevandFav() for selve logikken,
+         uændret bortset fra hvordan resultatet vises. -->
+    <div class="bv-actions">
+      <button class="bv-btn primary" onclick="generateQrSign()">📄 QR-skilt</button>
+      <button class="bv-btn" id="bv-fav-btn" onclick="toggleBadevandFav()">🔔 Modtag varsler</button>
+      <button class="bv-btn" onclick="openObservationPrompt(_currentBvFeature)">⭐ Badestedsvurdering</button>
     </div>
 
     <!-- NYT: Temperatur — begge tal fandtes allerede (vandtemp bruges i
@@ -11953,15 +11929,6 @@ document.addEventListener('visibilitychange', () => {
       <div id="bv-outlets" style="display:none">Indlæser…</div>
     </div>
 
-    <!-- Handlinger -->
-    <div class="bv-actions">
-      <button class="bv-btn primary" onclick="generateQrSign()">📄 QR-skilt</button>
-      <!-- NYT: manuel indgang til borgerobservations-widgetten for brugere,
-           der IKKE er fysisk på lokationen (den proaktive prompt vises kun
-           når GPS bekræfter nærhed — se maybeShowObservationPrompt()). -->
-      <button class="bv-btn" onclick="openObservationPrompt(_currentBvFeature)">⭐ Badestedsvurdering</button>
-    </div>
-
   </div>
 </div>
 
@@ -11973,10 +11940,6 @@ document.addEventListener('visibilitychange', () => {
       <div id="ud-title" style="font-size:.95rem;font-weight:800"></div>
       <div id="ud-subtitle" style="font-size:.78rem;color:#5a6b78"></div>
     </div>
-    <button id="ud-fav-btn" data-fav-id="" class="toggle-switch" onclick="toggleFav(ud_currentPtId())"
-      role="switch" aria-checked="false" title="Modtag varsler for dette udløbspunkt">
-      <span class="toggle-knob"></span>
-    </button>
   </div>
   <div id="ud-body">
 
@@ -12033,9 +11996,13 @@ document.addEventListener('visibilitychange', () => {
       <div id="ud-upstream-body"></div>
     </div>
 
-    <!-- Handlinger -->
+    <!-- Handlinger — samme "abonneret"-model som badevands-panelet
+         (se toggleFav()), erstatter #ud-header's tidligere toggle-switch.
+         Skjules for VP3 RBU-punkter (se openRbuUdlobPanel()/showUdlobPanel()) —
+         favoritter/varsler er kun bygget til PULS-udløb, uændret adfærd. -->
     <div class="bv-actions">
       <button class="bv-btn primary" onclick="closeUdlobPanel(); switchTab('kort')">🗺 Vis på kort</button>
+      <button class="bv-btn" id="ud-fav-btn" data-fav-id="" onclick="toggleFav(ud_currentPtId())">🔔 Modtag varsler</button>
     </div>
 
   </div>
