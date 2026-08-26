@@ -533,8 +533,8 @@
   .ud-outlet-sub  { font-size: .72rem; color: #5a6b78; }
 
   #bv-header {
-    background: #fff;
-    border-bottom: 1px solid #dde3e8;
+    background: var(--paper);
+    border-bottom: 1px solid var(--line);
     padding: .75rem 1rem;
     /* RETTET: samme fejl som #ud-header og appens hoved-header — se
        #ud-header for fuld begrundelse. Dette er PRÆCIS den header, der
@@ -551,11 +551,11 @@
     border: none;
     font-size: 1.1rem;
     cursor: pointer;
-    color: #1a6b8a;
+    color: var(--accent);
     padding: .2rem .5rem;
     border-radius: 6px;
   }
-  #bv-back-btn:hover { background: #eef4f7; }
+  #bv-back-btn:hover { background: var(--accent-bg); }
 
   /* RETTET (klokke → toggle): et binært "modtag varsler for denne
      lokation ja/nej"-valg formidles klarere af en standard on/off-switch
@@ -589,7 +589,7 @@
   }
   .toggle-switch[aria-checked="true"] .toggle-knob { transform: translateX(18px); }
   #bv-title { font-size: 1.05rem; font-weight: 800; flex: 1; }
-  #bv-subtitle { font-size: .72rem; color: #5a6b78; }
+  #bv-subtitle { font-size: .72rem; color: var(--ink-soft); }
 
   #bv-body {
     overflow-y: auto;
@@ -601,9 +601,9 @@
   }
 
   .bv-card {
-    background: #fff;
+    background: var(--paper);
     border-radius: 10px;
-    border: 1px solid #dde3e8;
+    border: 1px solid var(--line);
     padding: .9rem 1rem;
   }
   .bv-card-title {
@@ -611,7 +611,7 @@
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .1em;
-    color: #1a6b8a;
+    color: var(--accent);
     margin-bottom: .65rem;
   }
 
@@ -637,7 +637,7 @@
     display: flex;
     flex-direction: column;
     gap: .25rem;
-    color: #1a2733;
+    color: var(--ink);
     font-size: .78rem;
     text-align: center;
   }
@@ -651,11 +651,11 @@
     align-items: center;
     gap: .75rem;
     padding: .5rem 0;
-    border-bottom: 1px solid #f0f3f5;
+    border-bottom: 1px solid var(--line-soft);
   }
   .bv-risk-row:last-child { border-bottom: none; }
   .bv-risk-label { flex: 1; font-size: .85rem; }
-  .bv-risk-bar-wrap { flex: 2; background: #eef4f7; border-radius: 4px; height: 8px; overflow: hidden; }
+  .bv-risk-bar-wrap { flex: 2; background: var(--line-soft); border-radius: 4px; height: 8px; overflow: hidden; }
   .bv-risk-bar { height: 100%; border-radius: 4px; transition: width .4s ease; }
   .bv-risk-pct { font-size: .82rem; font-weight: 700; min-width: 3rem; text-align: right; }
 
@@ -664,13 +664,13 @@
     align-items: center;
     gap: .65rem;
     padding: .5rem 0;
-    border-bottom: 1px solid #f0f3f5;
+    border-bottom: 1px solid var(--line-soft);
     cursor: pointer;
   }
   .bv-outlet-row:last-child { border-bottom: none; }
-  .bv-outlet-row:hover { background: #f8fbfc; border-radius: 6px; }
+  .bv-outlet-row:hover { background: var(--canvas); border-radius: 6px; }
   .bv-outlet-name { font-size: .82rem; font-weight: 600; }
-  .bv-outlet-sub  { font-size: .7rem; color: #5a6b78; }
+  .bv-outlet-sub  { font-size: .7rem; color: var(--ink-soft); }
 
   .bv-actions {
     display: flex;
@@ -682,16 +682,17 @@
     min-width: 120px;
     padding: .65rem .9rem;
     border-radius: 8px;
-    border: 1.5px solid #1a6b8a;
-    background: #fff;
-    color: #1a6b8a;
+    border: 1.5px solid var(--accent);
+    background: var(--paper);
+    color: var(--accent);
     font-size: .82rem;
     font-weight: 600;
     cursor: pointer;
     text-align: center;
   }
-  .bv-btn.primary { background: #1a6b8a; color: #fff; }
+  .bv-btn.primary { background: var(--accent); color: #fff; }
   .bv-btn:hover { opacity: .85; }
+  .bv-btn:disabled { opacity: .5; cursor: not-allowed; }
 
   /* ── Borgerobservationer (badested-observations.js) — lag 1 + lag 2 ────
      Genbruger .engage-overlay/.engage-card (se dens egen CSS længere nede)
@@ -705,33 +706,33 @@
     display: flex; flex-direction: column; align-items: center; gap: 6px;
     padding: 14px 8px;
     border-radius: 10px;
-    border: 1.5px solid #dde3e8;
-    background: #fff;
-    color: #1a2733;
+    border: 1.5px solid var(--line);
+    background: var(--paper);
+    color: var(--ink);
     font-size: 13px;
     font-weight: 500;
     cursor: pointer;
     text-align: center;
   }
-  .bv-obs-btn:hover { border-color: #1a6b8a; }
+  .bv-obs-btn:hover { border-color: var(--accent); }
   .bv-obs-btn:disabled { opacity: .5; cursor: default; }
   .bv-obs-btn .bv-obs-icon { font-size: 22px; line-height: 1; }
   /* NYT: lag 1-knapperne er nu flervalgs-toggles (ikke ét-tryks-indsend
      længere) — .selected markerer valgte typer, samme visuelle mønster som
      .bv-algae-level-btn.selected nedenfor. */
-  .bv-obs-btn.selected { border: 2px solid #1a6b8a; background: #eef6fa; }
+  .bv-obs-btn.selected { border: 2px solid var(--accent); background: var(--accent-bg); }
   .bv-algae-level-btn {
     display: flex; align-items: center; gap: 10px;
     padding: 12px 14px;
     border-radius: 8px;
-    border: 1.5px solid #dde3e8;
-    background: #fff;
-    color: #1a2733;
+    border: 1.5px solid var(--line);
+    background: var(--paper);
+    color: var(--ink);
     font-size: 14px;
     cursor: pointer;
     text-align: left;
   }
-  .bv-algae-level-btn.selected { border: 2px solid #1a6b8a; }
+  .bv-algae-level-btn.selected { border: 2px solid var(--accent); }
   .bv-algae-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
   .bv-algae-photo-dropzone {
     width: 100%;
@@ -739,13 +740,13 @@
     border-radius: 10px;
     padding: 1.4rem;
     display: flex; flex-direction: column; align-items: center; gap: 6px;
-    background: #fff;
-    color: #5a6b78;
+    background: var(--paper);
+    color: var(--ink-soft);
     font-size: 13px;
     cursor: pointer;
     margin-bottom: 1.1rem;
   }
-  .bv-algae-photo-dropzone:hover { border-color: #1a6b8a; }
+  .bv-algae-photo-dropzone:hover { border-color: var(--accent); }
   .bv-algae-photo-dropzone.has-file { border-style: solid; border-color: #2d7d4f; color: #2d7d4f; }
   .bv-obs-toggle-row {
     width: 100%;
@@ -753,16 +754,16 @@
     padding: 10px 4px;
     background: transparent;
     border: none;
-    border-top: 1px solid #f0f3f5;
+    border-top: 1px solid var(--line-soft);
     display: flex; align-items: center; justify-content: space-between;
-    color: #5a6b78;
+    color: var(--ink-soft);
     font-size: 13px;
     cursor: pointer;
     text-align: left;
   }
   .bv-obs-footer {
     font-size: 12px;
-    color: #5a6b78;
+    color: var(--ink-soft);
     margin: .6rem 4px 0;
   }
 
@@ -1296,9 +1297,15 @@
     text-align: center;
   }
   .tab-btn:hover { color: var(--ink); }
+  /* RETTET (samme klasse fejl som #push-banner-inline/#android-install-banner
+     havde, se dens kommentar) — brugte --hi/--teal, som ALDRIG er defineret i
+     :root, hvilket gjorde både den aktive fane-farve/-kant og Varsler-badge'et
+     usynligt (transparent) i stedet for at fejle synligt. --accent-dk/--accent
+     er de faktiske, definerede tokens — samme rettelse som ukwater allerede
+     porterede korrekt fra dette design (se dens :root-kommentar). */
   .tab-btn.active {
-    color: var(--hi);
-    border-bottom-color: var(--teal);
+    color: var(--accent-dk);
+    border-bottom-color: var(--accent);
   }
 
   /* Hjørne-badge — helt uden for knappens tekstflow. Skjules fuldstændigt
@@ -1308,7 +1315,7 @@
     position: absolute;
     top: .1rem;
     right: .1rem;
-    background: var(--teal);
+    background: var(--warn);
     color: #fff;
     font-size: .55rem;
     font-weight: 700;
@@ -1367,12 +1374,12 @@
   #tab-varsler .section-head:first-child { margin-top: 0; }
 
   .section-count {
-    background: rgba(26,107,138,.18);
+    background: var(--accent-bg);
     border: 1px solid var(--line-soft);
     border-radius: 10px;
     padding: .05rem .45rem;
     font-size: .6rem;
-    color: var(--hi);
+    color: var(--accent-dk);
   }
 
   .card-grid {
