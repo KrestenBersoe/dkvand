@@ -1724,7 +1724,14 @@
        mellemrum er strammet op. Ikoner er fjernet (kun tekst tilbage),
        hvilket frigiver plads til en større, federe skrift for bedre
        læsbarhed — særligt vigtigt på mobil uden ikoner som visuel støtte. */
-    #tab-bar { overflow-x: visible; gap: .1rem; }
+    /* RETTET (fjerde fane, "Kommuner", tilføjet): overflow-x: visible var
+       trygt med tre korte faner, men "Kommuner" er lang nok til at fanerne
+       samlet kan overstige skærmbredden på de smalleste telefoner — samme
+       klasse overflow-problem som kommentaren ovenfor allerede løste for
+       tre faner. auto (i stedet for visible) lader bjælken scrolle
+       vandret i stedet for at klippe/bryde layoutet, hvis det sker. */
+    #tab-bar { overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; gap: .1rem; }
+    #tab-bar::-webkit-scrollbar { display: none; }
     .tab-btn {
       padding: .5rem .5rem;
       font-size: .8rem;
@@ -1959,6 +1966,7 @@
     <button class="tab-btn active" id="tab-btn-kort" onclick="switchTab('kort')">Kort</button>
     <button class="tab-btn" id="tab-btn-varsler" onclick="switchTab('varsler')">Varsler<span class="tab-badge zero" id="varsler-badge">0</span></button>
     <button class="tab-btn" id="tab-btn-doc" onclick="openDocTab()">Om</button>
+    <button class="tab-btn" id="tab-btn-kommuner" onclick="openKommunerTab()">Kommuner</button>
   </div>
   <div class="spacer"></div>
   <span id="status-dot" class="blink" title="Tjenesten kører"></span>
@@ -2622,6 +2630,37 @@
     </div>
   </div><!-- /tab-doc -->
 
+  <!-- Kommuner tab panel -->
+  <div class="tab-panel" id="tab-kommuner">
+    <div class="doc-wrap">
+      <div class="doc-hero">
+        <div class="doc-eyebrow">Kommuner</div>
+        <h1>Et tilbud til kommuner</h1>
+      </div>
+      <p style="font-size:.88rem;line-height:1.65;color:var(--ink);margin-bottom:.9rem">
+        <a href="https://www.ditbadevand.dk" target="_blank" rel="noopener">www.ditbadevand.dk</a>
+        er en gratis tjeneste leveret af Talefod A/S — et 100% dansk ejet selskab som udvikler
+        software indenfor kommunikation, personalisering og miljøtjenester.
+      </p>
+      <p style="font-size:.88rem;line-height:1.65;color:var(--ink);margin-bottom:.9rem">
+        Formålet med tjenesten er at tilbyde alle badende en bedre oplevelse ved at undgå
+        forurenet badevand udløst af kloakoverløb.
+      </p>
+      <p style="font-size:.88rem;line-height:1.65;color:var(--ink);margin-bottom:.9rem">
+        Tjenesten finansieres via en valgfri tjeneste til kommuner som letter forvaltning af
+        badesteder, giver flere og bedre indberetninger fra brugerne samt muliggør digital
+        skiltning og en mere rettidig lukning af badesteder i forbindelse med forurening.
+      </p>
+      <p style="font-size:.88rem;line-height:1.65;color:var(--ink);margin-bottom:.9rem">Kontakt os på <a href="mailto:info@talefod.dk">info@talefod.dk</a> for spørgsmål.</p>
+
+      <div style="position:relative;width:100%;padding-top:60%;margin-top:1.6rem;border-radius:10px;overflow:hidden;box-shadow:var(--shadow)">
+        <iframe
+          src="https://docs.google.com/presentation/d/e/2PACX-1vSE6PDr6qaJ-uuI6PuS1HUwt-yxttg1mDDXw9PvcoxLr-tXjnavbVMPgDv96rAH-A/pub?start=false&loop=false&delayms=5000&embedded=true"
+          style="position:absolute;top:0;left:0;width:100%;height:100%;border:0"
+          allowfullscreen="true" loading="lazy" title="Kommunepræsentation"></iframe>
+      </div>
+    </div>
+  </div><!-- /tab-kommuner -->
 
 </div><!-- /tab-panels -->
 
@@ -8793,9 +8832,10 @@ document.addEventListener('click', function(e) {
 // automatiske page_view for '/').
 function trackTabView(name) {
   const meta = {
-    kort:    { title: 'Kort',      path: '/kort'    },
-    varsler: { title: 'Varsler',   path: '/varsler' },
-    doc:     { title: 'Om',        path: '/om'      },
+    kort:     { title: 'Kort',      path: '/kort'     },
+    varsler:  { title: 'Varsler',   path: '/varsler'  },
+    doc:      { title: 'Om',        path: '/om'       },
+    kommuner: { title: 'Kommuner',  path: '/kommuner' },
   }[name];
   if (!meta) return;
   gtag('event', 'page_view', {
@@ -8812,6 +8852,14 @@ function trackTabView(name) {
 function openDocTab() {
   if (window.__DOC_PANEL_STRIPPED__) { location.href = '/om'; return; }
   switchTab('doc');
+}
+
+// Samme SEO-mønster som openDocTab() ovenfor — se server.js's
+// getSsrShellHtml() for hvorfor #tab-kommuner også tømmes på badested/
+// soe-siderne og genbruger samme flag.
+function openKommunerTab() {
+  if (window.__DOC_PANEL_STRIPPED__) { location.href = '/kommuner'; return; }
+  switchTab('kommuner');
 }
 
 function switchTab(name) {
@@ -10988,6 +11036,11 @@ function handleSsrRoute() {
   // switchTab('doc') er nok, ingen data-afventning nødvendig.
   if (route.type === 'doc') {
     switchTab('doc');
+    return true;
+  }
+  // /kommuner — samme mønster som /om ovenfor.
+  if (route.type === 'kommuner') {
+    switchTab('kommuner');
     return true;
   }
   return false;

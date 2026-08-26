@@ -442,12 +442,24 @@ function getSsrShellHtml() {
   // kommentar, se dansk-overloeb-kort.html:2135/2593) — et rent
   // start-tag-match ville også kunne ramme forkert ved en fremtidig
   // ombygning af selve panelet.
-  const stripped = full.replace(
+  let stripped = full.replace(
     /<div class="tab-panel" id="tab-doc">[\s\S]*?<\/div><!-- \/tab-doc -->/,
     '<div class="tab-panel" id="tab-doc"></div><!-- /tab-doc -->'
   );
   if (stripped === full) {
     console.warn('getSsrShellHtml: #tab-doc-blokken blev IKKE fundet/fjernet — falder tilbage til den fulde shell (badested/soe-sider vil fortsat indeholde Om-panelet).');
+  }
+  // Samme fjernelse, samme begrundelse, for #tab-kommuner (egen /kommuner-
+  // side, se dens route nedenfor) — ellers duplikeres kommune-præsentationen
+  // (inkl. det indlejrede Google Slides-iframe) på tværs af alle ~2.024
+  // badested/soe-sider ligesom #tab-doc gjorde, FØR den blev flyttet ud.
+  const beforeKommunerStrip = stripped;
+  stripped = stripped.replace(
+    /<div class="tab-panel" id="tab-kommuner">[\s\S]*?<\/div><!-- \/tab-kommuner -->/,
+    '<div class="tab-panel" id="tab-kommuner"></div><!-- /tab-kommuner -->'
+  );
+  if (stripped === beforeKommunerStrip) {
+    console.warn('getSsrShellHtml: #tab-kommuner-blokken blev IKKE fundet/fjernet — falder tilbage til den fulde shell.');
   }
   // Signalerer til klienten (se #tab-btn-doc's openDocTab() i dansk-
   // overloeb-kort.html) at #tab-doc er tom her, og "Om"-knappen derfor skal
@@ -2204,6 +2216,20 @@ app.get('/om', (req, res) => {
   res.send(html);
 });
 
+// /kommuner — selvstændig, indekserbar side for #tab-kommuner (se
+// getSsrShellHtml()'s filhoved) — samme mønster som /om ovenfor.
+app.get('/kommuner', (req, res) => {
+  let html = seoPages.injectHead(getCompressedHtml().raw.toString('utf8'), {
+    title: 'Kommuner · Et tilbud fra Talefod A/S | Dit Badevand',
+    description: 'Dit Badevand er en gratis tjeneste for badende, finansieret af en valgfri kommunetjeneste til forvaltning af badesteder, indberetninger og digital skiltning.',
+    canonicalPath: '/kommuner',
+  });
+  html = seoPages.injectBodyContent(html, seoPages.buildSsrRouteScript({ type: 'kommuner' }));
+  res.set('Cache-Control', 'no-store');
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(html);
+});
+
 // Tier 3 — bevidst INGEN data-forudfyldning server-side (se planen: "kan
 // forblive rent client-side renderet"), kun robots/canonical injiceret.
 // Holder de ~21.000 sider billige at servere.
@@ -2243,6 +2269,7 @@ app.get('/udloeb/:id', (req, res) => {
 // meta-taggen ovenfor, er den korrekte mekanisme).
 const _sitemapXml = seoPages.buildSitemapXml([
   { loc: `${seoPages.SITE_URL}/om` },
+  { loc: `${seoPages.SITE_URL}/kommuner` },
   { loc: `${seoPages.SITE_URL}/sitemap` },
   ...[...badestedSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/badested/${slug}` })),
   ...[...soeSlugToInfo.keys()].map(slug => ({ loc: `${seoPages.SITE_URL}/soe/${slug}` })),
