@@ -2662,7 +2662,17 @@
            faktisk iframe-egnet sti, "/embed" (samme dokument-id), som IKKE
            sender denne header — det er den, "Embed"-fanen i Slides'
            publicér-dialog reelt genererer. -->
-      <div style="position:relative;width:100%;padding-top:60%;margin-top:1.6rem;border-radius:10px;overflow:hidden;box-shadow:var(--shadow)">
+      <!-- RETTET (bruger-rapporteret — bunden af slides blev skåret over):
+           60% padding-top svarer til et 5:3-forhold (~Googles egen 960×569-
+           standardstørrelse for widescreen-embeds) — for lavt til denne
+           præsentation (enten et 4:3-forhold, eller blot Slides-viewerens
+           egen bund-kontrolbjælke, som optager plads UDOVER selve sliden).
+           75% (4:3, den "kvadratiske" ydergrænse) + et fast tillæg dækker
+           begge dele, uanset præsentationens faktiske sideforhold — er den
+           reelt bredere (16:9), giver det blot lidt luft under sliden i
+           stedet for at skære den af, hvilket også opfylder ønsket om
+           plads nedenunder. -->
+      <div style="position:relative;width:100%;padding-top:calc(75% + 40px);margin-top:1.6rem;margin-bottom:1.5rem;border-radius:10px;overflow:hidden;box-shadow:var(--shadow)">
         <iframe
           src="https://docs.google.com/presentation/d/e/2PACX-1vSE6PDr6qaJ-uuI6PuS1HUwt-yxttg1mDDXw9PvcoxLr-tXjnavbVMPgDv96rAH-A/embed?start=false&loop=false&delayms=5000"
           style="position:absolute;top:0;left:0;width:100%;height:100%;border:0"
