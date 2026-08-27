@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sales-portal — internt</title>
+<title>Administration</title>
 <meta name="robots" content="noindex, nofollow">
 <style>
   /* Samme farvepalet som internal-create-trial.html/admin-dashboard.html/stats.html — se dem for begrundelsen. */
@@ -25,6 +25,14 @@
   h2 { font-size: 1rem; margin: 0 0 .3rem; }
   h3 { font-size: .82rem; font-weight: 700; margin: 1rem 0 .2rem; color: var(--ink); }
   .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
+  .top-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-bottom: .3rem; }
+  .country-switcher { display: flex; gap: .4rem; }
+  .country-switcher a {
+    font-size: .78rem; color: var(--ink-soft); text-decoration: none; padding: .3rem .6rem;
+    border-radius: 6px; border: 1px solid var(--border);
+  }
+  .country-switcher a.active { color: var(--ink); border-color: var(--accent); background: rgba(79,184,214,.1); }
+  .country-switcher a:hover:not(.active) { color: var(--ink); background: rgba(255,255,255,.06); }
   .card {
     background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px;
     padding: 1.1rem 1.3rem; margin-bottom: 1rem;
@@ -81,13 +89,16 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🏛 Sales-portal</h1>
-  <div class="sub">Internt værktøj — kommune-benchmark for alle kommuner, samt trial-oprettelse og login til eksisterende kommuner.</div>
+  <div class="top-bar">
+    <h1 id="page-title">🏛 Administration</h1>
+    <div class="country-switcher" id="country-switcher"></div>
+  </div>
+  <div class="sub" id="page-sub"></div>
   <div class="sub" id="staff-identity" style="margin-top:-1rem"></div>
 
-  <div class="card">
-    <h2>Kommune-benchmark — alle kommuner</h2>
-    <div class="sub" style="margin-bottom:.9rem">Samme rapporter som en kommune selv ser i deres eget dashboard, blot for alle kommuner samlet ét sted.</div>
+  <div class="card" id="benchmark-card" style="display:none">
+    <h2>Kommune-benchmark — alle danske kommuner</h2>
+    <div class="sub" style="margin-bottom:.9rem">Samme rapporter som en kommune selv ser i deres eget dashboard, blot for alle kommuner samlet ét sted. Kun tilgængelig for Danmark — dette benchmark er beregnet over dansk PULS-badevandsdata, som de øvrige lande ikke har en tilsvarende kilde for.</div>
     <div class="stat-controls">
       <label for="kb-report">Rapport</label>
       <select id="kb-report" onchange="onKbReportChange()">
@@ -118,14 +129,15 @@
   </div>
 
   <div class="card">
-    <h2>Opret ny trial</h2>
+    <h2 id="create-card-title">Opret ny</h2>
+    <div class="sub" id="create-card-sub" style="margin-bottom:.9rem"></div>
     <form id="form" onsubmit="return submitForm(event)">
       <div class="field">
-        <label for="f-name">Kommune</label>
-        <select id="f-name" required>
-          <option value="" disabled selected>Indlæser kommuner…</option>
+        <label for="f-name" id="f-name-label">Navn</label>
+        <select id="f-name" required disabled>
+          <option value="" disabled selected>Indlæser…</option>
         </select>
-        <div class="field-note">Listen kommer direkte fra badevandsdataen, så det valgte navn altid matcher og finder kommunens badesteder.</div>
+        <div class="field-note" id="f-name-note"></div>
       </div>
       <div class="field">
         <label for="f-days">Trial-længde (dage)</label>
@@ -139,96 +151,37 @@
         <label for="f-note">Note (valgfri, kun til internt brug)</label>
         <input type="text" id="f-note" placeholder="Fx: sendt til jens@furesoe.dk">
       </div>
-      <div class="field">
-        <label for="f-logo-url">Logo-URL (valgfri — vises i kommunens overstyrings-banner)</label>
+      <div class="field" id="f-logo-url-field">
+        <label for="f-logo-url">Logo-URL (valgfri — vises i overstyrings-banneret)</label>
         <input type="url" id="f-logo-url" placeholder="https://...">
       </div>
-      <!-- NYT (single login): valgfrit — giver kommunen ADGANG TIL, ved
-           siden af trial-linket, at logge ind direkte på /login med e-mail +
+      <!-- NYT (single login): valgfrit — giver adgang til, ved siden af
+           trial-linket, at logge ind direkte på /login med e-mail +
            adgangskode. Begge felter skal enten udfyldes sammen eller begge
            stå tomme (se tenant-admin.js's createTenant()). -->
       <div class="field">
         <label for="f-login-email">Login-e-mail (valgfri — gør adgangskode-login muligt på /login)</label>
-        <input type="email" id="f-login-email" placeholder="fx kontakt@kommune.dk">
+        <input type="email" id="f-login-email" placeholder="fx kontakt@eksempel.dk">
       </div>
       <div class="field">
         <label for="f-password">Adgangskode (valgfri, kræver login-e-mail ovenfor)</label>
         <input type="password" id="f-password" placeholder="Aftal med kontakten — gemmes kun hashet">
         <div class="field-note">Sæt selv en midlertidig adgangskode og aftal den mundtligt/skriftligt med kontakten, eller lad stå tom og brug kun trial-linket.</div>
       </div>
-      <button type="submit" id="submit-btn">Opret trial</button>
+      <button type="submit" id="submit-btn">Opret</button>
     </form>
     <div id="result"></div>
-  </div>
-
-  <!-- NYT (single auth-løsning dkvand/ukwater/frwater): en UK council/FR
-       mairie har intet match i kommuneKeyToBadesteder (rent dansk PULS-
-       kilde, se kortet ovenfor) og får derfor sit EGET, simplere kort —
-       frit navn + landevælger, samme underliggende POST /internal/api/
-       create-trial, blot med et eksplicit countryCode i stedet for det
-       faste 'DK' ovenfor. Selve login-linket dkvand genererer sender
-       automatisk brugeren videre til det rigtige produkt ved forbrug
-       (se server.js's GET /admin/trial/:token), ingen forskel for
-       modtageren af linket. -->
-  <div class="card">
-    <h2>Opret ny municipality (uden for Danmark)</h2>
-    <div class="sub" style="margin-bottom:.9rem">For et UK council eller en FR mairie. Kræver et EFTERFØLGENDE trin i det pågældende produkts eget repo (fx ukwater's scripts/create-council-account.js --id=&lt;id nedenfor&gt;) for at koble lokal områdedækning på — dette kort opretter kun selve kontoen/login-linket.</div>
-    <form id="mform" onsubmit="return submitMunicipalityForm(event)">
-      <div class="field">
-        <label for="m-country">Land</label>
-        <select id="m-country" required onchange="loadLocalAuthorityOptions()">
-          <option value="" disabled selected>Vælg land…</option>
-          <option value="UK">United Kingdom (ukwater)</option>
-          <option value="FR">France (frwater)</option>
-        </select>
-      </div>
-      <!-- NYT (bruger-krav — "man skal ikke kunne oprette et nyt, kun
-           vælge blandt eksisterende"): SAMME princip som DK-kortets egen
-           kommune-vælger ovenfor (loadKommuneOptions()) — fri tekst kunne
-           skabe en central konto, der ALDRIG matcher noget i step 2 (se
-           scripts/create-council-account.js's/create-mairie-account.js's
-           navnematch), eller indeholde en tastefejl ingen opdager før
-           kommunen/council/mairie allerede er oprettet. Listen hentes
-           CROSS-ORIGIN direkte fra det valgte produkts EGEN reference-data
-           (ukwater's/frwater's GET /api/local-authorities, ny, dedikeret,
-           CORS-scoped til lige netop dette site — se den rute for
-           begrundelsen), ikke duplikeret/vedligeholdt her i dkvand. -->
-      <div class="field">
-        <label for="m-name">Navn</label>
-        <select id="m-name" required disabled>
-          <option value="" disabled selected>Vælg land først…</option>
-        </select>
-      </div>
-      <div class="field">
-        <label for="m-days">Trial-længde (dage)</label>
-        <input type="number" id="m-days" required min="1" step="1" value="30">
-      </div>
-      <div class="field">
-        <label for="m-issued-by">Dit navn</label>
-        <input type="text" id="m-issued-by" required placeholder="Fx: Kresten">
-      </div>
-      <!-- NYT (single login) — samme valgfrie par som DK-kortet ovenfor. -->
-      <div class="field">
-        <label for="m-login-email">Login-e-mail (valgfri — gør adgangskode-login muligt på /login)</label>
-        <input type="email" id="m-login-email" placeholder="fx contact@council.uk">
-      </div>
-      <div class="field">
-        <label for="m-password">Adgangskode (valgfri, kræver login-e-mail ovenfor)</label>
-        <input type="password" id="m-password" placeholder="Aftal med kontakten — gemmes kun hashet">
-      </div>
-      <button type="submit" id="msubmit-btn">Opret municipality</button>
-    </form>
-    <div id="mresult"></div>
+    <div class="field-note" id="second-step-note" style="margin-top:.8rem;display:none"></div>
   </div>
 
   <div class="card">
-    <h2>Log ind på en eksisterende kommune</h2>
-    <div class="sub" style="margin-bottom:.9rem">Genererer et nyt, tidsbegrænset login-link til en kommune der allerede findes — fx til en demo, support, eller fordi det oprindelige link er udløbet. Rører IKKE kommunens egne data eller status.</div>
+    <h2 id="existing-card-title">Log ind på en eksisterende</h2>
+    <div class="sub" id="existing-card-sub" style="margin-bottom:.9rem"></div>
     <form id="tform" onsubmit="return submitTenantForm(event)">
       <div class="field">
-        <label for="t-tenant">Kommune</label>
+        <label for="t-tenant" id="t-tenant-label">Vælg</label>
         <select id="t-tenant" required>
-          <option value="" disabled selected>Indlæser kommuner…</option>
+          <option value="" disabled selected>Indlæser…</option>
         </select>
       </div>
       <div class="field">
@@ -243,7 +196,7 @@
         <label for="t-note">Note (valgfri, kun til internt brug)</label>
         <input type="text" id="t-note" placeholder="Fx: demo til salgsmøde">
       </div>
-      <button type="button" id="tlogin-btn" onclick="loginNowAsTenant()">🔑 Log ind nu som denne kommune</button>
+      <button type="button" id="tlogin-btn" onclick="loginNowAsTenant()">🔑 Log ind nu</button>
       <div style="height:.5rem"></div>
       <button type="submit" id="tsubmit-btn" style="opacity:.8">Generér login-link (uden selv at logge ind)</button>
     </form>
@@ -252,16 +205,62 @@
 </div>
 
 <script>
+// NYT (bruger-krav 2026-08-27 — "3 markeder blandes sammen, ikke
+// brugervenligt"): denne side viser ALTID ét og kun ét lands data —
+// countryCode er fast, injiceret server-side (server.js's GET /internal/
+// admin/:countryCode), ALDRIG klient-valgt her. En 'system'-bruger skifter
+// land via country-switcheren (til en anden URL, ikke en klient-side
+// tilstand) eller /internal/choose-country; en 'country'-bruger ser slet
+// ikke switcheren (kan kun se sit eget land, håndhævet server-side i alle
+// /internal/api/*-ruter nedenfor uanset hvad denne side viser).
+window.__COUNTRY_ADMIN__ = %%COUNTRY_ADMIN_JSON%%;
+const ctx = window.__COUNTRY_ADMIN__;
+
+const COUNTRY_NAMES = { DK: 'Danmark', UK: 'United Kingdom', FR: 'France' };
+// "kommune" (DK) / "council" (UK) / "mairie" (FR) — samme term appen selv
+// bruger for den pågældende municipality-type, se fx councilAdmin.js/
+// mairieAdmin.js's egne navne.
+const ENTITY_LABEL = { DK: 'kommune', UK: 'council', FR: 'mairie' };
+const entityLabel = ENTITY_LABEL[ctx.countryCode] || 'municipality';
+
 function escHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-// ── Kommune-benchmark — alle kommuner ───────────────────────────────────────
+document.title = `${COUNTRY_NAMES[ctx.countryCode] || ctx.countryCode} — Administration`;
+document.getElementById('page-title').textContent = `🏛 ${COUNTRY_NAMES[ctx.countryCode] || ctx.countryCode}`;
+document.getElementById('page-sub').textContent = `Administration af ${entityLabel}-konti, trials og login-links for ${COUNTRY_NAMES[ctx.countryCode] || ctx.countryCode}.`;
+document.getElementById('create-card-title').textContent = `Opret ny ${entityLabel}`;
+document.getElementById('existing-card-title').textContent = `Log ind på en eksisterende ${entityLabel}`;
+document.getElementById('existing-card-sub').textContent = `Genererer et nyt, tidsbegrænset login-link til en ${entityLabel} der allerede findes — fx til en demo, support, eller fordi det oprindelige link er udløbet. Rører IKKE dens egne data eller status.`;
+document.getElementById('t-tenant-label').textContent = entityLabel.charAt(0).toUpperCase() + entityLabel.slice(1);
+
+// NYT (single login): kun 'system'-brugere kan se/skifte til andre lande —
+// en 'country'-bruger er allerede landet direkte på sit eget land (se
+// server.js's GET /internal/admin/:countryCode) og har intet at skifte til.
+if (ctx.staffRole === 'system') {
+  document.getElementById('country-switcher').innerHTML = Object.keys(COUNTRY_NAMES).map(code =>
+    `<a href="/internal/admin/${code}" class="${code === ctx.countryCode ? 'active' : ''}">${COUNTRY_NAMES[code]}</a>`
+  ).join('');
+}
+
+if (ctx.countryCode === 'DK') {
+  document.getElementById('benchmark-card').style.display = '';
+} else {
+  // NYT: logo_url virker teknisk set for ethvert land (tenantAdmin.
+  // createTenant() er ikke DK-specifik), men er kun nogensinde blevet
+  // brugt af dkvands overstyrings-banner (badested-overrides.js) — skjult
+  // for UK/FR, hvor ingen tilsvarende visning eksisterer endnu, for ikke at
+  // love en funktion der reelt ikke gør noget synligt der.
+  document.getElementById('f-logo-url-field').style.display = 'none';
+}
+
+// ── Kommune-benchmark — kun Danmark ─────────────────────────────────────────
 // Samme rapport-/periode-logik som admin-dashboard.html's Kommune-benchmark-
 // kort (se dens loadKommuneBenchmark()/kbRankTable()) — genimplementeret her
 // fremfor delt, da denne side IKKE har et tenant-scope at fremhæve "egen
 // kommune" med (window.__TENANT__ findes slet ikke her), og henter fra
-// /internal/api/kommune-benchmark (Basic Auth) i stedet for /admin/api/
+// /internal/api/kommune-benchmark (staff-session) i stedet for /admin/api/
 // kommune-benchmark (tenant-session).
 function onKbPeriodChange() {
   const period = document.getElementById('kb-period').value;
@@ -360,22 +359,57 @@ async function loadKommuneBenchmark() {
     el.innerHTML = '<div class="err">Kunne ikke hente kommune-benchmark — tjek din forbindelse.</div>';
   }
 }
-loadKommuneBenchmark();
+if (ctx.countryCode === 'DK') loadKommuneBenchmark();
 
-// ── Kommune-vælger til trial-formularen (se server.js's GET /internal/api/
-// kommuner for hvorfor denne kilde, ikke fri tekst) ─────────────────────────
-async function loadKommuneOptions() {
+// ── Navne-vælger til "Opret ny"-formularen ──────────────────────────────────
+// DK: badested-matchet kommuneliste (se server.js's GET /internal/api/
+// kommuner for hvorfor DENNE kilde, ikke fri tekst). UK/FR: samme princip,
+// men hentet CROSS-ORIGIN fra det pågældende produkts EGEN reference-data
+// (GET /api/local-authorities dér — ny, dedikeret, CORS-scoped til lige
+// netop dette site, se den rutes eget filhoved for begrundelsen) i stedet
+// for duplikeret/vedligeholdt her i dkvand.
+const LOCAL_AUTHORITY_SOURCE_BASE_URL = { UK: 'https://ukwater.fly.dev', FR: 'https://frwater.fly.dev' };
+
+async function loadNameOptions() {
   const sel = document.getElementById('f-name');
+  if (ctx.countryCode === 'DK') {
+    document.getElementById('f-name-label').textContent = 'Kommune';
+    document.getElementById('f-name-note').textContent = 'Listen kommer direkte fra badevandsdataen, så det valgte navn altid matcher og finder kommunens badesteder.';
+    try {
+      const resp = await fetch('/internal/api/kommuner');
+      const list = await resp.json();
+      if (!resp.ok || !Array.isArray(list) || list.length === 0) {
+        sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+        return;
+      }
+      sel.innerHTML = '<option value="" disabled selected>Vælg…</option>' +
+        list.map(k => `<option value="${escHtml(k.name)}">${escHtml(k.name)} (${k.badestedCount} badested${k.badestedCount === 1 ? '' : 'er'})</option>`).join('');
+      sel.disabled = false;
+    } catch (e) {
+      sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+    }
+    return;
+  }
+
+  document.getElementById('f-name-label').textContent = 'Navn';
+  document.getElementById('f-name-note').textContent = 'Kræver et EFTERFØLGENDE trin i det pågældende produkts eget repo (fx scripts/create-council-account.js --id=<id>) for at koble lokal områdedækning på — dette opretter kun selve kontoen/login-linket.';
+  document.getElementById('second-step-note').style.display = '';
+  document.getElementById('second-step-note').innerHTML = `Efter oprettelse: kør produktets egen scripts/create-${entityLabel}-account.js (eller tilsvarende) med <code>--id=&lt;id&gt;</code> for at koble lokal områdedækning på.`;
+
+  const baseUrl = LOCAL_AUTHORITY_SOURCE_BASE_URL[ctx.countryCode];
+  if (!baseUrl) { sel.innerHTML = '<option value="" disabled selected>Ukendt land</option>'; return; }
   try {
-    const resp = await fetch('/internal/api/kommuner');
+    const resp = await fetch(`${baseUrl}/api/local-authorities`);
     const list = await resp.json();
     if (!resp.ok || !Array.isArray(list) || list.length === 0) {
-      sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+      sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente listen — prøv igen</option>';
       return;
     }
-    sel.innerHTML = list.map(k => `<option value="${escHtml(k.name)}">${escHtml(k.name)} (${k.badestedCount} badested${k.badestedCount === 1 ? '' : 'er'})</option>`).join('');
+    sel.innerHTML = '<option value="" disabled selected>Vælg…</option>' +
+      list.map(a => `<option value="${escHtml(a.name)}">${escHtml(a.name)} (${a.bathingSiteCount} badested${a.bathingSiteCount === 1 ? '' : 'er'})</option>`).join('');
+    sel.disabled = false;
   } catch (e) {
-    sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+    sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente listen — prøv igen</option>';
   }
 }
 
@@ -388,49 +422,24 @@ function tenantStatusLabel(t) {
 async function loadTenantOptions() {
   const sel = document.getElementById('t-tenant');
   try {
-    const resp = await fetch('/internal/api/tenants');
+    // NYT (bruger-krav — ét lands data ad gangen): scoped til DENNE sides
+    // land — se server.js's GET /internal/api/tenants, som for en
+    // 'country'-bruger alligevel altid tvinger deres eget land uanset denne
+    // parameter.
+    const resp = await fetch(`/internal/api/tenants?country=${encodeURIComponent(ctx.countryCode)}`);
     const list = await resp.json();
     if (!resp.ok || !Array.isArray(list) || list.length === 0) {
-      sel.innerHTML = '<option value="" disabled selected>Ingen kommuner fundet</option>';
+      sel.innerHTML = '<option value="" disabled selected>Ingen fundet</option>';
       return;
     }
-    sel.innerHTML = list.map(t => `<option value="${escHtml(t.id)}">[${escHtml(t.country_code || 'DK')}] ${escHtml(t.name)} — ${escHtml(tenantStatusLabel(t))}</option>`).join('');
+    sel.innerHTML = '<option value="" disabled selected>Vælg…</option>' +
+      list.map(t => `<option value="${escHtml(t.id)}">${escHtml(t.name)} — ${escHtml(tenantStatusLabel(t))}</option>`).join('');
   } catch (e) {
-    sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
-  }
-}
-// NYT (bruger-krav — vælg blandt eksisterende, ikke fri tekst): hvert
-// produkts base-URL, samme værdier som header-login-linket i deres egne
-// index-sider — se GET /api/local-authorities's filhoved (server.js der)
-// for hvorfor dette er en EGEN, let rute frem for at genbruge de allerede
-// eksisterende GET /api/derived-file/*-ruter.
-const LOCAL_AUTHORITY_SOURCE_BASE_URL = { UK: 'https://ukwater.fly.dev', FR: 'https://frwater.fly.dev' };
-
-async function loadLocalAuthorityOptions() {
-  const countrySel = document.getElementById('m-country');
-  const nameSel = document.getElementById('m-name');
-  const country = countrySel.value;
-  const baseUrl = LOCAL_AUTHORITY_SOURCE_BASE_URL[country];
-  if (!baseUrl) return;
-
-  nameSel.disabled = true;
-  nameSel.innerHTML = '<option value="" disabled selected>Indlæser…</option>';
-  try {
-    const resp = await fetch(`${baseUrl}/api/local-authorities`);
-    const list = await resp.json();
-    if (!resp.ok || !Array.isArray(list) || list.length === 0) {
-      nameSel.innerHTML = '<option value="" disabled selected>Kunne ikke hente listen — prøv igen</option>';
-      return;
-    }
-    nameSel.innerHTML = '<option value="" disabled selected>Vælg…</option>' +
-      list.map(a => `<option value="${escHtml(a.name)}">${escHtml(a.name)} (${a.bathingSiteCount} badested${a.bathingSiteCount === 1 ? '' : 'er'})</option>`).join('');
-    nameSel.disabled = false;
-  } catch (e) {
-    nameSel.innerHTML = '<option value="" disabled selected>Kunne ikke hente listen — prøv igen</option>';
+    sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente listen</option>';
   }
 }
 
-loadKommuneOptions();
+loadNameOptions();
 loadTenantOptions();
 
 // NYT (single auth-løsning): viser hvem der er logget ind + en log ud-knap.
@@ -454,9 +463,9 @@ loadStaffIdentity();
 // et link separat): udtrukket fælles kald, genbrugt af BÅDE
 // submitTenantForm() (viser linket som tekst — til at SENDE videre) og
 // loginNowAsTenant() (navigerer selv til det med det samme — til at LOGGE
-// IND som kommunen HER OG NU). Begge bruger PRÆCIS samme underliggende
-// /internal/api/tenants/:id/login-link — kun hvad der sker med det
-// returnerede loginUrl adskiller de to.
+// IND HER OG NU). Begge bruger PRÆCIS samme underliggende /internal/api/
+// tenants/:id/login-link — kun hvad der sker med det returnerede loginUrl
+// adskiller de to.
 async function fetchTenantLoginLink({ tenantId, days, issuedBy, note }) {
   const resp = await fetch(`/internal/api/tenants/${encodeURIComponent(tenantId)}/login-link`, {
     method: 'POST',
@@ -517,14 +526,14 @@ async function submitTenantForm(e) {
 // validering (required-felter osv.) som "Generér login-link" ellers ville
 // have fået gratis via <form onsubmit>. På succes navigeres BROWSEREN selv
 // direkte til loginUrl'et — /admin/trial/:token forbruger tokenet og
-// redirecter til /admin/dashboard, samme mekanisme som en kommune selv
-// ville opleve ved klik på et tilsendt link, blot uden mellemtrinnet med
-// at skulle kopiere/åbne linket separat.
+// redirecter til enten /admin/dashboard (DK) eller en SSO-håndsrækning til
+// det rigtige produkt (UK/FR, se sso-handoff.js) — samme mekanisme uanset
+// hvilket land denne side viser.
 async function loginNowAsTenant() {
   const form = document.getElementById('tform');
   if (!form.reportValidity()) return;
   const { selectedName, tenantId, days, issuedBy, note } = readTenantFormFields();
-  if (!confirm(`Log ind nu som "${selectedName}"? Du forlader sales-portalen og lander på kommunens eget dashboard.`)) return;
+  if (!confirm(`Log ind nu som "${selectedName}"? Du forlader administrationssiden.`)) return;
 
   const btn = document.getElementById('tlogin-btn');
   const resultEl = document.getElementById('tresult');
@@ -536,14 +545,14 @@ async function loginNowAsTenant() {
     if (!ok) {
       resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke logge ind.')}</div>`;
       btn.disabled = false;
-      btn.textContent = '🔑 Log ind nu som denne kommune';
+      btn.textContent = '🔑 Log ind nu';
       return;
     }
     window.location.href = data.loginUrl;
   } catch (e) {
     resultEl.innerHTML = '<div class="err">Kunne ikke logge ind — tjek din forbindelse.</div>';
     btn.disabled = false;
-    btn.textContent = '🔑 Log ind nu som denne kommune';
+    btn.textContent = '🔑 Log ind nu';
   }
 }
 
@@ -577,85 +586,33 @@ async function submitForm(e) {
         logoUrl: logoUrl || null,
         loginEmail: loginEmail || null,
         password: password || null,
-        // Denne formular matcher UDELUKKENDE mod dansk PULS-badevandsdata
-        // (se loadKommuneOptions()) — altid en dansk kommune. En 'country'-
-        // konto for et andet land ville alligevel få dette overstyret
-        // server-side (se server.js's POST /internal/api/create-trial).
-        countryCode: 'DK',
+        // NYT: siden viser ét fast land — samme land sendes altid, uanset
+        // hvad en 'system'-bruger måtte kunne finde på at pille ved i devtools;
+        // server.js's POST /internal/api/create-trial håndhæver desuden en
+        // 'country'-brugers eget land uafhængigt af dette felt.
+        countryCode: ctx.countryCode,
       }),
     });
     const data = await resp.json();
     if (!resp.ok) {
-      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke oprette trial.')}</div>`;
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke oprette.')}</div>`;
       return;
     }
     resultEl.innerHTML = `
       <div class="result">
-        ✓ Trial oprettet for <strong>${escHtml(data.tenant.name)}</strong> — udløber ${new Date(data.tenant.trialExpiresAt).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' })}.
-        <br>Send login-linket herunder til kommunens kontakt (vises kun denne ene gang):
+        ✓ Oprettet: <strong>${escHtml(data.tenant.name)}</strong> — udløber ${new Date(data.tenant.trialExpiresAt).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' })}.
+        <br>Send login-linket herunder til kontakten (vises kun denne ene gang):
         <span class="result-url">${escHtml(data.loginUrl)}</span>
       </div>
     `;
     document.getElementById('form').reset();
     document.getElementById('f-days').value = '30';
+    loadTenantOptions();
   } catch (e) {
-    resultEl.innerHTML = '<div class="err">Kunne ikke oprette trial — tjek din forbindelse.</div>';
+    resultEl.innerHTML = '<div class="err">Kunne ikke oprette — tjek din forbindelse.</div>';
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Opret trial';
-  }
-  return false;
-}
-
-// NYT (single auth-løsning): SAMME /internal/api/create-trial som ovenfor,
-// blot med et frit navn og et eksplicit countryCode i stedet for det
-// kommune-matchede navn/faste 'DK'. En 'country'-konto får alligevel sit
-// eget countryCode håndhævet server-side, uanset hvad der vælges her.
-async function submitMunicipalityForm(e) {
-  e.preventDefault();
-  const btn = document.getElementById('msubmit-btn');
-  const resultEl = document.getElementById('mresult');
-  const name = document.getElementById('m-name').value.trim();
-  const countryCode = document.getElementById('m-country').value;
-  const days = Number(document.getElementById('m-days').value);
-  const issuedBy = document.getElementById('m-issued-by').value.trim();
-  const loginEmail = document.getElementById('m-login-email').value.trim();
-  const password = document.getElementById('m-password').value;
-
-  if ((loginEmail && !password) || (password && !loginEmail)) {
-    resultEl.innerHTML = '<div class="err">Login-e-mail og adgangskode skal enten begge udfyldes, eller begge stå tomme.</div>';
-    return false;
-  }
-
-  btn.disabled = true;
-  btn.textContent = 'Opretter…';
-  resultEl.innerHTML = '';
-  try {
-    const resp = await fetch('/internal/api/create-trial', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, days, issuedBy, countryCode, loginEmail: loginEmail || null, password: password || null }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) {
-      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke oprette municipality.')}</div>`;
-      return;
-    }
-    resultEl.innerHTML = `
-      <div class="result">
-        ✓ Oprettet: <strong>${escHtml(data.tenant.name)}</strong> (${escHtml(data.tenant.countryCode)}, id: ${escHtml(data.tenant.id)}).
-        <br>Næste trin: kør produktets egen scripts/create-council-account.js (eller tilsvarende) med <code>--id=${escHtml(data.tenant.id)}</code> for at koble lokal områdedækning på.
-        <br>Login-link (send til kontakten, vises kun denne ene gang):
-        <span class="result-url">${escHtml(data.loginUrl)}</span>
-      </div>
-    `;
-    document.getElementById('mform').reset();
-    document.getElementById('m-days').value = '30';
-  } catch (e) {
-    resultEl.innerHTML = '<div class="err">Kunne ikke oprette municipality — tjek din forbindelse.</div>';
-  } finally {
-    btn.disabled = false;
-    btn.textContent = 'Opret municipality';
+    btn.textContent = 'Opret';
   }
   return false;
 }

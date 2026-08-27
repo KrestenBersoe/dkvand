@@ -117,7 +117,14 @@ COPY admin-dashboard.html ./
 COPY admin-oauth-setup.html ./
 COPY admin-login.html ./
 COPY internal-create-trial.html ./
-COPY internal-sales.html ./
+# RETTET (bruger-krav 2026-08-27): internal-sales.html omdøbt til
+# internal-country-admin.html (ét-lands-ad-gangen admin-skærm, se
+# server.js's GET /internal/admin/:countryCode) — COPY-linjen omdøbt
+# tilsvarende, ellers ville billedet bygge fint (kilden ville bare mangle),
+# og containeren ville først crashe ved selve requesten (fs.readFileSync
+# ENOENT), ikke ved build- eller opstartstidspunktet.
+COPY internal-country-admin.html ./
+COPY internal-choose-country.html ./
 # NYT (single auth-løsning): samme "læses direkte via fs.readFileSync ved
 # hver request"-mønster som de øvrige HTML-filer herover.
 COPY internal-login.html ./

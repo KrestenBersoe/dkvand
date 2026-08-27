@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vælg land — Administration</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  /* Samme farvepalet som internal-country-admin.html/admin-login.html — se dem for begrundelsen. */
+  :root {
+    --paper: #12202a; --card: #16283355; --ink: #f0ede6; --ink-soft: #9fb0bb;
+    --accent: #4fb8d6; --border: rgba(255,255,255,.08);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    background: linear-gradient(180deg, #0d1720, #12202a 40%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 420px; margin: 4rem auto 0; }
+  h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
+  .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
+  .country-card {
+    display: block; background: rgba(255,255,255,.03); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.1rem 1.3rem; margin-bottom: .8rem; text-decoration: none; color: var(--ink);
+  }
+  .country-card:hover { border-color: var(--accent); background: rgba(79,184,214,.06); }
+  .country-card .name { font-size: 1rem; font-weight: 700; }
+  .country-card .product { font-size: .8rem; color: var(--ink-soft); margin-top: .15rem; }
+  #staff-identity { font-size: .8rem; color: var(--ink-soft); margin-top: 1.5rem; }
+  #staff-identity a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏛 Vælg land</h1>
+  <div class="sub">Vælg hvilket lands kommuner/councils/mairies du vil administrere.</div>
+
+  <a class="country-card" href="/internal/admin/DK">
+    <div class="name">🇩🇰 Danmark</div>
+    <div class="product">dkvand — kommuner</div>
+  </a>
+  <a class="country-card" href="/internal/admin/UK">
+    <div class="name">🇬🇧 United Kingdom</div>
+    <div class="product">ukwater — councils</div>
+  </a>
+  <a class="country-card" href="/internal/admin/FR">
+    <div class="name">🇫🇷 France</div>
+    <div class="product">frwater — mairies</div>
+  </a>
+
+  <div id="staff-identity"></div>
+</div>
+
+<script>
+// Samme "hvem er logget ind + log ud"-mønster som internal-country-admin.html.
+async function loadStaffIdentity() {
+  const el = document.getElementById('staff-identity');
+  try {
+    const resp = await fetch('/internal/api/me');
+    if (!resp.ok) return;
+    const staff = await resp.json();
+    el.innerHTML = `Logget ind som ${staff.email} · <a href="#" onclick="logout(); return false;">Log ud</a>`;
+  } catch (e) { /* stille fejl — kun en visuel bekvemmelighed */ }
+}
+async function logout() {
+  await fetch('/internal/logout', { method: 'POST' });
+  location.href = '/internal/login';
+}
+loadStaffIdentity();
+</script>
+</body>
+</html>

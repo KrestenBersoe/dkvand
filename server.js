@@ -643,10 +643,58 @@ function requireOwnCountry(tenant, staff) {
   return staff.role === 'system' || tenant.country_code === staff.countryCode;
 }
 
+// RETTET (bruger-krav 2026-08-27 — "3 markeder blandes sammen, ikke
+// brugervenligt"): dette var tidligere en selvstændig, DK-specifik side.
+// Fuldt overflødiggjort af GET /internal/admin/DK nedenfor (samme
+// kommune-vælger/trial-opret, blot ét sted for alle tre lande) — redirectet
+// her, ikke fjernet, for at et gammelt bogmærke/link fortsat virker.
 app.get('/internal/create-trial', adminUsers.requireStaffSession, (req, res) => {
+  res.redirect('/internal/admin/DK');
+});
+
+// NYT (bruger-krav 2026-08-27): landevælger — kun relevant for en
+// 'system'-bruger, der reelt har mere end ét land at vælge imellem. En
+// 'country'-bruger har allerede kun ét land og sendes derfor direkte videre
+// (se GET /internal/admin/:countryCode nedenfor for den fulde begrundelse).
+app.get('/internal/choose-country', adminUsers.requireStaffSession, (req, res) => {
+  if (req.staff.role === 'country') return res.redirect(`/internal/admin/${req.staff.countryCode}`);
   res.set('Cache-Control', 'no-store');
   res.set('X-Robots-Tag', 'noindex, nofollow');
-  res.sendFile(path.join(STATIC_DIR, 'internal-create-trial.html'));
+  res.sendFile(path.join(STATIC_DIR, 'internal-choose-country.html'));
+});
+
+// NYT (bruger-krav 2026-08-27 — "man vælger et land, derefter administrerer
+// man kommuner for DET land i et dedikeret skærmbillede"): erstatter den
+// tidligere internal-sales.html, som blandede alle tre landes tenants og
+// oprettelsesformularer sammen på ét skærmbillede. Denne rute viser ALTID
+// præcis ét lands data — countryCode kommer fra selve URL'en (ikke et
+// klient-side valg), injiceret ind i internal-country-admin.html samme
+// %%...JSON%%-mønster som admin-dashboard.html/set-password.html.
+const STAFF_ADMIN_COUNTRIES = new Set(['DK', 'UK', 'FR']);
+app.get('/internal/admin/:countryCode', adminUsers.requireStaffSession, (req, res) => {
+  const countryCode = req.params.countryCode.toUpperCase();
+  if (!STAFF_ADMIN_COUNTRIES.has(countryCode)) {
+    return res.status(404).type('text/plain').send('Ukendt land.');
+  }
+  // En 'country'-bruger må kun se sit EGET land — samme håndhævelse som
+  // requireOwnCountry() ovenfor bruger for enkelt-tenant-opslag, her anvendt
+  // på selve siden i stedet for på ét tenant-id.
+  if (req.staff.role === 'country' && countryCode !== req.staff.countryCode) {
+    return res.redirect(`/internal/admin/${req.staff.countryCode}`);
+  }
+  try {
+    const html = fs.readFileSync(path.join(STATIC_DIR, 'internal-country-admin.html'), 'utf8')
+      .replace('%%COUNTRY_ADMIN_JSON%%', JSON.stringify({
+        countryCode, staffRole: req.staff.role,
+      }));
+    res.set('Cache-Control', 'no-store');
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (e) {
+    console.error('internal/admin/:countryCode: uventet fejl —', e.message);
+    res.status(500).type('text/plain').send('Kunne ikke hente siden lige nu.');
+  }
 });
 
 app.post('/internal/api/create-trial', adminUsers.requireStaffSession, express.json(), async (req, res) => {
@@ -746,9 +794,14 @@ app.get('/internal/api/kommuner', adminUsers.requireStaffSession, (req, res) => 
 app.get('/internal/api/tenants', adminUsers.requireStaffSession, async (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');
-    // NYT (single auth-løsning): 'system' ser alle lande (intet filter),
-    // 'country' ser udelukkende sit eget — se listTenants()'s filhoved.
-    const countryCode = req.staff.role === 'country' ? req.staff.countryCode : null;
+    // NYT (bruger-krav 2026-08-27 — ét lands data ad gangen): en 'system'-
+    // bruger kan nu bede om ét bestemt land (internal-country-admin.html's
+    // ?country=-parameter), men en 'country'-bruger tvinges ALTID til sit
+    // eget land uanset denne parameter — se listTenants()'s filhoved.
+    // Ingen parameter fra en 'system'-bruger betyder fortsat "alle lande"
+    // (bagudkompatibelt med et evt. andet, endnu ikke bygget kald).
+    const requestedCountry = typeof req.query.country === 'string' ? req.query.country.toUpperCase() : null;
+    const countryCode = req.staff.role === 'country' ? req.staff.countryCode : requestedCountry;
     res.json(await tenantAdmin.listTenants({ countryCode }));
   } catch (e) {
     console.error('internal/api/tenants: uventet fejl —', e.message);
@@ -798,19 +851,17 @@ app.post('/internal/api/tenants/:id/login-link', adminUsers.requireStaffSession,
   }
 });
 
-// NYT (bruger-ønske — dedikeret sales-portal): SAMME adminUsers.
-// requireStaffSession-gate som resten af /internal/* ovenfor — ingen ny
-// adgangskontrol, kun en NY side der samler trial-
-// oprettelse + login-til-eksisterende-kommune (begge allerede byggede
-// ovenfor) med et NYT tredje kort: kommune-benchmark for ALLE kommuner,
-// uden at kræve en tenant-session. internal-sales.html er en SEPARAT fil
-// fra internal-create-trial.html (den forbliver uændret/virker stadig
-// standalone) — undgår at ændre et allerede fungerende værktøj, mens det
-// nye, bredere sales-flow bygges ved siden af.
+// RETTET (bruger-krav 2026-08-27 — "3 markeder blandes sammen, ikke
+// brugervenligt"): /internal/sales viste tidligere ÉN side med alle tre
+// landes tenants/opret-formularer blandet sammen (internal-sales.html,
+// omdøbt til internal-country-admin.html og gjort ét-lands-ad-gangen). Den
+// tidligere sendFile er erstattet af en rolle-baseret redirect — dette er
+// også hvor POST /login og POST /internal/login begge fortsat sender staff
+// hen efter et vellykket login, så de aldrig selv skal kende den nye
+// stiopdeling.
 app.get('/internal/sales', adminUsers.requireStaffSession, (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  res.set('X-Robots-Tag', 'noindex, nofollow');
-  res.sendFile(path.join(STATIC_DIR, 'internal-sales.html'));
+  if (req.staff.role === 'country') return res.redirect(`/internal/admin/${req.staff.countryCode}`);
+  res.redirect('/internal/choose-country');
 });
 
 // NYT — SAMME computeKommuneBenchmark()/periode-parsing som GET /admin/api/
