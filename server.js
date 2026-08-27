@@ -1257,12 +1257,48 @@ app.get('/login', (req, res) => {
   res.sendFile(path.join(STATIC_DIR, 'login.html'));
 });
 
+// NYT (bruger-krav 2026-08-27 — "Login siden på Engelsk og Fransk for de
+// respektive lande"): login.html's synlige tekst er allerede lokaliseret
+// klient-side via ?country=; DENNE tabel lokaliserer de SERVER-genererede
+// fejlbeskeder (redirect til /login?error=...) til samme sprog, ud fra
+// et skjult country-formularfelt login.html selv sætter fra samme
+// query-parameter. Dansk forbliver default (tom/ukendt country) — dkvands
+// egen direkte besøgte /login, uændret.
+const LOGIN_ERROR_TEXT = {
+  da: {
+    missingFields: 'Angiv både e-mail og adgangskode.',
+    wrongCredentials: 'Forkert e-mail eller adgangskode.',
+    unexpectedError: 'Der opstod en uventet fejl — prøv igen.',
+    loginFailed: 'Kunne ikke logge ind lige nu.',
+  },
+  en: {
+    missingFields: 'Enter both your email and password.',
+    wrongCredentials: 'Incorrect email or password.',
+    unexpectedError: 'An unexpected error occurred — please try again.',
+    loginFailed: 'Could not log you in right now.',
+  },
+  fr: {
+    missingFields: 'Saisissez votre e-mail et votre mot de passe.',
+    wrongCredentials: 'E-mail ou mot de passe incorrect.',
+    unexpectedError: 'Une erreur inattendue est survenue — veuillez réessayer.',
+    loginFailed: 'Connexion impossible pour le moment.',
+  },
+};
+function loginErrorTextFor(countryCode) {
+  if (countryCode === 'UK') return LOGIN_ERROR_TEXT.en;
+  if (countryCode === 'FR') return LOGIN_ERROR_TEXT.fr;
+  return LOGIN_ERROR_TEXT.da;
+}
+
 app.post('/login', express.urlencoded({ extended: false }), async (req, res) => {
+  const countryParam = typeof req.body?.country === 'string' ? req.body.country.toUpperCase() : '';
+  const t = loginErrorTextFor(countryParam);
+  const countryQs = countryParam ? `&country=${encodeURIComponent(countryParam)}` : '';
   try {
     const email = String(req.body?.email || '').trim();
     const password = String(req.body?.password || '');
     if (!email || !password) {
-      return res.redirect('/login?error=' + encodeURIComponent('Angiv både e-mail og adgangskode.'));
+      return res.redirect(`/login?error=${encodeURIComponent(t.missingFields)}${countryQs}`);
     }
 
     const staff = await adminUsers.verifyAdminUserPassword(email, password);
@@ -1278,14 +1314,14 @@ app.post('/login', express.urlencoded({ extended: false }), async (req, res) => 
         tenantId: tenant.tenantId, tenantName: tenant.tenantName, countryCode: tenant.countryCode,
         authMethod: 'password', email,
       });
-      if (!ok) return res.status(500).type('text/plain').send('Kunne ikke logge ind lige nu.');
+      if (!ok) return res.status(500).type('text/plain').send(t.loginFailed);
       return;
     }
 
-    res.redirect('/login?error=' + encodeURIComponent('Forkert e-mail eller adgangskode.'));
+    res.redirect(`/login?error=${encodeURIComponent(t.wrongCredentials)}${countryQs}`);
   } catch (e) {
     console.error('login POST: uventet fejl —', e.message);
-    res.redirect('/login?error=' + encodeURIComponent('Der opstod en uventet fejl — prøv igen.'));
+    res.redirect(`/login?error=${encodeURIComponent(t.unexpectedError)}${countryQs}`);
   }
 });
 

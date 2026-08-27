@@ -48,23 +48,24 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🔒 Log ind</h1>
-  <div class="sub">Ét login til hele platformen — kommune/council/mairie-adgang og internt driftspersonale.</div>
+  <h1 id="l-title">🔒 Log ind</h1>
+  <div class="sub" id="l-sub">Ét login til hele platformen — kommune/council/mairie-adgang og internt driftspersonale.</div>
 
   <div class="card">
     <div class="err-msg" id="err-msg"></div>
     <form method="POST" action="/login">
-      <label for="f-email">E-mail</label>
+      <input type="hidden" id="f-country" name="country" value="">
+      <label for="f-email" id="l-email">E-mail</label>
       <input id="f-email" name="email" type="email" required autocomplete="username" autofocus>
-      <label for="f-password">Adgangskode</label>
+      <label for="f-password" id="l-password">Adgangskode</label>
       <input id="f-password" name="password" type="password" required autocomplete="current-password">
-      <button type="submit">Log ind</button>
+      <button type="submit" id="l-submit">Log ind</button>
     </form>
     <!-- NYT: password er en TILVALGT tredje adgangsvej for en kommune/
          council/mairie (se tenant-admin.js's login_email/password_hash) —
          en konto uden password sat kan stadig kun bruge sit trial-link eller
          kommunens/council's/mairie's egen OAuth-udbyder, begge uændrede. -->
-    <div class="alt">Har du fået tilsendt et login-link i stedet? Brug det link direkte — det virker uafhængigt af denne side.</div>
+    <div class="alt" id="l-alt">Har du fået tilsendt et login-link i stedet? Brug det link direkte — det virker uafhængigt af denne side.</div>
   </div>
 </div>
 
@@ -78,6 +79,44 @@ if (error) {
   el.textContent = error;
   el.classList.add('show');
 }
+
+// NYT (bruger-krav 2026-08-27 — "Login siden på Engelsk og Fransk for de
+// respektive lande"): ukwater's/frwater's egne GET /login redirecter hertil
+// med ?country=UK/FR (se deres server/index.js) — DENNE side forbliver
+// dansk som DEFAULT (dkvands egen direkte besøgte /login), men skifter
+// synlig tekst til engelsk/fransk når parametren er sat. Ren klient-side
+// tekst-udskiftning (samme "læs fra location.search"-mønster som ?error=
+// ovenfor) — ingen server-side skabelon nødvendig, kun statisk tekst
+// skifter, ikke rigtige backend-data (modsat internal-country-admin.html's
+// %%COUNTRY_ADMIN_JSON%%-indsprøjtning). country videresendes som et skjult
+// formular-felt, så POST /login kan lokalisere SINE fejlbeskeder til samme
+// sprog (se server.js's LOGIN_TEXT).
+const LOGIN_I18N = {
+  en: {
+    title: '🔒 Log in', sub: 'One login for the whole platform — council/municipality access and internal staff.',
+    email: 'Email', password: 'Password', submit: 'Log in',
+    alt: 'Received a login link instead? Use that link directly — it works independently of this page.',
+  },
+  fr: {
+    title: '🔒 Connexion', sub: 'Une seule connexion pour toute la plateforme — accès mairie/commune et personnel interne.',
+    email: 'E-mail', password: 'Mot de passe', submit: 'Se connecter',
+    alt: 'Vous avez reçu un lien de connexion à la place ? Utilisez ce lien directement — il fonctionne indépendamment de cette page.',
+  },
+};
+const countryParam = (params.get('country') || '').toUpperCase();
+const lang = countryParam === 'UK' ? 'en' : countryParam === 'FR' ? 'fr' : null;
+if (lang) {
+  const t = LOGIN_I18N[lang];
+  document.documentElement.lang = lang;
+  document.title = t.title.replace(/^\S+\s/, '');
+  document.getElementById('l-title').textContent = t.title;
+  document.getElementById('l-sub').textContent = t.sub;
+  document.getElementById('l-email').textContent = t.email;
+  document.getElementById('l-password').textContent = t.password;
+  document.getElementById('l-submit').textContent = t.submit;
+  document.getElementById('l-alt').textContent = t.alt;
+}
+if (countryParam) document.getElementById('f-country').value = countryParam;
 </script>
 </body>
 </html>
