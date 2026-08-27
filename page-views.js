@@ -30,7 +30,13 @@ const ready = query(`
 `).then(() => console.info('page-views: Postgres-skema klar'))
   .catch(e => { console.error('page-views: skemaoprettelse fejlede —', e.message); throw e; });
 
-const VALID_ENTITY_TYPES = new Set(['badested', 'udloeb']);
+// NYT (cross-market admin-dashboard, bruger-krav 2026-08-27): 'side' —
+// generel sidevisning (appen åbnet), ADSKILT fra 'badested'/'udloeb' (åbning
+// af ÉT sted/udløbs detaljepanel) efter eksplicit bruger-afklaring. Samme
+// tabel/funktioner genbruges uændret — kun endnu en gyldig entity_type-værdi,
+// altid med samme faste entity_id ('app', se dansk-overloeb-kort.html's
+// opstarts-kald), ikke en ny tabel.
+const VALID_ENTITY_TYPES = new Set(['badested', 'udloeb', 'side']);
 
 function todayDateString() {
   return new Date().toISOString().slice(0, 10); // UTC-kalenderdato, samme konvention som resten af appen

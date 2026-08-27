@@ -61,6 +61,11 @@ COPY tenant-session.js ./
 COPY admin-users.js ./
 COPY admin-user-session.js ./
 COPY sso-handoff.js ./
+# NYT (cross-market admin-dashboard): server.js kræver nu også
+# (require('./admin-stats')) dette modul ved opstart, samme "crasher
+# øjeblikkeligt uden denne linje"-fælde som de øvrige lokale moduler i
+# denne fil.
+COPY admin-stats.js ./
 # NYT: Kommunepakke, modul 2 — tenant-admin.js requirer nu også
 # (require('./oauth-config-validation')) dette modul ved opstart, samme
 # "crasher øjeblikkeligt uden denne linje"-fælde som ovenfor. Tilføjet
@@ -139,6 +144,11 @@ COPY dansk-overloeb-kort.html ./
 # server dem automatisk, når de blot findes i containeren.
 COPY windy-currents.js ./
 COPY leaflet-canvas-layer.js ./
+# NYT (cross-market admin-dashboard): samme "bevidst offentlig .js-fil, egen
+# navngivet route i server.js"-mønster som de to filer ovenfor — se dens
+# egen kommentar for hvorfor .js aldrig må dækkes af den generelle
+# PUBLIC_STATIC_EXTENSIONS-allowlist.
+COPY admin-dashboard-stats.js ./
 COPY badevand-risk.js ./
 # RETTET (produktionsudfald 2026-08-20 — samme "crasher øjeblikkeligt uden
 # denne linje"-fælde som resten af de lokale moduler i denne fil, se
@@ -165,8 +175,10 @@ COPY badested-observations.js ./
 # ovenfor (glemt her først, forårsagede et kort produktionsudfald — se
 # app-metrics.js's filhoved for modulets formål).
 COPY app-metrics.js ./
-# NYT: letvægts statistikside (GET /stats, server.js sender denne fil).
-COPY stats.html ./
+# RETTET (bruger-krav 2026-08-27): stats.html/GET /stats fjernet — se
+# server.js's kommentar hvor ruten stod. COPY-linjen fjernet SAMME sted, i
+# samme ændring — ikke efterladt til at pege på en fil, der ikke længere
+# findes.
 # NYT: web app-manifest + ikoner — forudsætning for PWA-installation, som
 # igen er en hård Apple-betingelse for at web push kan virke på iOS.
 COPY manifest.json ./

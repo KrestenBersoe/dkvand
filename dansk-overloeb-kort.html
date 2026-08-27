@@ -11784,6 +11784,12 @@ setInterval(refreshEverything, 30 * 60 * 1000);
 setInterval(loadBadevandRiskData, 5 * 60 * 1000);
 
 // BOOT
+// NYT (cross-market admin-dashboard, bruger-krav 2026-08-27): generel
+// sidevisning, ADSKILT fra trackView('<badested>', 'badested') i
+// showBadevandPanel() — den tæller ÅBNING AF ÉT STEDS detaljepanel, denne
+// tæller "appen blev åbnet" én gang pr. sideindlæsning. Fast entity_id
+// ('app') — der findes kun ét "sted" for denne målings formål.
+trackView('app', 'side');
 loadAll();
 loadVP3Layers();
 loadDenmarkSea();  // statisk søterritorium — hentes én gang, ikke del af de periodiske genopdateringer ovenfor

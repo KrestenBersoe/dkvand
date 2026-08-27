@@ -85,6 +85,36 @@
   table.kstat-table td.n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; padding-left: .9rem; }
   table.kstat-table tr + tr td { border-top: 1px solid var(--border); }
   .kb-unit-note { font-size: .72rem; color: var(--ink-soft); margin-bottom: .3rem; }
+
+  /* ── Cross-market dashboard (bruger-krav 2026-08-27) — SAMME CSS som
+     internal-choose-country.html's kopi (se dens kommentar for hvorfor
+     dupliceret her fremfor delt) og stats.html, den offentlige side dette
+     erstatter. ─────────────────────────────────────────────────────────── */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .trend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .trend-card h2 { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; }
+  .trend-chart-wrap { position: relative; }
+  .trend-chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .trend-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .trend-grad-stop-1 { stop-color: var(--accent); stop-opacity: .16; }
+  .trend-grad-stop-2 { stop-color: var(--accent); stop-opacity: 0; }
+  .trend-grid-line { stroke: rgba(255,255,255,.08); stroke-width: 1; shape-rendering: crispEdges; }
+  .trend-axis-label { fill: var(--ink-soft); font-size: 9px; font-family: inherit; }
+  .trend-end-dot { fill: var(--accent); stroke: var(--paper); stroke-width: 2; }
+  .trend-end-label { fill: var(--ink); font-size: 10px; font-weight: 700; font-family: inherit; }
+  .trend-crosshair { stroke: var(--ink-soft); stroke-width: 1; stroke-dasharray: 2 2; pointer-events: none; opacity: 0; }
+  .trend-hover-dot { fill: var(--accent); stroke: var(--paper); stroke-width: 2; pointer-events: none; opacity: 0; }
+  .trend-hit-layer { fill: transparent; cursor: crosshair; }
+  .trend-tooltip {
+    position: absolute; top: 0; left: 0; pointer-events: none; opacity: 0;
+    background: #0d1720; border: 1px solid var(--border); border-radius: 6px;
+    padding: .35rem .55rem; font-size: .72rem; white-space: nowrap; transform: translate(-50%, -115%);
+    transition: opacity .1s;
+  }
+  .trend-tooltip .tt-date { color: var(--ink-soft); }
+  .trend-tooltip .tt-value { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; margin-left: .4rem; }
+  .trend-empty { color: var(--ink-soft); font-size: .8rem; padding: 1.5rem 0; text-align: center; }
+  .loading { color: var(--ink-soft); font-size: .9rem; }
 </style>
 </head>
 <body>
@@ -95,6 +125,8 @@
   </div>
   <div class="sub" id="page-sub"></div>
   <div class="sub" id="staff-identity" style="margin-top:-1rem"></div>
+
+  <div id="admin-dashboard-root"></div>
 
   <div class="card" id="benchmark-card" style="display:none">
     <h2>Kommune-benchmark — alle danske kommuner</h2>
@@ -204,6 +236,7 @@
   </div>
 </div>
 
+<script src="/admin-dashboard-stats.js"></script>
 <script>
 // NYT (bruger-krav 2026-08-27 — "3 markeder blandes sammen, ikke
 // brugervenligt"): denne side viser ALTID ét og kun ét lands data —
@@ -215,6 +248,7 @@
 // /internal/api/*-ruter nedenfor uanset hvad denne side viser).
 window.__COUNTRY_ADMIN__ = %%COUNTRY_ADMIN_JSON%%;
 const ctx = window.__COUNTRY_ADMIN__;
+initAdminDashboard({ containerId: 'admin-dashboard-root', country: ctx.countryCode });
 
 const COUNTRY_NAMES = { DK: 'Danmark', UK: 'United Kingdom', FR: 'France' };
 // "kommune" (DK) / "council" (UK) / "mairie" (FR) — samme term appen selv

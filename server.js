@@ -88,6 +88,9 @@ const adminUsers   = require('./admin-users');
 // NYT (samme løsning): kryptografisk håndsrækning af et fuldført
 // municipality-login videre til ukwater/frwater, når tenanten ikke er dansk.
 const ssoHandoff   = require('./sso-handoff');
+// NYT (cross-market admin-dashboard): dkvand's egne 7 nøgletal for
+// GET /internal/api/admin-stats — se dens filhoved.
+const adminStats   = require('./admin-stats');
 // NYT (Kommunepakke, modul 4): tenant -> badesteder-mapping (normaliseret
 // kommune-navnematch) — se modulets eget filhoved.
 const tenantBadesteder = require('./tenant-badesteder');
@@ -512,13 +515,13 @@ app.get(['/', '/dansk-overloeb-kort.html'], (req, res) => {
   }
 });
 
-// ── Statistikside — offentlig, ingen adgangsbeskyttelse (bevidst valg) ──────
-// Letvægts, selvstændig side (IKKE en del af den store SPA-fil ovenfor) —
-// henter selv GET /api/stats client-side, se stats.html.
-app.get('/stats', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  res.sendFile(path.join(STATIC_DIR, 'stats.html'));
-});
+// RETTET (bruger-krav 2026-08-27 — cross-market admin-dashboard): den
+// tidligere offentlige, adgangsfri /stats (stats.html) er FJERNET — dens
+// indhold (installationer, webpush-abonnenter, indberetninger, udsendte
+// varsler) lever nu i det interne, periode-følsomme dashboard på
+// /internal/choose-country og /internal/admin/<land>, se admin-stats.js og
+// admin-dashboard-stats.js. Ingen anden side linkede til /stats (bekræftet
+// ved gennemgang før fjernelse).
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Kommunepakke, modul 1 — se tenant-admin.js's filhoved for den fulde
@@ -902,6 +905,122 @@ app.get('/internal/api/kommune-benchmark', adminUsers.requireStaffSession, async
   } catch (e) {
     console.error('internal/api/kommune-benchmark: uventet fejl —', e.message);
     res.status(500).json({ error: 'Kunne ikke beregne kommune-benchmark lige nu.' });
+  }
+});
+
+// ── Cross-market admin-dashboard (bruger-krav 2026-08-27) ───────────────────
+// Se admin-stats.js's filhoved for DK's egne 7 tal. UK/FR hentes HERFRA,
+// server-til-server (almindeligt https-GET til deres offentlige, ikke-
+// følsomme GET /api/admin-stats — samme lave følsomhedsniveau som
+// GET /api/local-authorities), IKKE af klienten cross-origin — se planens
+// begrundelse for hvorfor (undgår at gentage denne sessions CORS-/stale-
+// deploy-fejlfinding for endnu en cross-origin rute).
+const ADMIN_STATS_PERIODS = new Set(['today', '7d', '30d', 'quarter', 'halfyear', 'ytd']);
+
+/**
+ * Samme "rullende vindue endende i dag"-princip som computeAlertStatsRange()
+ * ovenfor, men med de 6 perioder brugeren bad om (which INCLUDES 'ytd' —
+ * kalenderårets første dag, IKKE et rullende 365-dages vindue, bevidst
+ * adskilt fra computeAlertStatsRange()'s egen 'year' af den grund).
+ * @returns {{from: string, to: string}}
+ */
+function computeAdminStatsRange(period) {
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const daysAgo = n => new Date(Date.now() - n * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  if (period === 'today')    return { from: todayStr, to: todayStr };
+  if (period === '7d')       return { from: daysAgo(6), to: todayStr };
+  if (period === '30d')      return { from: daysAgo(29), to: todayStr };
+  if (period === 'quarter')  return { from: daysAgo(89), to: todayStr };
+  if (period === 'halfyear') return { from: daysAgo(179), to: todayStr };
+  // period === 'ytd'
+  return { from: `${new Date().getUTCFullYear()}-01-01`, to: todayStr };
+}
+
+/**
+ * @param {'UK'|'FR'} countryCode
+ * @param {{from: string, to: string}} range
+ * @returns {Promise<object|null>} null ved fejl (produktet nede/endnu ikke opgraderet) — kaldestedet degraderer gracefully, se dens kommentar
+ */
+async function fetchRemoteAdminStats(countryCode, range) {
+  const { rows } = await query('SELECT product_base_url FROM countries WHERE code = $1', [countryCode]);
+  const baseUrl = rows[0]?.product_base_url;
+  if (!baseUrl) return null;
+  try {
+    const res = await fetch(`${baseUrl}/api/admin-stats?from=${range.from}&to=${range.to}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    console.warn(`fetchRemoteAdminStats(${countryCode}): fejlede —`, e.message);
+    return null;
+  }
+}
+
+function emptyAdminStats() {
+  const zero = { siteViews: 0, pageViews: 0, newInstalls: 0, activeInstalls: 0, newPushSubscriptions: 0, pushSubscriptions: 0, reports: 0, alertsSent: 0, closedSites: 0 };
+  return { totals: { ...zero }, trends: { siteViews: [], pageViews: [], newInstalls: [], newPushSubscriptions: [], reports: [], alertsSent: [], closedSites: [] } };
+}
+
+/**
+ * Lægger to admin-stats-resultater sammen — totals summeres, trends flettes
+ * dag-for-dag. RETTET (fundet under egen verifikation FØR deploy): den
+ * oprindelige udgave mappede over a.trends[k] alene — virkede kun fordi et
+ * enkelt-lands-kald (a = emptyAdminStats(), tomme trend-arrays) aldrig
+ * havde nogen dage at mappe over, uanset hvad b (de faktiske DK/UK/FR-tal)
+ * indeholdt. Foreningsmængden af BEGGE siders datoer er nødvendig — a er
+ * ikke garanteret at have data, og reduce()'s første kald bruger netop den
+ * tomme emptyAdminStats()-seed som a.
+ */
+function addAdminStats(a, b) {
+  const totals = {};
+  for (const k of new Set([...Object.keys(a.totals), ...Object.keys(b.totals)])) {
+    totals[k] = (a.totals[k] || 0) + (b.totals[k] || 0);
+  }
+  const trends = {};
+  for (const k of new Set([...Object.keys(a.trends), ...Object.keys(b.trends)])) {
+    const aByDate = new Map((a.trends[k] || []).map(p => [p.date, p.value]));
+    const bByDate = new Map((b.trends[k] || []).map(p => [p.date, p.value]));
+    const allDates = [...new Set([...aByDate.keys(), ...bByDate.keys()])].sort();
+    trends[k] = allDates.map(date => ({ date, value: (aByDate.get(date) || 0) + (bByDate.get(date) || 0) }));
+  }
+  return { totals, trends };
+}
+
+// NYT: en 'country'-bruger må kun bede om sit EGET land (eller intet
+// ?country=, som så tvinges til deres eget) — ALDRIG 'ALL' eller et andet
+// lands tal, samme håndhævelse som GET /internal/admin/:countryCode selv.
+app.get('/internal/api/admin-stats', adminUsers.requireStaffSession, async (req, res) => {
+  try {
+    const period = typeof req.query.period === 'string' ? req.query.period : '';
+    if (!ADMIN_STATS_PERIODS.has(period)) {
+      return res.status(400).json({ error: `Ugyldig period — skal være én af: ${[...ADMIN_STATS_PERIODS].join(', ')}.` });
+    }
+    const range = computeAdminStatsRange(period);
+
+    let requestedCountry = typeof req.query.country === 'string' ? req.query.country.toUpperCase() : 'ALL';
+    if (req.staff.role === 'country') requestedCountry = req.staff.countryCode;
+    if (!['ALL', 'DK', 'UK', 'FR'].includes(requestedCountry)) {
+      return res.status(400).json({ error: 'Ugyldigt land.' });
+    }
+
+    const parts = [];
+    if (requestedCountry === 'DK' || requestedCountry === 'ALL') {
+      parts.push(await adminStats.getAdminDashboardStats({ fromDate: range.from, toDate: range.to }));
+    }
+    if (requestedCountry === 'UK' || requestedCountry === 'ALL') {
+      const uk = await fetchRemoteAdminStats('UK', range);
+      if (uk) parts.push(uk);
+    }
+    if (requestedCountry === 'FR' || requestedCountry === 'ALL') {
+      const fr = await fetchRemoteAdminStats('FR', range);
+      if (fr) parts.push(fr);
+    }
+
+    const combined = parts.length > 0 ? parts.reduce(addAdminStats, emptyAdminStats()) : emptyAdminStats();
+    res.set('Cache-Control', 'no-store');
+    res.json({ period, from: range.from, to: range.to, country: requestedCountry, ...combined });
+  } catch (e) {
+    console.error('internal/api/admin-stats: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente statistik lige nu.' });
   }
 });
 
@@ -2301,7 +2420,11 @@ app.get('/overloeb-sw.js', (req, res) => {
 // politik som HTML'en selv) tvinger en (billig, ETag-baseret) revalidering
 // ved hver indlæsning i stedet, mens denne funktion stadig er under aktiv
 // iteration.
-for (const publicJsFile of ['windy-currents.js', 'leaflet-canvas-layer.js']) {
+// NYT (cross-market admin-dashboard): admin-dashboard-stats.js er SAMME
+// slags bevidst-offentlig .js-fil (loadet via <script src> fra
+// internal-choose-country.html/internal-country-admin.html) — tilføjet til
+// SAMME navngivne-undtagelse-loop, ikke en ny, duplikeret rute.
+for (const publicJsFile of ['windy-currents.js', 'leaflet-canvas-layer.js', 'admin-dashboard-stats.js']) {
   app.get('/' + publicJsFile, (req, res) => {
     res.set('Cache-Control', 'no-cache');
     res.type('application/javascript');
@@ -4600,55 +4723,15 @@ function todayDateStringLocal() {
 }
 
 // ── GET /api/stats — offentlig, ingen adgangsbeskyttelse (bevidst valg) ─────
-// Installationstal pr. platform, push-adoption, indsendte badestedsvurderinger,
-// og udsendte webpush pr. type (24t/7d/total). Se app-metrics.js's filhoved
-// for hvorfor "aktiv"/"nogensinde set" hhv. "24t/7d/total" rapporteres
-// adskilt i stedet for ét samlet tal.
-app.get('/api/stats', async (req, res) => {
-  try {
-    const [installStats, vurderingStats, pushSendStats, pushSubscriptionCount] = await Promise.all([
-      appMetrics.getInstallStats(),
-      badestedObs.getVurderingStats(),
-      appMetrics.getPushSendStats(),
-      getPushSubscriptionCount(),
-    ]);
-
-    res.set('Cache-Control', 'no-store');
-    res.json({
-      generatedAt: Date.now(),
-      installs: installStats,
-      pushSubscriptions: pushSubscriptionCount,
-      vurderinger: vurderingStats,
-      pushSends: pushSendStats,
-    });
-  } catch (e) {
-    console.error('/api/stats fejlede:', e.message);
-    res.status(500).json({ error: 'Kunne ikke hente statistik.' });
-  }
-});
-
-// ── GET /api/stats/history — dagligt statistik-øjebliksbillede over tid ────
-// Adskilt fra /api/stats ovenfor (som viser NUVÆRENDE totaler) — denne
-// leverer historikken der driver /stats' udviklingsgrafer, se
-// runDailyStatsSnapshotJob() og appMetrics.getStatsHistory(). Offentlig,
-// ingen adgangsbeskyttelse, samme bevidste valg som /api/stats selv.
-app.get('/api/stats/history', async (req, res) => {
-  try {
-    // NYT: ?days= valgfri, capped 7-365 — undgår både et meningsløst
-    // 0/negativt vindue og et ubegrænset stort opslag ved en forkert/
-    // ondsindet query-parameter. Standard 90 dage — nok til at vise en
-    // meningsfuld trend uden at overbelaste den lille graf med for mange
-    // punkter.
-    const requested = parseInt(req.query.days, 10);
-    const days = Number.isFinite(requested) ? Math.max(7, Math.min(365, requested)) : 90;
-    const history = await appMetrics.getStatsHistory(days);
-    res.set('Cache-Control', 'no-store');
-    res.json({ generatedAt: Date.now(), days, history });
-  } catch (e) {
-    console.error('/api/stats/history fejlede:', e.message);
-    res.status(500).json({ error: 'Kunne ikke hente statistikhistorik.' });
-  }
-});
+// RETTET (bruger-krav 2026-08-27): GET /api/stats og GET /api/stats/history
+// var UDELUKKENDE til brug for den nu fjernede stats.html (ingen anden side
+// kaldte dem, bekræftet før fjernelse) — begge fjernet sammen med den, i
+// stedet for at lade to ubrugte, adgangsfri endpoints stå tilbage. Samme
+// tal lever nu i admin-stats.js/GET /internal/api/admin-stats (staff-
+// gated). runDailyStatsSnapshotJob() (se boot-sekvensen nedenfor) kører
+// fortsat uændret — dens daily_stats_snapshot-tabel har ingen anden læser
+// tilbage efter denne fjernelse, men selve jobbet er ufarligt at lade
+// fortsætte og ligger uden for denne ændrings afgrænsning.
 
 // ── Web Push: send notifications to all subscribers ────────────────────────
 // Called internally by the server's weather-refresh cycle.
