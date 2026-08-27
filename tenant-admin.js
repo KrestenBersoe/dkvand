@@ -42,14 +42,35 @@ const crypto = require('crypto');
 const https  = require('https');
 const dns    = require('dns');
 const { URL } = require('url');
+const bcrypt = require('bcryptjs');
 const { query } = require('./db');
 const tenantSession = require('./tenant-session');
 const oauthValidation = require('./oauth-config-validation');
+
+const BCRYPT_ROUNDS = 12; // samme værdi/begrundelse som admin-users.js
 
 // ── Database-opsætning — samme mønster som badested-observations.js: egen
 // CREATE TABLE IF NOT EXISTS, eksporteret ready-promise, afventet i
 // server.js's Promise.all(...) før serveren begynder at lytte.
 const ready = query(`
+  -- NYT (Fælles login på tværs af dkvand/ukwater/frwater — se planens
+  -- "Single authentication solution"): tenants er ikke længere udelukkende
+  -- danske kommuner — country_code (tilføjet nedenfor) afgør hvilket
+  -- produkt en tenant reelt hører til, og product_base_url/
+  -- municipality_login_path afgør hvor et trial-/OAuth-login skal
+  -- håndteres videre til (se sso-handoff.js), når det IKKE er 'DK'.
+  CREATE TABLE IF NOT EXISTS countries (
+    code                     TEXT PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    product_base_url         TEXT NOT NULL,
+    municipality_login_path  TEXT NOT NULL
+  );
+  INSERT INTO countries (code, name, product_base_url, municipality_login_path) VALUES
+    ('DK', 'Danmark', 'https://www.ditbadevand.dk', '/admin/trial/'),
+    ('UK', 'United Kingdom', 'https://ukwater.fly.dev', '/council.html#token='),
+    ('FR', 'France', 'https://frwater.fly.dev', '/mairie.html#token=')
+  ON CONFLICT (code) DO NOTHING;
+
   CREATE TABLE IF NOT EXISTS tenants (
     id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name                TEXT NOT NULL,
@@ -69,6 +90,25 @@ const ready = query(`
   -- denne linje er den, der reelt opgraderer det allerede kørende skema.
   -- IF NOT EXISTS gør den trygt idempotent (gentagne opstarter no-op'er).
   ALTER TABLE tenants ADD COLUMN IF NOT EXISTS logo_url TEXT;
+  -- NYT: DEFAULT 'DK' udfylder samtlige EKSISTERENDE rækker (de danske
+  -- kommuner, der allerede kørte før dette felt fandtes) i samme ALTER —
+  -- det ER migreringen af de danske tenants til det fælles skema, ingen
+  -- separat data-flytning nødvendig. REFERENCES countries(code) kræver
+  -- countries-tabellen (og dens 'DK'-række) oprettet FØR denne linje —
+  -- se rækkefølgen ovenfor.
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS country_code TEXT NOT NULL DEFAULT 'DK' REFERENCES countries(code);
+  -- NYT (single login på tværs af system-/country-/municipality-tier — se
+  -- planens "Build UI for admin and municipality users with a single
+  -- login"): en tenant havde hidtil INGEN individuel login-e-mail overhovedet
+  -- (adgang skete udelukkende via et delt trial-link eller kommunens egen
+  -- OAuth-udbyder, se filhovedets "to veje ind") — begge NULLable, en tenant
+  -- uden dem kan stadig kun logge ind via trial-link/OAuth som før. Unikt
+  -- indeks (ikke en tabel-CONSTRAINT — Postgres understøtter ikke ADD
+  -- CONSTRAINT ... IF NOT EXISTS generelt) tillader flere NULL'er (ingen
+  -- login_email sat), men forbyder to tenants med SAMME login_email.
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS login_email TEXT;
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS password_hash TEXT;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_login_email ON tenants(login_email);
 
   CREATE TABLE IF NOT EXISTS tenant_oauth_configs (
     tenant_id                UUID PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
@@ -124,7 +164,7 @@ const ready = query(`
 /**
  * @param {{name: string, status?: 'trial'|'active', trialDays?: number|null, createdBy?: string|null}} p
  */
-async function createTenant({ name, status = 'trial', trialDays = null, createdBy = null, logoUrl = null }) {
+async function createTenant({ name, status = 'trial', trialDays = null, createdBy = null, logoUrl = null, countryCode = 'DK', loginEmail = null, password = null }) {
   const now = new Date();
   const trialStartedAt = status === 'trial' ? now : null;
   const trialExpiresAt = status === 'trial' && trialDays != null
@@ -140,13 +180,68 @@ async function createTenant({ name, status = 'trial', trialDays = null, createdB
     const err = new Error('logo_url skal starte med https://.');
     err.code = 'VALIDATION'; throw err;
   }
+  // NYT (single login): begge valgfri, men skal følges ad — et login_email
+  // uden password ville være en konto, ingen nogensinde kan logge ind på;
+  // et password uden login_email ville aldrig kunne slås op ved login.
+  if ((loginEmail && !password) || (password && !loginEmail)) {
+    const err = new Error('login_email og password skal enten begge angives, eller ingen af dem.');
+    err.code = 'VALIDATION'; throw err;
+  }
+  const passwordHash = password ? await bcrypt.hash(password, BCRYPT_ROUNDS) : null;
   const { rows } = await query(
-    `INSERT INTO tenants (name, status, trial_started_at, trial_expires_at, created_by, logo_url)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING id, name, status, trial_started_at, trial_expires_at, created_at, logo_url`,
-    [name, status, trialStartedAt, trialExpiresAt, createdBy, logoUrl]
+    `INSERT INTO tenants (name, status, trial_started_at, trial_expires_at, created_by, logo_url, country_code, login_email, password_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, name, status, trial_started_at, trial_expires_at, created_at, logo_url, country_code`,
+    [name, status, trialStartedAt, trialExpiresAt, createdBy, logoUrl, countryCode, loginEmail ? loginEmail.toLowerCase().trim() : null, passwordHash]
   );
   return rows[0];
+}
+
+/**
+ * Sætter/erstatter en tenants login_email+password — samme regel som
+ * createTenant() (begge eller ingen). Kaldt både af staff (ved oprettelse
+ * eller senere) og tænkt genbrugt af en fremtidig selvbetjent "skift
+ * adgangskode"-side i selve kommune-dashboardet (findes endnu ikke, se
+ * planens afgrænsning).
+ * @param {string} tenantId
+ * @param {{loginEmail: string, password: string}} p
+ */
+async function setTenantPassword(tenantId, { loginEmail, password }) {
+  if (!loginEmail || !password) {
+    const err = new Error('login_email og password er begge påkrævet.');
+    err.code = 'VALIDATION'; throw err;
+  }
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  await query(
+    `UPDATE tenants SET login_email = $2, password_hash = $3 WHERE id = $1`,
+    [tenantId, loginEmail.toLowerCase().trim(), passwordHash]
+  );
+}
+
+/**
+ * Verificerer email+password mod tenants.login_email/password_hash — den
+ * NYE tredje adgangsvej ved siden af trial-link og OAuth (se filhovedets "to
+ * veje ind", nu tre). Samme generiske null-ved-enten-fejl og timing-safe
+ * dummy-hash-princip som admin-users.js's verifyAdminUserPassword() — se
+ * dens kommentar for den fulde begrundelse.
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<{tenantId: string, tenantName: string, tenantStatus: string, countryCode: string}|null>}
+ */
+async function verifyTenantPassword(email, password) {
+  if (!email || !password) return null;
+  const { rows } = await query(
+    `SELECT id, name, status, country_code, password_hash FROM tenants WHERE login_email = $1`,
+    [String(email).toLowerCase().trim()]
+  );
+  const row = rows[0];
+  if (!row || !row.password_hash) {
+    await bcrypt.compare(password, '$2a$12$C6UzMDM.H6dfI/f/IKcEeO0h5vN6q6zLGZ4jK9CqMkQ4jz2Zc.5Fq');
+    return null;
+  }
+  const match = await bcrypt.compare(password, row.password_hash);
+  if (!match) return null;
+  return { tenantId: row.id, tenantName: row.name, tenantStatus: row.status, countryCode: row.country_code };
 }
 
 /**
@@ -173,13 +268,13 @@ async function issueTrialLogin({ tenantId, expiresAt, issuedBy = null, note = nu
  * kunne logge ind flere gange over hele trial-perioden med samme link, ikke
  * kun én gang. Tilbagekaldes eksplicit (revoked_at) eller udløber (expires_at).
  * @param {string} rawToken
- * @returns {Promise<{tenantId: string, tenantName: string, tenantStatus: string}|null>}
+ * @returns {Promise<{tenantId: string, tenantName: string, tenantStatus: string, countryCode: string}|null>}
  */
 async function consumeTrialLogin(rawToken) {
   if (!rawToken || typeof rawToken !== 'string') return null;
   const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
   const { rows } = await query(
-    `SELECT ttl.tenant_id, ttl.expires_at, ttl.revoked_at, t.name, t.status
+    `SELECT ttl.tenant_id, ttl.expires_at, ttl.revoked_at, t.name, t.status, t.country_code
      FROM tenant_trial_logins ttl
      JOIN tenants t ON t.id = ttl.tenant_id
      WHERE ttl.token_hash = $1`,
@@ -189,7 +284,7 @@ async function consumeTrialLogin(rawToken) {
   if (!row) return null;
   if (row.revoked_at) return null;
   if (new Date(row.expires_at).getTime() < Date.now()) return null;
-  return { tenantId: row.tenant_id, tenantName: row.name, tenantStatus: row.status };
+  return { tenantId: row.tenant_id, tenantName: row.name, tenantStatus: row.status, countryCode: row.country_code };
 }
 
 // ── Iframe-indlejrings-tokens (Overløb-fanen, bruger-ønske 2026-08-19) ──────
@@ -247,7 +342,7 @@ async function revokeEmbedTokensForTenant(tenantId) {
 /** @param {string} tenantId */
 async function getTenant(tenantId) {
   const { rows } = await query(
-    `SELECT id, name, status, trial_started_at, trial_expires_at, agreement_signed_at, created_at, logo_url
+    `SELECT id, name, status, trial_started_at, trial_expires_at, agreement_signed_at, created_at, logo_url, country_code, login_email
      FROM tenants WHERE id = $1`,
     [tenantId]
   );
@@ -261,11 +356,23 @@ async function getTenant(tenantId) {
 // IKKE har for en kommune de ikke selv oprettede. Ingen status-filter — en
 // suspenderet/udløbet kommune skal stadig kunne findes og gives et nyt
 // login-link til, blot tydeligt markeret som sådan i UI'en (se kaldestedet).
-async function listTenants() {
-  const { rows } = await query(
-    `SELECT id, name, status, trial_expires_at, created_at
-     FROM tenants ORDER BY name`
-  );
+//
+// NYT (single auth-løsning på tværs af dkvand/ukwater/frwater): valgfrit
+// countryCode-filter — en country-tier staff-bruger må kun se sit eget lands
+// tenants (se server.js's requireStaffSession), en system-tier bruger ser
+// alle (kalder uden filter).
+// @param {{countryCode?: string|null}} [p]
+async function listTenants({ countryCode = null } = {}) {
+  const { rows } = countryCode
+    ? await query(
+        `SELECT id, name, status, trial_expires_at, created_at, country_code
+         FROM tenants WHERE country_code = $1 ORDER BY name`,
+        [countryCode]
+      )
+    : await query(
+        `SELECT id, name, status, trial_expires_at, created_at, country_code
+         FROM tenants ORDER BY country_code, name`
+      );
   return rows;
 }
 
@@ -565,6 +672,8 @@ module.exports = {
   ...oauthValidation,
   // tenant/trial CRUD
   createTenant,
+  setTenantPassword,
+  verifyTenantPassword,
   issueTrialLogin,
   consumeTrialLogin,
   issueEmbedToken,

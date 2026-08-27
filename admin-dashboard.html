@@ -41,6 +41,14 @@
     border-radius: 6px; padding: .4rem .75rem; font-size: .78rem; cursor: pointer;
   }
   .dash-logout-fixed:hover { background: rgba(255,255,255,.06); }
+  /* NYT (single login, selvbetjent) — samme fixed-placering som logout,
+     lige til venstre for den. */
+  .dash-setpw-fixed {
+    position: fixed; top: 1rem; right: 6.2rem; z-index: 100;
+    background: var(--card); border: 1px solid var(--border); color: var(--ink-soft);
+    border-radius: 6px; padding: .4rem .75rem; font-size: .78rem; text-decoration: none;
+  }
+  .dash-setpw-fixed:hover { background: rgba(255,255,255,.06); color: var(--ink); }
   h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
   .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
   /* NYT (bruger-krav 2026-08-20 — "selve dashboard skal bruge dette
@@ -446,6 +454,7 @@
 </style>
 </head>
 <body>
+<a class="dash-setpw-fixed" href="/set-password" title="Sæt eller skift adgangskode til direkte login på /login">Sæt adgangskode</a>
 <button type="button" class="dash-logout-fixed" onclick="logout()">Log ud</button>
 <div class="wrap">
   <div id="content">Indlæser…</div>
@@ -503,7 +512,7 @@ function render() {
       ${t.logoUrl ? `<img class="dash-logo" src="${escHtml(t.logoUrl)}" alt="" onerror="this.remove()">` : ''}
       <div>
         <h1>🏛 ${escHtml(t.name)}</h1>
-        <div class="sub">Kommune-dashboard — logget ind via ${t.authMethod === 'trial' ? 'trial-adgang' : 'kommunens eget OAuth-login'}</div>
+        <div class="sub">Kommune-dashboard — logget ind via ${{ trial: 'trial-adgang', oauth: 'kommunens eget OAuth-login', password: 'e-mail/adgangskode' }[t.authMethod] || 'ukendt metode'}</div>
       </div>
     </div>
 

@@ -83,6 +83,7 @@
 <div class="wrap">
   <h1>🏛 Sales-portal</h1>
   <div class="sub">Internt værktøj — kommune-benchmark for alle kommuner, samt trial-oprettelse og login til eksisterende kommuner.</div>
+  <div class="sub" id="staff-identity" style="margin-top:-1rem"></div>
 
   <div class="card">
     <h2>Kommune-benchmark — alle kommuner</h2>
@@ -142,9 +143,82 @@
         <label for="f-logo-url">Logo-URL (valgfri — vises i kommunens overstyrings-banner)</label>
         <input type="url" id="f-logo-url" placeholder="https://...">
       </div>
+      <!-- NYT (single login): valgfrit — giver kommunen ADGANG TIL, ved
+           siden af trial-linket, at logge ind direkte på /login med e-mail +
+           adgangskode. Begge felter skal enten udfyldes sammen eller begge
+           stå tomme (se tenant-admin.js's createTenant()). -->
+      <div class="field">
+        <label for="f-login-email">Login-e-mail (valgfri — gør adgangskode-login muligt på /login)</label>
+        <input type="email" id="f-login-email" placeholder="fx kontakt@kommune.dk">
+      </div>
+      <div class="field">
+        <label for="f-password">Adgangskode (valgfri, kræver login-e-mail ovenfor)</label>
+        <input type="password" id="f-password" placeholder="Aftal med kontakten — gemmes kun hashet">
+        <div class="field-note">Sæt selv en midlertidig adgangskode og aftal den mundtligt/skriftligt med kontakten, eller lad stå tom og brug kun trial-linket.</div>
+      </div>
       <button type="submit" id="submit-btn">Opret trial</button>
     </form>
     <div id="result"></div>
+  </div>
+
+  <!-- NYT (single auth-løsning dkvand/ukwater/frwater): en UK council/FR
+       mairie har intet match i kommuneKeyToBadesteder (rent dansk PULS-
+       kilde, se kortet ovenfor) og får derfor sit EGET, simplere kort —
+       frit navn + landevælger, samme underliggende POST /internal/api/
+       create-trial, blot med et eksplicit countryCode i stedet for det
+       faste 'DK' ovenfor. Selve login-linket dkvand genererer sender
+       automatisk brugeren videre til det rigtige produkt ved forbrug
+       (se server.js's GET /admin/trial/:token), ingen forskel for
+       modtageren af linket. -->
+  <div class="card">
+    <h2>Opret ny municipality (uden for Danmark)</h2>
+    <div class="sub" style="margin-bottom:.9rem">For et UK council eller en FR mairie. Kræver et EFTERFØLGENDE trin i det pågældende produkts eget repo (fx ukwater's scripts/create-council-account.js --id=&lt;id nedenfor&gt;) for at koble lokal områdedækning på — dette kort opretter kun selve kontoen/login-linket.</div>
+    <form id="mform" onsubmit="return submitMunicipalityForm(event)">
+      <div class="field">
+        <label for="m-country">Land</label>
+        <select id="m-country" required onchange="loadLocalAuthorityOptions()">
+          <option value="" disabled selected>Vælg land…</option>
+          <option value="UK">United Kingdom (ukwater)</option>
+          <option value="FR">France (frwater)</option>
+        </select>
+      </div>
+      <!-- NYT (bruger-krav — "man skal ikke kunne oprette et nyt, kun
+           vælge blandt eksisterende"): SAMME princip som DK-kortets egen
+           kommune-vælger ovenfor (loadKommuneOptions()) — fri tekst kunne
+           skabe en central konto, der ALDRIG matcher noget i step 2 (se
+           scripts/create-council-account.js's/create-mairie-account.js's
+           navnematch), eller indeholde en tastefejl ingen opdager før
+           kommunen/council/mairie allerede er oprettet. Listen hentes
+           CROSS-ORIGIN direkte fra det valgte produkts EGEN reference-data
+           (ukwater's/frwater's GET /api/local-authorities, ny, dedikeret,
+           CORS-scoped til lige netop dette site — se den rute for
+           begrundelsen), ikke duplikeret/vedligeholdt her i dkvand. -->
+      <div class="field">
+        <label for="m-name">Navn</label>
+        <select id="m-name" required disabled>
+          <option value="" disabled selected>Vælg land først…</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="m-days">Trial-længde (dage)</label>
+        <input type="number" id="m-days" required min="1" step="1" value="30">
+      </div>
+      <div class="field">
+        <label for="m-issued-by">Dit navn</label>
+        <input type="text" id="m-issued-by" required placeholder="Fx: Kresten">
+      </div>
+      <!-- NYT (single login) — samme valgfrie par som DK-kortet ovenfor. -->
+      <div class="field">
+        <label for="m-login-email">Login-e-mail (valgfri — gør adgangskode-login muligt på /login)</label>
+        <input type="email" id="m-login-email" placeholder="fx contact@council.uk">
+      </div>
+      <div class="field">
+        <label for="m-password">Adgangskode (valgfri, kræver login-e-mail ovenfor)</label>
+        <input type="password" id="m-password" placeholder="Aftal med kontakten — gemmes kun hashet">
+      </div>
+      <button type="submit" id="msubmit-btn">Opret municipality</button>
+    </form>
+    <div id="mresult"></div>
   </div>
 
   <div class="card">
@@ -320,13 +394,61 @@ async function loadTenantOptions() {
       sel.innerHTML = '<option value="" disabled selected>Ingen kommuner fundet</option>';
       return;
     }
-    sel.innerHTML = list.map(t => `<option value="${escHtml(t.id)}">${escHtml(t.name)} — ${escHtml(tenantStatusLabel(t))}</option>`).join('');
+    sel.innerHTML = list.map(t => `<option value="${escHtml(t.id)}">[${escHtml(t.country_code || 'DK')}] ${escHtml(t.name)} — ${escHtml(tenantStatusLabel(t))}</option>`).join('');
   } catch (e) {
     sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
   }
 }
+// NYT (bruger-krav — vælg blandt eksisterende, ikke fri tekst): hvert
+// produkts base-URL, samme værdier som header-login-linket i deres egne
+// index-sider — se GET /api/local-authorities's filhoved (server.js der)
+// for hvorfor dette er en EGEN, let rute frem for at genbruge de allerede
+// eksisterende GET /api/derived-file/*-ruter.
+const LOCAL_AUTHORITY_SOURCE_BASE_URL = { UK: 'https://ukwater.fly.dev', FR: 'https://frwater.fly.dev' };
+
+async function loadLocalAuthorityOptions() {
+  const countrySel = document.getElementById('m-country');
+  const nameSel = document.getElementById('m-name');
+  const country = countrySel.value;
+  const baseUrl = LOCAL_AUTHORITY_SOURCE_BASE_URL[country];
+  if (!baseUrl) return;
+
+  nameSel.disabled = true;
+  nameSel.innerHTML = '<option value="" disabled selected>Indlæser…</option>';
+  try {
+    const resp = await fetch(`${baseUrl}/api/local-authorities`);
+    const list = await resp.json();
+    if (!resp.ok || !Array.isArray(list) || list.length === 0) {
+      nameSel.innerHTML = '<option value="" disabled selected>Kunne ikke hente listen — prøv igen</option>';
+      return;
+    }
+    nameSel.innerHTML = '<option value="" disabled selected>Vælg…</option>' +
+      list.map(a => `<option value="${escHtml(a.name)}">${escHtml(a.name)} (${a.bathingSiteCount} badested${a.bathingSiteCount === 1 ? '' : 'er'})</option>`).join('');
+    nameSel.disabled = false;
+  } catch (e) {
+    nameSel.innerHTML = '<option value="" disabled selected>Kunne ikke hente listen — prøv igen</option>';
+  }
+}
+
 loadKommuneOptions();
 loadTenantOptions();
+
+// NYT (single auth-løsning): viser hvem der er logget ind + en log ud-knap.
+async function loadStaffIdentity() {
+  const el = document.getElementById('staff-identity');
+  try {
+    const resp = await fetch('/internal/api/me');
+    if (!resp.ok) return;
+    const staff = await resp.json();
+    const scope = staff.role === 'system' ? 'system (alle lande)' : `country (${escHtml(staff.countryCode)})`;
+    el.innerHTML = `Logget ind som ${escHtml(staff.email)} — ${scope} · <a href="#" onclick="logout(); return false;" style="color:var(--accent)">Log ud</a>`;
+  } catch (e) { /* stille fejl — kun en visuel bekvemmelighed */ }
+}
+async function logout() {
+  await fetch('/internal/logout', { method: 'POST' });
+  location.href = '/internal/login';
+}
+loadStaffIdentity();
 
 // NYT (bruger-ønske 2026-08-18 — direkte login uden at skulle kopiere/åbne
 // et link separat): udtrukket fælles kald, genbrugt af BÅDE
@@ -434,6 +556,13 @@ async function submitForm(e) {
   const issuedBy = document.getElementById('f-issued-by').value.trim();
   const note = document.getElementById('f-note').value.trim();
   const logoUrl = document.getElementById('f-logo-url').value.trim();
+  const loginEmail = document.getElementById('f-login-email').value.trim();
+  const password = document.getElementById('f-password').value;
+
+  if ((loginEmail && !password) || (password && !loginEmail)) {
+    resultEl.innerHTML = '<div class="err">Login-e-mail og adgangskode skal enten begge udfyldes, eller begge stå tomme.</div>';
+    return false;
+  }
 
   btn.disabled = true;
   btn.textContent = 'Opretter…';
@@ -446,6 +575,13 @@ async function submitForm(e) {
         name, days, issuedBy,
         note: note || null,
         logoUrl: logoUrl || null,
+        loginEmail: loginEmail || null,
+        password: password || null,
+        // Denne formular matcher UDELUKKENDE mod dansk PULS-badevandsdata
+        // (se loadKommuneOptions()) — altid en dansk kommune. En 'country'-
+        // konto for et andet land ville alligevel få dette overstyret
+        // server-side (se server.js's POST /internal/api/create-trial).
+        countryCode: 'DK',
       }),
     });
     const data = await resp.json();
@@ -467,6 +603,59 @@ async function submitForm(e) {
   } finally {
     btn.disabled = false;
     btn.textContent = 'Opret trial';
+  }
+  return false;
+}
+
+// NYT (single auth-løsning): SAMME /internal/api/create-trial som ovenfor,
+// blot med et frit navn og et eksplicit countryCode i stedet for det
+// kommune-matchede navn/faste 'DK'. En 'country'-konto får alligevel sit
+// eget countryCode håndhævet server-side, uanset hvad der vælges her.
+async function submitMunicipalityForm(e) {
+  e.preventDefault();
+  const btn = document.getElementById('msubmit-btn');
+  const resultEl = document.getElementById('mresult');
+  const name = document.getElementById('m-name').value.trim();
+  const countryCode = document.getElementById('m-country').value;
+  const days = Number(document.getElementById('m-days').value);
+  const issuedBy = document.getElementById('m-issued-by').value.trim();
+  const loginEmail = document.getElementById('m-login-email').value.trim();
+  const password = document.getElementById('m-password').value;
+
+  if ((loginEmail && !password) || (password && !loginEmail)) {
+    resultEl.innerHTML = '<div class="err">Login-e-mail og adgangskode skal enten begge udfyldes, eller begge stå tomme.</div>';
+    return false;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Opretter…';
+  resultEl.innerHTML = '';
+  try {
+    const resp = await fetch('/internal/api/create-trial', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, days, issuedBy, countryCode, loginEmail: loginEmail || null, password: password || null }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke oprette municipality.')}</div>`;
+      return;
+    }
+    resultEl.innerHTML = `
+      <div class="result">
+        ✓ Oprettet: <strong>${escHtml(data.tenant.name)}</strong> (${escHtml(data.tenant.countryCode)}, id: ${escHtml(data.tenant.id)}).
+        <br>Næste trin: kør produktets egen scripts/create-council-account.js (eller tilsvarende) med <code>--id=${escHtml(data.tenant.id)}</code> for at koble lokal områdedækning på.
+        <br>Login-link (send til kontakten, vises kun denne ene gang):
+        <span class="result-url">${escHtml(data.loginUrl)}</span>
+      </div>
+    `;
+    document.getElementById('mform').reset();
+    document.getElementById('m-days').value = '30';
+  } catch (e) {
+    resultEl.innerHTML = '<div class="err">Kunne ikke oprette municipality — tjek din forbindelse.</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Opret municipality';
   }
   return false;
 }

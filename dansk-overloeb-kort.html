@@ -197,6 +197,17 @@
     flex-shrink: 0;
   }
 
+  /* NYT (single login på tværs af dkvand/ukwater/frwater) — ét login-link i
+     hovedmenuen, venstre for status-dot'en. Samme link/side (/login) betjener
+     BÅDE municipality (kommune/council/mairie) og system-/country-staff, se
+     login.html/server.js's POST /login. */
+  .header-login-link {
+    font-family: var(--sans, inherit); font-size: .78rem; font-weight: 700;
+    color: var(--ink-soft); text-decoration: none; white-space: nowrap;
+    padding: .3rem .5rem; border-radius: 6px; flex-shrink: 0;
+  }
+  .header-login-link:hover { color: var(--ink); background: rgba(255,255,255,.06); }
+
   @keyframes pulse {
     0%,100% { opacity: 1; }
     50%      { opacity: .2; }
@@ -1978,6 +1989,7 @@
     <button class="tab-btn" id="tab-btn-kommuner" onclick="openKommunerTab()">Kommuner</button>
   </div>
   <div class="spacer"></div>
+  <a class="header-login-link" href="/login" title="Log ind — kommune-/council-/mairie-adgang eller internt personale">Log ind</a>
   <span id="status-dot" class="blink" title="Tjenesten kører"></span>
   <!-- Skjulte elementer — al eksisterende status-opdaterings-kode skriver
        stadig hertil, men de vises ikke længere permanent i selve headeren

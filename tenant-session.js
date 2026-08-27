@@ -136,7 +136,7 @@ function verifyPayload(cookieValue) {
 }
 
 /**
- * @param {{tenantId: string, authMethod: 'trial'|'oauth'}} p
+ * @param {{tenantId: string, authMethod: 'trial'|'oauth'|'password'}} p
  * @returns {string} cookieværdi (ikke selve Set-Cookie-headeren)
  */
 // NYT (Kommunepakke, modul 6): `email` er VALGFRI — kun OAuth-sessioner har

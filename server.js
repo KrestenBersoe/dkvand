@@ -81,6 +81,13 @@ const tenantAdmin  = require('./tenant-admin');
 // NYT (Kommunepakke, modul 3): dynamisk OAuth-login (openid-client) — se
 // modulets eget filhoved.
 const oauthLogin   = require('./oauth-login');
+// NYT (single auth-løsning dkvand/ukwater/frwater): system-/country-tier
+// staff-konti — erstatter det tidligere requireInternalAuth (delt Basic-
+// Auth-kodeord). Se modulets eget filhoved.
+const adminUsers   = require('./admin-users');
+// NYT (samme løsning): kryptografisk håndsrækning af et fuldført
+// municipality-login videre til ukwater/frwater, når tenanten ikke er dansk.
+const ssoHandoff   = require('./sso-handoff');
 // NYT (Kommunepakke, modul 4): tenant -> badesteder-mapping (normaliseret
 // kommune-navnematch) — se modulets eget filhoved.
 const tenantBadesteder = require('./tenant-badesteder');
@@ -522,6 +529,43 @@ app.get('/stats', (req, res) => {
 // (samme begrundelse som Tier 1/2/3-URL-arkitekturens routes ovenfor).
 // ═══════════════════════════════════════════════════════════════════════════
 
+// NYT (single auth-løsning — genbrugt af trial-login, OAuth-callback OG det
+// nye samlede /login nedenfor): en tenant kan i dag også være et UK council
+// eller en FR mairie (se tenant-admin.js's country_code) — dkvand er den
+// ENESTE plads login rent faktisk sker, så et ikke-dansk login afsluttes ved
+// at sende brugeren videre til det rigtige produkt i stedet for at sætte
+// dkvands egen sessions-cookie. UDTRUKKET hertil fremfor tredoblet inline i
+// alle tre kaldesteder — al fremtidig ret til "hvad sker der efter et
+// vellykket tenant-login" bør kun skulle laves ét sted.
+// `extraSetCookie` (string|string[], optional) — oauth/callback needs to
+// clear its short-lived state cookie REGARDLESS of which branch fires below,
+// and res.set('Set-Cookie', ...) OVERWRITES rather than appends (see the
+// oauth callback's own long-standing comment on this) — so a caller with an
+// extra cookie to send passes it here instead of calling res.set() itself,
+// and this function is the ONLY place that ever calls res.set('Set-Cookie', ...).
+// @returns {Promise<boolean>} true hvis res allerede er besvaret (redirect
+//   eller sessions-cookie sat) — false ved en intern fejl (ukendt
+//   country_code), hvor kaldestedet selv sender fejlsvaret.
+async function completeMunicipalityLogin(res, { tenantId, tenantName, countryCode, authMethod, email = undefined, extraSetCookie = null }) {
+  if (countryCode && countryCode !== ssoHandoff.THIS_PRODUCT_COUNTRY) {
+    const redirectUrl = await ssoHandoff.buildMunicipalityHandoffRedirect({
+      countryCode, municipalityId: tenantId, municipalityName: tenantName,
+    });
+    if (extraSetCookie) res.set('Set-Cookie', extraSetCookie);
+    if (!redirectUrl) {
+      console.error(`completeMunicipalityLogin: ukendt country_code "${countryCode}" for tenant ${tenantId} — countries-tabellen mangler denne kode.`);
+      return false;
+    }
+    res.redirect(redirectUrl);
+    return true;
+  }
+  const cookieValue = tenantAdmin.signSession(email !== undefined ? { tenantId, authMethod, email } : { tenantId, authMethod });
+  const sessionSetCookie = tenantAdmin.buildSessionSetCookieHeader(cookieValue);
+  res.set('Set-Cookie', extraSetCookie ? [].concat(extraSetCookie, sessionSetCookie) : sessionSetCookie);
+  res.redirect('/admin/dashboard');
+  return true;
+}
+
 // Trial-login: hasher token'et, slår op, sætter sessions-cookien, redirect.
 // Fejler ALTID til en generisk fejlbesked (aldrig "token findes ikke" vs.
 // "token udløbet" separat) — et gættet/forsøgt token skal ikke kunne
@@ -534,9 +578,8 @@ app.get('/admin/trial/:token', async (req, res) => {
       res.set('X-Robots-Tag', 'noindex, nofollow');
       return res.status(401).type('text/plain').send('Login-link er ugyldigt, udløbet eller tilbagekaldt.');
     }
-    const cookieValue = tenantAdmin.signSession({ tenantId: trial.tenantId, authMethod: 'trial' });
-    res.set('Set-Cookie', tenantAdmin.buildSessionSetCookieHeader(cookieValue));
-    res.redirect('/admin/dashboard');
+    const ok = await completeMunicipalityLogin(res, { tenantId: trial.tenantId, tenantName: trial.tenantName, countryCode: trial.countryCode, authMethod: 'trial' });
+    if (!ok) res.status(500).type('text/plain').send('Kunne ikke behandle login-linket lige nu.');
   } catch (e) {
     console.error('admin/trial: uventet fejl —', e.message);
     res.status(500).type('text/plain').send('Kunne ikke behandle login-linket lige nu.');
@@ -550,62 +593,89 @@ app.get('/admin/trial/:token', async (req, res) => {
 // tenantAdmin.createTenant()/issueTrialLogin()-kald, blot bag en HTTP-rute
 // fremfor en CLI, så salgsmedarbejdere selv kan generere et login-link.
 //
-// BEVIDST simpel auth: ÉT delt kodeord (INTERNAL_ADMIN_PASSWORD, Fly secret),
-// tjekket via HTTP Basic Auth — IKKE et rigtigt personligt staff-login (der
-// findes stadig ingen web-baseret platform-admin-brugerdatabase, samme
-// bevidste "uden for scope" som tenant-admin.js's filhoved allerede
-// beskriver for selve CLI-scriptet). Tilstrækkeligt til at holde det UDE AF
-// offentlighedens rækkevidde uden at bygge et helt login-system for et lille,
-// betroet internt team — men giver INGEN person-specifik audit-log (kun
-// hvad brugeren selv skriver i "issued-by"-feltet, ikke verificeret).
-// Genovervej en rigtig intern login-løsning, hvis det behov opstår.
-function requireInternalAuth(req, res, next) {
-  const expected = process.env.INTERNAL_ADMIN_PASSWORD || '';
-  if (!expected) {
-    return res.status(503).type('text/plain').send('Internt værktøj er ikke konfigureret (INTERNAL_ADMIN_PASSWORD mangler som Fly secret).');
+// NYT (single auth-løsning dkvand/ukwater/frwater): erstatter det tidligere
+// ÉT delt Basic-Auth-kodeord (INTERNAL_ADMIN_PASSWORD) med rigtige
+// person-specifikke system-/country-konti (admin-users.js) — se dens
+// filhoved for hvorfor. req.staff = {adminUserId, email, role, countryCode}
+// sat af adminUsers.requireStaffSession herefter.
+app.get('/internal/login', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.set('X-Robots-Tag', 'noindex, nofollow');
+  res.sendFile(path.join(STATIC_DIR, 'internal-login.html'));
+});
+
+app.post('/internal/login', express.urlencoded({ extended: false }), async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim();
+    const password = String(req.body?.password || '');
+    const staff = await adminUsers.verifyAdminUserPassword(email, password);
+    if (!staff) {
+      return res.redirect('/internal/login?error=' + encodeURIComponent('Forkert e-mail eller adgangskode.'));
+    }
+    const cookieValue = adminUsers.signStaffSession(staff);
+    res.set('Set-Cookie', adminUsers.buildStaffSessionSetCookieHeader(cookieValue));
+    res.redirect('/internal/sales');
+  } catch (e) {
+    console.error('internal/login POST: uventet fejl —', e.message);
+    res.redirect('/internal/login?error=' + encodeURIComponent('Der opstod en uventet fejl — prøv igen.'));
   }
-  const authHeader = req.headers.authorization || '';
-  const [scheme, encoded] = authHeader.split(' ');
-  let providedPassword = '';
-  if (scheme === 'Basic' && encoded) {
-    const decoded = Buffer.from(encoded, 'base64').toString('utf8');
-    const sepIdx = decoded.indexOf(':');
-    providedPassword = sepIdx >= 0 ? decoded.slice(sepIdx + 1) : decoded;
-  }
-  // RETTET: timingSafeEqual kaster hvis buffer-længderne ikke matcher (i
-  // stedet for blot at returnere false) — kræver derfor et eksplicit
-  // længde-tjek FØRST, ellers ville et forkert-langt kodeord crashe
-  // requesten i stedet for pænt at give 401.
-  const a = Buffer.from(providedPassword);
-  const b = Buffer.from(expected);
-  const match = a.length === b.length && crypto.timingSafeEqual(a, b);
-  if (!match) {
-    res.set('WWW-Authenticate', 'Basic realm="Internt vaerktoej"');
-    return res.status(401).type('text/plain').send('Login paakraevet.');
-  }
-  next();
+});
+
+// NYT (single auth-løsning): giver internal-sales.html/internal-create-
+// trial.html's frontend-JS noget at vise ("logget ind som X") og et
+// grundlag for at skjule/tilpasse UI efter rolle — se req.staff's felter.
+app.get('/internal/api/me', adminUsers.requireStaffSession, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json(req.staff);
+});
+
+app.post('/internal/logout', (req, res) => {
+  res.set('Set-Cookie', adminUsers.buildClearStaffSessionSetCookieHeader());
+  res.redirect('/internal/login');
+});
+
+// NYT: en 'country'-bruger må kun nogensinde se/handle på sit eget lands
+// tenants, selv hvis de kender/gætter en tenant-id fra et andet land — dette
+// tjek er DEFENSE IN DEPTH oveni at listTenants() i sig selv allerede filtrerer
+// (se dens kaldested nedenfor); ruter der slår en enkelt tenant op via :id
+// (fx login-link-udstedelse) har ikke den beskyttelse fra filtreringen alene.
+function requireOwnCountry(tenant, staff) {
+  return staff.role === 'system' || tenant.country_code === staff.countryCode;
 }
 
-app.get('/internal/create-trial', requireInternalAuth, (req, res) => {
+app.get('/internal/create-trial', adminUsers.requireStaffSession, (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.set('X-Robots-Tag', 'noindex, nofollow');
   res.sendFile(path.join(STATIC_DIR, 'internal-create-trial.html'));
 });
 
-app.post('/internal/api/create-trial', requireInternalAuth, express.json(), async (req, res) => {
+app.post('/internal/api/create-trial', adminUsers.requireStaffSession, express.json(), async (req, res) => {
   try {
     const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
     const days = Number(req.body?.days);
     const issuedBy = typeof req.body?.issuedBy === 'string' ? req.body.issuedBy.trim() : '';
     const note = typeof req.body?.note === 'string' && req.body.note.trim() ? req.body.note.trim() : null;
     const logoUrl = typeof req.body?.logoUrl === 'string' && req.body.logoUrl.trim() ? req.body.logoUrl.trim() : null;
+    // NYT (single login): begge valgfri — se tenant-admin.js's createTenant()
+    // for reglen om at de skal følges ad. Lader staff give kommunen en
+    // e-mail/adgangskode-login med det samme, ved siden af det trial-link,
+    // der altid udstedes uanset (se nedenfor).
+    const loginEmail = typeof req.body?.loginEmail === 'string' && req.body.loginEmail.trim() ? req.body.loginEmail.trim() : null;
+    const password = typeof req.body?.password === 'string' && req.body.password ? req.body.password : null;
+    // NYT (single auth-løsning): en 'country'-bruger kan kun nogensinde
+    // oprette en tenant i sit EGET land — body-feltet ignoreres for dem,
+    // uanset hvad klienten sender. En 'system'-bruger skal angive det
+    // eksplicit (ingen "gæt" på tværs af tre lande).
+    const countryCode = req.staff.role === 'country' ? req.staff.countryCode
+      : (typeof req.body?.countryCode === 'string' ? req.body.countryCode.trim().toUpperCase() : '');
 
     if (!name) return res.status(400).json({ error: 'Kommunens navn mangler.' });
     if (!Number.isFinite(days) || days <= 0) return res.status(400).json({ error: 'Trial-længde skal være et positivt antal dage.' });
     if (!issuedBy) return res.status(400).json({ error: 'Dit navn mangler.' });
+    if (!countryCode) return res.status(400).json({ error: 'Land mangler.' });
 
     const tenant = await tenantAdmin.createTenant({
-      name, status: 'trial', trialDays: days, createdBy: issuedBy, logoUrl,
+      name, status: 'trial', trialDays: days, createdBy: issuedBy, logoUrl, countryCode, loginEmail, password,
     });
     const rawToken = await tenantAdmin.issueTrialLogin({
       tenantId: tenant.id, expiresAt: tenant.trial_expires_at, issuedBy, note,
@@ -613,12 +683,24 @@ app.post('/internal/api/create-trial', requireInternalAuth, express.json(), asyn
     const loginUrl = `${seoPages.SITE_URL}/admin/trial/${rawToken}`;
 
     res.json({
-      tenant: { id: tenant.id, name: tenant.name, trialExpiresAt: tenant.trial_expires_at },
+      tenant: { id: tenant.id, name: tenant.name, trialExpiresAt: tenant.trial_expires_at, countryCode: tenant.country_code },
       loginUrl,
     });
   } catch (e) {
     if (e.code === 'VALIDATION') {
       return res.status(400).json({ error: e.message });
+    }
+    // Ugyldigt countryCode (findes ikke i countries-tabellen) rammer
+    // Postgres' FK-constraint (23503) — pænere besked end en rå 500 for det
+    // eneste input-fejl-tilfælde ovenstående validering ikke selv fanger.
+    if (e.code === '23503') {
+      return res.status(400).json({ error: 'Ukendt land.' });
+    }
+    // NYT (single login): login_email er unikt på tværs af ALLE tenants
+    // (se tenant-admin.js's idx_tenants_login_email) — en anden kommune har
+    // allerede den e-mail.
+    if (e.code === '23505') {
+      return res.status(400).json({ error: 'En anden kommune/council/mairie bruger allerede den login-e-mail.' });
     }
     console.error('internal/api/create-trial: uventet fejl —', e.message);
     res.status(500).json({ error: 'Kunne ikke oprette trial lige nu.' });
@@ -639,7 +721,13 @@ app.post('/internal/api/create-trial', requireInternalAuth, express.json(), asyn
 // samme fælde som den frie tekst-indtastning allerede advarede imod.
 // Ingen DB-forespørgsel — rent in-memory opslag, samme "kilde allerede i
 // module scope" som computeKommuneBenchmark() selv bruger.
-app.get('/internal/api/kommuner', requireInternalAuth, (req, res) => {
+// NYT (single auth-løsning): denne liste er afledt af danske PULS-badesteds-
+// data (se filhovedet ovenfor) og giver derfor ingen mening for et UK/FR
+// country-tier login — 403 i stedet for at vise en tom/forvirrende liste.
+app.get('/internal/api/kommuner', adminUsers.requireStaffSession, (req, res) => {
+  if (req.staff.role === 'country' && req.staff.countryCode !== 'DK') {
+    return res.status(403).json({ error: 'Kun tilgængelig for danske konti.' });
+  }
   const list = [...kommuneKeyToBadesteder.entries()]
     .filter(([, badesteder]) => badesteder.length > 0)
     .map(([, badesteder]) => ({
@@ -655,10 +743,13 @@ app.get('/internal/api/kommuner', requireInternalAuth, (req, res) => {
 // NYT (bruger-ønske — salgsteamets adgang til EKSISTERENDE kommuner): liste
 // til vælgeren i internal-create-trial.html's nye kort. Ingen status-filter
 // (se listTenants()'s filhoved) — status vises i selve UI'en i stedet.
-app.get('/internal/api/tenants', requireInternalAuth, async (req, res) => {
+app.get('/internal/api/tenants', adminUsers.requireStaffSession, async (req, res) => {
   try {
     res.set('Cache-Control', 'no-store');
-    res.json(await tenantAdmin.listTenants());
+    // NYT (single auth-løsning): 'system' ser alle lande (intet filter),
+    // 'country' ser udelukkende sit eget — se listTenants()'s filhoved.
+    const countryCode = req.staff.role === 'country' ? req.staff.countryCode : null;
+    res.json(await tenantAdmin.listTenants({ countryCode }));
   } catch (e) {
     console.error('internal/api/tenants: uventet fejl —', e.message);
     res.status(500).json({ error: 'Kunne ikke hente kommuneliste lige nu.' });
@@ -675,7 +766,7 @@ app.get('/internal/api/tenants', requireInternalAuth, async (req, res) => {
 // findes" som til en frisk trial. Svarformen matcher BEVIDST /internal/
 // api/create-trial's (samme tenant/loginUrl-felter), så klienten kan
 // genbruge samme visnings-kode for begge.
-app.post('/internal/api/tenants/:id/login-link', requireInternalAuth, express.json(), async (req, res) => {
+app.post('/internal/api/tenants/:id/login-link', adminUsers.requireStaffSession, express.json(), async (req, res) => {
   try {
     const days = Number(req.body?.days);
     const issuedBy = typeof req.body?.issuedBy === 'string' ? req.body.issuedBy.trim() : '';
@@ -686,6 +777,10 @@ app.post('/internal/api/tenants/:id/login-link', requireInternalAuth, express.js
 
     const tenant = await tenantAdmin.getTenant(req.params.id);
     if (!tenant) return res.status(404).json({ error: 'Kommunen findes ikke.' });
+    // NYT (single auth-løsning): se requireOwnCountry()'s filhoved.
+    if (!requireOwnCountry(tenant, req.staff)) {
+      return res.status(403).json({ error: 'Ikke adgang til denne kommune.' });
+    }
 
     const expiresAt = new Date(Date.now() + days * 24 * 3600 * 1000);
     const rawToken = await tenantAdmin.issueTrialLogin({
@@ -703,30 +798,36 @@ app.post('/internal/api/tenants/:id/login-link', requireInternalAuth, express.js
   }
 });
 
-// NYT (bruger-ønske — dedikeret sales-portal): SAMME requireInternalAuth-
-// gate (Basic Auth, INTERNAL_ADMIN_PASSWORD) som resten af /internal/*
-// ovenfor — ingen ny adgangskontrol, kun en NY side der samler trial-
+// NYT (bruger-ønske — dedikeret sales-portal): SAMME adminUsers.
+// requireStaffSession-gate som resten af /internal/* ovenfor — ingen ny
+// adgangskontrol, kun en NY side der samler trial-
 // oprettelse + login-til-eksisterende-kommune (begge allerede byggede
 // ovenfor) med et NYT tredje kort: kommune-benchmark for ALLE kommuner,
 // uden at kræve en tenant-session. internal-sales.html er en SEPARAT fil
 // fra internal-create-trial.html (den forbliver uændret/virker stadig
 // standalone) — undgår at ændre et allerede fungerende værktøj, mens det
 // nye, bredere sales-flow bygges ved siden af.
-app.get('/internal/sales', requireInternalAuth, (req, res) => {
+app.get('/internal/sales', adminUsers.requireStaffSession, (req, res) => {
   res.set('Cache-Control', 'no-store');
   res.set('X-Robots-Tag', 'noindex, nofollow');
   res.sendFile(path.join(STATIC_DIR, 'internal-sales.html'));
 });
 
 // NYT — SAMME computeKommuneBenchmark()/periode-parsing som GET /admin/api/
-// kommune-benchmark (se dens filhoved), men bag requireInternalAuth i
-// stedet for tenantAdmin.requireTenantSession — sales er ikke logget ind
+// kommune-benchmark (se dens filhoved), men bag adminUsers.requireStaffSession
+// i stedet for tenantAdmin.requireTenantSession — sales er ikke logget ind
 // som ÉN kommune, og skal netop kunne se ALLE på én gang (samme "fuld
 // navngivet sammenligning"-beslutning som allerede gælder for kommunernes
 // eget dashboard, se planens sikkerhedsnote for /admin/api/kommune-
 // benchmark — denne rute deler samme egenskab: kun aggregerede tal, aldrig
 // rå operationelle data).
-app.get('/internal/api/kommune-benchmark', requireInternalAuth, async (req, res) => {
+// NYT (single auth-løsning): samme DK-specifikke begrundelse som
+// GET /internal/api/kommuner ovenfor — benchmark'et er beregnet over dansk
+// PULS-badevandsdata og giver ingen mening for et UK/FR country-tier login.
+app.get('/internal/api/kommune-benchmark', adminUsers.requireStaffSession, async (req, res) => {
+  if (req.staff.role === 'country' && req.staff.countryCode !== 'DK') {
+    return res.status(403).json({ error: 'Kun tilgængelig for danske konti.' });
+  }
   try {
     let range;
     if (typeof req.query.from === 'string' && typeof req.query.to === 'string') {
@@ -792,6 +893,90 @@ app.get('/admin/dashboard', tenantAdmin.requireTenantSession, async (req, res) =
 app.post('/admin/logout', (req, res) => {
   res.set('Set-Cookie', tenantAdmin.buildClearSessionSetCookieHeader());
   res.json({ ok: true });
+});
+
+// ── Single login, selvbetjent adgangskode ───────────────────────────────────
+// Lader en ALLEREDE-logget-ind municipality (kommune/council/mairie) selv
+// sætte/skifte den adgangskode, der efterfølgende virker direkte på
+// /login — uden staff-indblanding, i modsætning til internal-sales.html's
+// tilsvarende felt (der sætter en adgangskode VED oprettelse, som en anden
+// person). To HELT forskellige veje ind, samme underliggende
+// tenantAdmin.setTenantPassword():
+//   - En dansk kommune har allerede en lokal dkv_admin_session-cookie (samme
+//     session der giver adgang til /admin/dashboard) — INTET nyt behøves.
+//   - Et UK council/FR mairie har ALDRIG en dkvand-cookie (deres session er
+//     lokal for deres EGET produkt) — de ankommer i stedet med et kortlivet
+//     signeret "assertion"-token, udstedt af deres eget produkts server (se
+//     ukwater/frwater's centralAuthClient.js's signAssertion() og
+//     GET /council|mairie/api/set-password-redirect), som beviser identiteten
+//     UDEN at kræve en session her. Se sso-handoff.js's verifyProductAssertion()
+//     for selve verifikationen/intent-adskillelsen fra login-håndsrækningen.
+async function resolveSetPasswordSubject(req) {
+  const assertionToken = (req.query && req.query.assertion) || (req.body && req.body.assertion);
+  if (assertionToken) {
+    const assertion = ssoHandoff.verifyProductAssertion(assertionToken);
+    if (!assertion) return null;
+    return { tenantId: assertion.municipalityId, tenantName: assertion.municipalityName };
+  }
+  const cookies = tenantAdmin.parseCookies(req.headers.cookie);
+  const session = tenantAdmin.verifySession(cookies[tenantAdmin.SESSION_COOKIE_NAME]);
+  if (!session) return null;
+  const tenant = await tenantAdmin.getTenant(session.tenantId);
+  if (!tenant) return null;
+  return { tenantId: tenant.id, tenantName: tenant.name };
+}
+
+app.get('/set-password', async (req, res) => {
+  try {
+    const subject = await resolveSetPasswordSubject(req);
+    res.set('Cache-Control', 'no-store');
+    if (!subject) {
+      return res.status(401).type('text/plain').send('Linket er udløbet, eller du er ikke logget ind — log ind igen og prøv igen.');
+    }
+    const tenant = await tenantAdmin.getTenant(subject.tenantId);
+    const html = fs.readFileSync(path.join(STATIC_DIR, 'set-password.html'), 'utf8')
+      .replace('%%SET_PASSWORD_JSON%%', JSON.stringify({
+        tenantName: subject.tenantName,
+        currentLoginEmail: tenant ? tenant.login_email : null,
+        // NYT: sendes med tilbage til klienten UDELUKKENDE så POST'en
+        // (samme side, ingen ny GET/redirect) kan genindsende PRÆCIS samme
+        // token — dkvand har ingen anden hukommelse af "hvem er dette" for
+        // et UK/FR-tilfælde mellem GET og POST (ingen session sat noget
+        // sted i dette flow). 10 minutters gyldighed (se sso-handoff.js)
+        // er rigeligt til at nå at udfylde formularen.
+        assertion: req.query.assertion || null,
+      }));
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (e) {
+    console.error('set-password GET: uventet fejl —', e.message);
+    res.status(500).type('text/plain').send('Kunne ikke hente siden lige nu.');
+  }
+});
+
+app.post('/set-password', express.json(), async (req, res) => {
+  try {
+    const subject = await resolveSetPasswordSubject(req);
+    if (!subject) {
+      return res.status(401).json({ error: 'Linket er udløbet, eller du er ikke logget ind — log ind igen og prøv igen.' });
+    }
+    const loginEmail = typeof req.body?.loginEmail === 'string' ? req.body.loginEmail.trim() : '';
+    const password = typeof req.body?.password === 'string' ? req.body.password : '';
+    if (!loginEmail || !password) {
+      return res.status(400).json({ error: 'Både e-mail og adgangskode skal udfyldes.' });
+    }
+    await tenantAdmin.setTenantPassword(subject.tenantId, { loginEmail, password });
+    res.json({ ok: true });
+  } catch (e) {
+    if (e.code === 'VALIDATION') {
+      return res.status(400).json({ error: e.message });
+    }
+    if (e.code === '23505') {
+      return res.status(400).json({ error: 'En anden konto bruger allerede den e-mail.' });
+    }
+    console.error('set-password POST: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke gemme adgangskoden lige nu.' });
+  }
 });
 
 // ── Kommunepakke, modul 2 — selvbetjent OAuth-konfigurationsflow ───────────
@@ -884,6 +1069,56 @@ app.post('/admin/settings/oauth', tenantAdmin.requireTenantSession, express.json
   }
 });
 
+// ── Samlet login (single auth-løsning — system-/country-STAFF og
+// municipality i ÉT skema/formular) ─────────────────────────────────────────
+// Den NYE, tredje adgangsvej ind (ved siden af trial-link og kommunens egen
+// OAuth-udbyder, se tenant-admin.js's filhoved) — bygget til at være det ENE
+// login-link, der linkes til fra hovedmenuens header på tværs af dkvand,
+// ukwater og frwater (se det tilsvarende header-link i de tre index-sider),
+// uanset om den der klikker er egen driftsstaff eller en kommune/council/
+// mairie-kontakt. Tjekker admin_users FØRST (staff, se admin-users.js), så
+// tenants.login_email/password_hash (municipality, se tenant-admin.js's
+// verifyTenantPassword()) — ALDRIG begge dele parallelt/uafhængigt af
+// hinanden, for ikke at risikere at afsløre via timing hvilken slags konto
+// en given e-mail tilhører. Generisk fejlbesked i alle andre tilfælde, se
+// begge underliggende verify-funktioners egen begrundelse.
+app.get('/login', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(STATIC_DIR, 'login.html'));
+});
+
+app.post('/login', express.urlencoded({ extended: false }), async (req, res) => {
+  try {
+    const email = String(req.body?.email || '').trim();
+    const password = String(req.body?.password || '');
+    if (!email || !password) {
+      return res.redirect('/login?error=' + encodeURIComponent('Angiv både e-mail og adgangskode.'));
+    }
+
+    const staff = await adminUsers.verifyAdminUserPassword(email, password);
+    if (staff) {
+      const cookieValue = adminUsers.signStaffSession(staff);
+      res.set('Set-Cookie', adminUsers.buildStaffSessionSetCookieHeader(cookieValue));
+      return res.redirect('/internal/sales');
+    }
+
+    const tenant = await tenantAdmin.verifyTenantPassword(email, password);
+    if (tenant) {
+      const ok = await completeMunicipalityLogin(res, {
+        tenantId: tenant.tenantId, tenantName: tenant.tenantName, countryCode: tenant.countryCode,
+        authMethod: 'password', email,
+      });
+      if (!ok) return res.status(500).type('text/plain').send('Kunne ikke logge ind lige nu.');
+      return;
+    }
+
+    res.redirect('/login?error=' + encodeURIComponent('Forkert e-mail eller adgangskode.'));
+  } catch (e) {
+    console.error('login POST: uventet fejl —', e.message);
+    res.redirect('/login?error=' + encodeURIComponent('Der opstod en uventet fejl — prøv igen.'));
+  }
+});
+
 // ── Kommunepakke, modul 3 — dynamisk OAuth-login ────────────────────────────
 // Se oauth-login.js's filhoved for selve flowet (autorisationskode+PKCE,
 // standard OIDC). Ingen requireTenantSession her — det er JO netop det,
@@ -960,10 +1195,17 @@ app.get(oauthLogin.CALLBACK_PATH, async (req, res) => {
     // valideret/autentificeret af oauth-login.js's handleCallback() ovenfor)
     // — bruges bl.a. til at registrere HVEM der satte en overstyring, se
     // badested-overrides.js.
-    const sessionCookie = tenantAdmin.signSession({ tenantId, authMethod: 'oauth', email });
-    res.set('Set-Cookie', [oauthLogin.buildClearOauthStateSetCookieHeader(), tenantAdmin.buildSessionSetCookieHeader(sessionCookie)]);
+    // NYT (single auth-løsning): samme completeMunicipalityLogin()-hjælper
+    // som /admin/trial/:token og det nye /login bruger — se dens filhoved.
+    // handleCallback() returnerer ikke country_code direkte, så den slås op
+    // via getTenant() (allerede opdateret til at inkludere den).
+    const tenant = await tenantAdmin.getTenant(tenantId);
+    const ok = await completeMunicipalityLogin(res, {
+      tenantId, tenantName: tenant?.name, countryCode: tenant?.country_code, authMethod: 'oauth', email,
+      extraSetCookie: oauthLogin.buildClearOauthStateSetCookieHeader(),
+    });
+    if (!ok) return res.status(500).type('text/plain').send('Kunne ikke behandle login-linket lige nu.');
     console.info(`admin/oauth/callback: login lykkedes for ${email.replace(/^(.).*(@.*)$/, '$1***$2')} (tenant=${tenantId})`);
-    res.redirect('/admin/dashboard');
   } catch (e) {
     res.set('Set-Cookie', oauthLogin.buildClearOauthStateSetCookieHeader());
     // e.message er ALTID bruger-sikker her — se oauth-login.js's
@@ -5293,7 +5535,7 @@ const DAILY_STATS_SNAPSHOT_INTERVAL_MS = 24 * 3600 * 1000;
 // ovenfor (rute-registrering, setInterval-opsætning, den forsinkede
 // warmCache()-opstart) kræver ikke databasen og kører uændret synkront —
 // kun selve lytte-starten er gated.
-Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, badestedOverrides.ready, overloebEvents.ready, pageViews.ready, schema])
+Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, adminUsers.ready, badestedOverrides.ready, overloebEvents.ready, pageViews.ready, schema])
   .then(() => {
     app.listen(PORT, HOST, () => {
       console.log(`Overløbsrisiko server kører på http://${HOST}:${PORT}`);

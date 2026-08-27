@@ -253,6 +253,11 @@ async function submitForm(e) {
         name, days, issuedBy,
         note: note || null,
         logoUrl: logoUrl || null,
+        // Denne formular matcher UDELUKKENDE mod dansk PULS-badevandsdata
+        // (se loadKommuneOptions()) — altid en dansk kommune. En 'country'-
+        // konto for et andet land ville alligevel få dette overstyret
+        // server-side (se server.js's POST /internal/api/create-trial).
+        countryCode: 'DK',
       }),
     });
     const data = await resp.json();
