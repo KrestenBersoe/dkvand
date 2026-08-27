@@ -52,6 +52,15 @@ COPY seo-pages.js ./
 # ikke kun den nye Kommunepakke-funktion.
 COPY tenant-admin.js ./
 COPY tenant-session.js ./
+# RETTET (produktionsudfald 2026-08-27 — SAMME "Cannot find module"-
+# genstarts-loop-fælde beskrevet ovenfor for tenant-admin.js, denne gang med
+# admin-users.js): single auth-løsning på tværs af dkvand/ukwater/frwater —
+# server.js kræver nu også (require('./admin-users'), som selv require'r
+# require('./admin-user-session')) disse to moduler, samt
+# (require('./sso-handoff')) ved opstart.
+COPY admin-users.js ./
+COPY admin-user-session.js ./
+COPY sso-handoff.js ./
 # NYT: Kommunepakke, modul 2 — tenant-admin.js requirer nu også
 # (require('./oauth-config-validation')) dette modul ved opstart, samme
 # "crasher øjeblikkeligt uden denne linje"-fælde som ovenfor. Tilføjet
@@ -109,6 +118,11 @@ COPY admin-oauth-setup.html ./
 COPY admin-login.html ./
 COPY internal-create-trial.html ./
 COPY internal-sales.html ./
+# NYT (single auth-løsning): samme "læses direkte via fs.readFileSync ved
+# hver request"-mønster som de øvrige HTML-filer herover.
+COPY internal-login.html ./
+COPY login.html ./
+COPY set-password.html ./
 COPY overloeb-embed.html ./
 COPY badested-skilt.html ./
 COPY fetch_currents.py ./
