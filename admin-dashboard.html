@@ -481,19 +481,410 @@
 // fil end netop ÉN gang, på linjen nedenfor.
 window.__TENANT__ = %%TENANT_JSON%%;
 
+// ── Localization (bruger-krav 2026-08-30 — "Login og dashboard skal være
+// på dansk, engelsk eller fransk afhængig af hvilket land brugeren kommer
+// fra") ──────────────────────────────────────────────────────────────────
+// LANG kommer fra tenantens EGEN DB-post (countryCode, se server.js's
+// %%TENANT_JSON%%-injektion) — IKKE en URL-parameter som login.html's
+// ?country=, da denne side altid nås via et direkte /admin/dashboard-link
+// efter login, ikke en videresendt parameter. Dansk er default.
+const COUNTRY_TO_LANG = { DK: 'da', UK: 'en', FR: 'fr' };
+const LANG = COUNTRY_TO_LANG[window.__TENANT__?.countryCode] || 'da';
+document.documentElement.lang = LANG;
+
+// T's keys are grouped by the card/section they belong to (matching the
+// dash-toc anchors), not alphabetically — this file's translatable text is
+// spread across ~90 template-literal call sites, and finding "which card
+// is this string on" is far more useful while editing than finding it by
+// key name alone. Falls back to Danish for a missing en/fr entry.
+const T = {
+  'status.active':     { da: 'Aktiv',        en: 'Active',       fr: 'Actif' },
+  'status.suspended':  { da: 'Suspenderet',  en: 'Suspended',    fr: 'Suspendu' },
+  'status.trial':      { da: 'Trial',        en: 'Trial',        fr: 'Essai' },
+
+  // ── Header / shared ──
+  'err.notLoggedIn': { da: 'Ikke logget ind, eller sessionen er udløbet.', en: 'Not logged in, or your session has expired.', fr: 'Non connecté, ou votre session a expiré.' },
+  'dash.sub':        { da: 'Kommune-dashboard — logget ind via', en: 'Council dashboard — logged in via', fr: 'Tableau de bord mairie — connecté via' },
+  'auth.trial':      { da: 'trial-adgang', en: 'trial access', fr: 'accès essai' },
+  'auth.oauth':      { da: 'kommunens eget OAuth-login', en: "the council's own OAuth login", fr: "le login OAuth propre à la mairie" },
+  'auth.password':   { da: 'e-mail/adgangskode', en: 'email/password', fr: 'e-mail/mot de passe' },
+  'auth.unknown':    { da: 'ukendt metode', en: 'unknown method', fr: 'méthode inconnue' },
+
+  // ── Tab bar ──
+  'tab.overloeb':    { da: 'Overløb', en: 'Overflows', fr: 'Débordements' },
+  'tab.badevand':    { da: 'Badevand', en: 'Bathing water', fr: 'Eaux de baignade' },
+  'tab.skilte':      { da: 'Skilte', en: 'Signage', fr: 'Panneaux' },
+  'tab.opsaetning':  { da: 'Opsætning', en: 'Settings', fr: 'Paramètres' },
+
+  // ── Overløb tab: "Overløb lige nu" card ──
+  'ovl.map.title':      { da: 'Overløb lige nu', en: 'Overflows right now', fr: 'Débordements en ce moment' },
+  'ovl.total.red':       { da: 'Røde overløb', en: 'Red overflows', fr: 'Débordements rouges' },
+  'ovl.total.yellow':    { da: 'Gule overløb', en: 'Yellow overflows', fr: 'Débordements jaunes' },
+  'ovl.total.green':     { da: 'Grønne overløb', en: 'Green overflows', fr: 'Débordements verts' },
+  'ovl.forecast.label':  { da: 'Prognose', en: 'Forecast', fr: 'Prévision' },
+  'ovl.horizon.now':     { da: 'Nu', en: 'Now', fr: 'Maintenant' },
+  'ovl.layers.btn':      { da: '🗺️ Lag', en: '🗺️ Layers', fr: '🗺️ Couches' },
+  'ovl.layer.badesteder':{ da: '🏖 Badesteder', en: '🏖 Bathing sites', fr: '🏖 Sites de baignade' },
+  'ovl.layer.udloeb':    { da: '📍 Udløbspunkter', en: '📍 Outfalls', fr: '📍 Points de rejet' },
+  'ovl.layer.ringe':     { da: '⚠ Varselsringe', en: '⚠ Alert rings', fr: '⚠ Anneaux d’alerte' },
+  'ovl.layer.rbuRegn':   { da: '🔴 RBU Regn', en: '🔴 RBU Rain', fr: '🔴 RBU Pluie' },
+  'ovl.layer.rbuKloak':  { da: '🟤 RBU Kloak', en: '🟤 RBU Wastewater', fr: '🟤 RBU Eaux usées' },
+  'ovl.fullscreen':      { da: '⛶ Fuld skærm', en: '⛶ Full screen', fr: '⛶ Plein écran' },
+  'ovl.legend.green':    { da: 'Grøn', en: 'Green', fr: 'Vert' },
+  'ovl.legend.yellow':   { da: 'Gul', en: 'Yellow', fr: 'Jaune' },
+  'ovl.legend.red':      { da: 'Rød', en: 'Red', fr: 'Rouge' },
+  'ovl.legend.ring':     { da: 'Aktiv varselsring (udløb)', en: 'Active alert ring (outfall)', fr: 'Anneau d’alerte actif (rejet)' },
+
+  // ── Overløb tab: other cards ──
+  'ovl.varsler.title':   { da: 'Udløb med aktive varsler', en: 'Outfalls with active alerts', fr: 'Rejets avec alertes actives' },
+  'ovl.historik.title':  { da: 'Historik — overløbsvarsler', en: 'History — overflow alerts', fr: 'Historique — alertes de débordement' },
+  'ovl.historik.intro':  { da: 'Antal nye gul/rød-varsler pr. dag i kommunen, seneste 90 dage.', en: 'New yellow/red alerts per day in the council area, last 90 days.', fr: 'Nouvelles alertes jaune/rouge par jour dans la commune, 90 derniers jours.' },
+  'loading':             { da: 'Indlæser…', en: 'Loading…', fr: 'Chargement…' },
+
+  // ── Overløb tab: "Prioriterede overløb" + "Indlejr kort" cards ──
+  'ovl.prio.title':      { da: 'Prioriterede overløb', en: 'Priority overflows', fr: 'Débordements prioritaires' },
+  'period.label':        { da: 'Periode', en: 'Period', fr: 'Période' },
+  'period.today':        { da: 'I dag', en: 'Today', fr: "Aujourd'hui" },
+  'period.7d':           { da: 'Sidste 7 dage', en: 'Last 7 days', fr: '7 derniers jours' },
+  'period.month':        { da: 'Måned', en: 'Month', fr: 'Mois' },
+  'period.quarter':      { da: 'Sidste kvartal', en: 'Last quarter', fr: 'Dernier trimestre' },
+  'period.year':         { da: 'Sidste år', en: 'Last year', fr: 'Dernière année' },
+  'ovl.prio.sortAlerts': { da: 'Flest varsler', en: 'Most alerts', fr: "Plus d'alertes" },
+  'ovl.prio.sortVolume': { da: 'Størst estimeret udledning', en: 'Largest estimated discharge', fr: 'Rejet estimé le plus important' },
+  'ovl.prio.note':       { da: "Estimeret udledning er baseret på PULS' gennemsnitlige udledningsmængde pr. hændelse × antal registrerede varsler i perioden — IKKE en målt mængde.", en: "Estimated discharge is based on PULS's average discharge volume per event × the number of recorded alerts in the period — NOT a measured amount.", fr: "Le rejet estimé est basé sur le volume moyen de rejet par événement de PULS × le nombre d'alertes enregistrées sur la période — PAS une quantité mesurée." },
+  'ovl.embed.title':     { da: 'Indlejr kort', en: 'Embed map', fr: 'Intégrer la carte' },
+  'ovl.embed.intro':     { da: 'Vis kortet på jeres egen hjemmeside via en iframe — opdaterer sig selv live, samme data som ovenfor.', en: 'Show the map on your own website via an iframe — updates itself live, same data as above.', fr: 'Affichez la carte sur votre propre site via une iframe — se met à jour en direct, mêmes données que ci-dessus.' },
+  'ovl.embed.generate':  { da: '🔗 Generér indlejrings-link', en: '🔗 Generate embed link', fr: "🔗 Générer un lien d'intégration" },
+  'ovl.embed.revokeAll': { da: 'Tilbagekald alle indlejrings-links', en: 'Revoke all embed links', fr: "Révoquer tous les liens d'intégration" },
+
+  // ── Shared bucket/quality/type labels (map tooltips, alert list, detail panel) ──
+  'unknown':               { da: 'Ukendt', en: 'Unknown', fr: 'Inconnu' },
+  'type.wastewater':       { da: 'Kloak', en: 'Wastewater', fr: 'Eaux usées' },
+  'type.stormwater':       { da: 'Regnvand', en: 'Stormwater', fr: 'Eaux pluviales' },
+  'ovl.bucket.roed':       { da: 'Rød', en: 'Red', fr: 'Rouge' },
+  'ovl.bucket.gul':        { da: 'Gul', en: 'Yellow', fr: 'Jaune' },
+  'ovl.bucket.groen':      { da: 'Grøn', en: 'Green', fr: 'Vert' },
+  'ovl.bucket.lukket':     { da: 'Lukket', en: 'Closed', fr: 'Fermé' },
+  'ovl.bucket.ingen-data': { da: 'Ingen data', en: 'No data', fr: 'Aucune donnée' },
+  'ovl.dataQuality.0':     { da: 'Reelle data', en: 'Real data', fr: 'Données réelles' },
+  'ovl.dataQuality.1':     { da: 'Verificeret nul', en: 'Verified zero', fr: 'Zéro vérifié' },
+  'ovl.dataQuality.2':     { da: 'Estimeret', en: 'Estimated', fr: 'Estimé' },
+  'ovl.dataQuality.3':     { da: 'Ingen data', en: 'No data', fr: 'Aucune donnée' },
+
+  // ── renderOverloeb() / loadOverloebStatus() ──
+  'ovl.err.status':        { da: 'Kunne ikke hente overløbsstatus.', en: 'Could not load overflow status.', fr: "Impossible de charger le statut des débordements." },
+  'ovl.err.statusConn':    { da: 'Kunne ikke hente overløbsstatus — tjek din forbindelse.', en: 'Could not load overflow status — check your connection.', fr: "Impossible de charger le statut des débordements — vérifiez votre connexion." },
+  'ovl.noWeatherData':     { da: 'udløb uden vejrdata lige nu — ikke talt med ovenfor.', en: 'outfalls with no weather data right now — not counted above.', fr: "rejets sans données météo en ce moment — non comptabilisés ci-dessus." },
+  'ovl.noActiveAlerts':    { da: 'Ingen aktive gul/rød-varsler for kommunens overløb lige nu.', en: 'No active yellow/red alerts for the council’s overflows right now.', fr: "Aucune alerte jaune/rouge active pour les débordements de la commune en ce moment." },
+  'ovl.alert.forecast':    { da: 'prognose', en: 'forecast', fr: 'prévision' },
+  'ovl.alert.observed':    { da: 'observeret', en: 'observed', fr: 'observé' },
+
+  // ── Outfall detail panel (openOvlUdlobPanel) ──
+  'ovl.panel.pulsOutfall':  { da: 'PULS-udløb', en: 'PULS outfall', fr: 'Rejet PULS' },
+  'ovl.panel.now':          { da: 'Nu', en: 'Now', fr: 'Maintenant' },
+  'ovl.panel.forecast24h':  { da: '24h prognose', en: '24h forecast', fr: 'Prévision 24h' },
+  'ovl.panel.forecast72h':  { da: '72h prognose', en: '72h forecast', fr: 'Prévision 72h' },
+  'ovl.panel.viral':        { da: 'Viral', en: 'Viral', fr: 'Viral' },
+  'ovl.panel.algae':        { da: 'Alger', en: 'Algae', fr: 'Algues' },
+  'ovl.panel.googleMaps':   { da: 'Se på Google Maps', en: 'View on Google Maps', fr: 'Voir sur Google Maps' },
+  'ovl.panel.recipient':    { da: 'Recipient', en: 'Receiving water', fr: 'Milieu récepteur' },
+  'ovl.panel.dataQuality':  { da: 'Datakvalitet', en: 'Data quality', fr: 'Qualité des données' },
+  'ovl.panel.avgDischarge': { da: 'Gennemsnitlig udledning', en: 'Average discharge', fr: 'Rejet moyen' },
+  'ovl.panel.litersPerEvent': { da: 'L/hændelse', en: 'L/event', fr: 'L/événement' },
+  'ovl.panel.rain7d':       { da: 'Nedbør — seneste 7 dage', en: 'Rainfall — last 7 days', fr: 'Précipitations — 7 derniers jours' },
+
+  // ── Full PULS raw-data details (<details> section) ──
+  'puls.title':             { da: 'Fuld PULS-stamdata', en: 'Full PULS raw data', fr: 'Données brutes PULS complètes' },
+  'puls.outletType':        { da: 'Udløbstype', en: 'Outfall type', fr: 'Type de rejet' },
+  'puls.sewerCode':         { da: 'Kloaksystem-kode', en: 'Sewer system code', fr: "Code du système d'assainissement" },
+  'puls.reducedArea':       { da: 'Reduceret opland', en: 'Reduced catchment area', fr: 'Bassin versant réduit' },
+  'puls.latestYear':        { da: 'Seneste registrerede udledningsår', en: 'Latest recorded discharge year', fr: 'Dernière année de rejet enregistrée' },
+  'puls.thisYear':          { da: 'seneste år', en: 'latest year', fr: 'dernière année' },
+  'puls.volume':            { da: 'Volumen', en: 'Volume', fr: 'Volume' },
+  'puls.events':            { da: 'Overløbshændelser', en: 'Overflow events', fr: 'Événements de débordement' },
+  'puls.threshold':         { da: 'Regntærskel (model)', en: 'Rain threshold (model)', fr: 'Seuil de pluie (modèle)' },
+  'puls.probBase':          { da: 'Overløbssandsynlighed (basis)', en: 'Overflow probability (baseline)', fr: 'Probabilité de débordement (base)' },
+  'puls.cod':               { da: 'COD (kemisk iltforbrug)', en: 'COD (chemical oxygen demand)', fr: 'DCO (demande chimique en oxygène)' },
+  'puls.bod':               { da: 'BOD (biokemisk iltforbrug)', en: 'BOD (biochemical oxygen demand)', fr: 'DBO (demande biochimique en oxygène)' },
+  'puls.nitrogen':          { da: 'Kvælstof (N)', en: 'Nitrogen (N)', fr: 'Azote (N)' },
+  'puls.phosphor':          { da: 'Fosfor (P)', en: 'Phosphorus (P)', fr: 'Phosphore (P)' },
+  'puls.normalVolume':      { da: 'Normalår-volumen', en: 'Normal-year volume', fr: 'Volume année normale' },
+  'puls.normalEvents':      { da: 'Normalår-hændelser', en: 'Normal-year events', fr: 'Événements année normale' },
+  'puls.normalCod':         { da: 'Normalår-COD', en: 'Normal-year COD', fr: 'DCO année normale' },
+  'puls.normalBod':         { da: 'Normalår-BOD', en: 'Normal-year BOD', fr: 'DBO année normale' },
+  'puls.normalNitrogen':    { da: 'Normalår-kvælstof', en: 'Normal-year nitrogen', fr: 'Azote année normale' },
+  'puls.normalPhosphor':    { da: 'Normalår-fosfor', en: 'Normal-year phosphorus', fr: 'Phosphore année normale' },
+  'puls.outfallId':         { da: 'PULS outfallId', en: 'PULS outfallId', fr: 'PULS outfallId' },
+  'unit.kgYear':            { da: 'kg/år', en: 'kg/year', fr: 'kg/an' },
+
+  // ── BADESTED_SOURCE_LABEL + openBadestedDetailPanel ──
+  'source.confirmedNone':   { da: 'Bekræftet ingen aktiv kilde (sikkert)', en: 'Confirmed no active source (safe)', fr: 'Confirmé aucune source active (sûr)' },
+  'source.confirmedDownstream': { da: 'Kendte udløb strømbekræftet nedstrøms (sikkert)', en: 'Known outfalls flow-confirmed downstream (safe)', fr: 'Rejets connus confirmés en aval (sûr)' },
+  'source.noMatch':         { da: 'Intet bekræftet match', en: 'No confirmed match', fr: 'Aucune correspondance confirmée' },
+  'source.serverUnavailable': { da: 'Serverdata utilgængelig', en: 'Server data unavailable', fr: 'Données serveur indisponibles' },
+  'source.coastal':         { da: 'Kystvand', en: 'Coastal water', fr: 'Eaux côtières' },
+  'source.lake':            { da: 'Sø', en: 'Lake', fr: 'Lac' },
+  'outlets.none':           { da: 'Ingen individuelle udløb matchet.', en: 'No individual outfalls matched.', fr: 'Aucun rejet individuel correspondant.' },
+  'outlets.travelDays':     { da: 'dages rejsetid', en: 'days travel time', fr: 'jours de temps de trajet' },
+  'badested.bacterial':     { da: 'Bakteriel (nu)', en: 'Bacterial (now)', fr: 'Bactérien (maintenant)' },
+  'badested.viral':         { da: 'Viral (nu)', en: 'Viral (now)', fr: 'Viral (maintenant)' },
+  'badested.type':          { da: 'Badested', en: 'Bathing site', fr: 'Site de baignade' },
+  'badested.override':      { da: '📢 Kommunalt varsel:', en: '📢 Council alert:', fr: '📢 Alerte de la mairie :' },
+  'badested.publicPage':    { da: 'Se badestedets offentlige side', en: 'View the site’s public page', fr: 'Voir la page publique du site' },
+  'badested.source':        { da: 'Kilde', en: 'Source', fr: 'Source' },
+  'badested.confidence':    { da: 'Datakonfidens', en: 'Data confidence', fr: 'Confiance des données' },
+  'badested.subscriber':    { da: 'webpush-abonnent', en: 'push subscriber', fr: 'abonné push' },
+  'badested.subscribers':   { da: 'webpush-abonnenter', en: 'push subscribers', fr: 'abonnés push' },
+  'badested.outletsAffecting': { da: '🚰 Udløb der påvirker badevandet', en: '🚰 Outfalls affecting the bathing water', fr: '🚰 Rejets affectant les eaux de baignade' },
+  'badested.history':       { da: 'Historik', en: 'History', fr: 'Historique' },
+  'period.30d':             { da: 'Sidste 30 dage', en: 'Last 30 days', fr: '30 derniers jours' },
+  'history.none':           { da: 'Endnu ingen historik.', en: 'No history yet.', fr: 'Pas encore d’historique.' },
+  'history.err':            { da: 'Kunne ikke hente historik lige nu.', en: 'Could not load history right now.', fr: "Impossible de charger l'historique pour le moment." },
+  'rain.noData':            { da: 'Ingen vejrdata for denne lokation', en: 'No weather data for this location', fr: 'Aucune donnée météo pour ce site' },
+  'rain.err':               { da: 'Kunne ikke hente nedbørsdata', en: 'Could not load rainfall data', fr: 'Impossible de charger les données de précipitations' },
+  'rain.none':              { da: 'Ingen nedbørsdata', en: 'No rainfall data', fr: 'Aucune donnée de précipitations' },
+  'rain.chartLabel':        { da: 'Nedbør seneste 7 dage', en: 'Rainfall, last 7 days', fr: 'Précipitations, 7 derniers jours' },
+  'rain.today':             { da: 'i dag', en: 'today', fr: "aujourd'hui" },
+  'ovl.historik.err':       { da: 'Kunne ikke hente historik.', en: 'Could not load history.', fr: "Impossible de charger l'historique." },
+  'ovl.historik.errConn':   { da: 'Kunne ikke hente historik — tjek din forbindelse.', en: 'Could not load history — check your connection.', fr: "Impossible de charger l'historique — vérifiez votre connexion." },
+  'generating':             { da: 'Genererer…', en: 'Generating…', fr: 'Génération…' },
+  'ovl.prio.errList':       { da: 'Kunne ikke hente prioriteret liste.', en: 'Could not load priority list.', fr: 'Impossible de charger la liste prioritaire.' },
+  'ovl.prio.errListConn':   { da: 'Kunne ikke hente prioriteret liste — tjek din forbindelse.', en: 'Could not load priority list — check your connection.', fr: "Impossible de charger la liste prioritaire — vérifiez votre connexion." },
+  'ovl.prio.empty':         { da: 'Ingen overløbsvarsler registreret i denne periode.', en: 'No overflow alerts recorded in this period.', fr: 'Aucune alerte de débordement enregistrée sur cette période.' },
+  'ovl.prio.colOutlet':     { da: 'Udløb', en: 'Outfall', fr: 'Rejet' },
+  'ovl.prio.colType':       { da: 'Type', en: 'Type', fr: 'Type' },
+  'ovl.prio.colAlerts':     { da: 'Varsler', en: 'Alerts', fr: 'Alertes' },
+  'ovl.prio.colDischarge':  { da: 'Est. udledning', en: 'Est. discharge', fr: 'Rejet est.' },
+  'ovl.embed.errGenerate':  { da: 'Kunne ikke generere indlejrings-link.', en: 'Could not generate embed link.', fr: "Impossible de générer le lien d'intégration." },
+  'ovl.embed.errGenerateConn': { da: 'Kunne ikke generere indlejrings-link — tjek din forbindelse.', en: 'Could not generate embed link — check your connection.', fr: "Impossible de générer le lien d'intégration — vérifiez votre connexion." },
+  'ovl.embed.iframeTitle':  { da: 'Overløb — live kort', en: 'Overflows — live map', fr: 'Débordements — carte en direct' },
+  'copy':                   { da: 'Kopiér', en: 'Copy', fr: 'Copier' },
+  'copied':                 { da: '✓ Kopieret', en: '✓ Copied', fr: '✓ Copié' },
+  'ovl.embed.confirmRevoke': { da: 'Tilbagekald ALLE eksisterende indlejrings-links for jeres kommune? Ethvert sted de er indlejret, holder op med at virke med det samme.', en: 'Revoke ALL existing embed links for your council? Everywhere they’re embedded stops working immediately.', fr: "Révoquer TOUS les liens d'intégration existants de votre mairie ? Partout où ils sont intégrés, ils cesseront de fonctionner immédiatement." },
+  'ovl.embed.errRevoke':    { da: 'Kunne ikke tilbagekalde indlejrings-links.', en: 'Could not revoke embed links.', fr: "Impossible de révoquer les liens d'intégration." },
+  'ovl.embed.revokedOk':    { da: '✓ Alle indlejrings-links er tilbagekaldt.', en: '✓ All embed links have been revoked.', fr: "✓ Tous les liens d'intégration ont été révoqués." },
+  'ovl.embed.errRevokeConn': { da: 'Kunne ikke tilbagekalde — tjek din forbindelse.', en: 'Could not revoke — check your connection.', fr: 'Impossible de révoquer — vérifiez votre connexion.' },
+  'rbu.rain':               { da: 'Regn', en: 'Rain', fr: 'Pluie' },
+  'rbu.point':              { da: 'RBU-punkt', en: 'RBU point', fr: 'Point RBU' },
+  'rbu.err':                { da: 'Kunne ikke hente RBU-punkter:', en: 'Could not load RBU points:', fr: 'Impossible de charger les points RBU :' },
+
+  // ── Badevand tab: dash-toc + "Status" card ──
+  'toc.status':          { da: 'Status', en: 'Status', fr: 'Statut' },
+  'toc.badevandssteder': { da: 'Badevandssteder', en: 'Bathing sites', fr: 'Sites de baignade' },
+  'toc.varsel':          { da: 'Kommunalt Varsel', en: 'Council Alert', fr: 'Alerte Mairie' },
+  'toc.statistik':       { da: 'Statistik', en: 'Statistics', fr: 'Statistiques' },
+  'toc.vurderinger':     { da: 'Borgerindberetninger', en: 'Citizen reports', fr: 'Signalements citoyens' },
+  'toc.benchmark':       { da: 'Kommune-benchmark', en: 'Council benchmark', fr: 'Comparatif mairies' },
+  'status.label':        { da: 'Status', en: 'Status', fr: 'Statut' },
+  'status.trialExpires': { da: 'Trial udløber', en: 'Trial expires', fr: "L'essai expire" },
+  'status.agreementSigned': { da: 'Aftale underskrevet', en: 'Agreement signed', fr: 'Accord signé' },
+
+  // ── "Badevandssteder" card (short standardized period selector) ──
+  'period.day':          { da: 'Dag', en: 'Day', fr: 'Jour' },
+  'period.week':         { da: 'Uge', en: 'Week', fr: 'Semaine' },
+  'period.quarterShort': { da: 'Kvartal', en: 'Quarter', fr: 'Trimestre' },
+  'period.yearShort':    { da: 'År', en: 'Year', fr: 'Année' },
+  'period.custom':       { da: 'Brugerdefineret', en: 'Custom', fr: 'Personnalisé' },
+
+  // ── "Kommunalt Varsel" card ──
+  'varsel.intro':        { da: 'Et banner på badestedets side og i push til abonnenter — ændrer IKKE badestedets officielle status eller risikoprocent, kun indholdet af banneret.', en: 'A banner on the site’s page and in push to subscribers — does NOT change the site’s official status or risk percentage, only the banner’s content.', fr: "Une bannière sur la page du site et dans les notifications push aux abonnés — ne modifie PAS le statut officiel du site ni son pourcentage de risque, seulement le contenu de la bannière." },
+  'varsel.site':         { da: 'Badested', en: 'Bathing site', fr: 'Site de baignade' },
+  'varsel.severity':     { da: 'Farve/alvorlighed i banneret (ændrer IKKE den officielle status)', en: 'Banner colour/severity (does NOT change the official status)', fr: "Couleur/gravité de la bannière (ne modifie PAS le statut officiel)" },
+  'varsel.green':        { da: 'Grøn — informativ', en: 'Green — informational', fr: 'Vert — informatif' },
+  'varsel.yellow':       { da: 'Gul — moderat varsel', en: 'Yellow — moderate alert', fr: 'Jaune — alerte modérée' },
+  'varsel.red':          { da: 'Rød — alvorligt varsel', en: 'Red — serious alert', fr: 'Rouge — alerte grave' },
+  'varsel.closed':       { da: 'Lukket for badning', en: 'Closed for bathing', fr: 'Baignade interdite' },
+  'varsel.message':      { da: 'Varsel til offentligheden (vises i banner med jeres kommunenavn/logo)', en: 'Public alert message (shown in the banner with your council’s name/logo)', fr: 'Message d’alerte public (affiché dans la bannière avec le nom/logo de votre mairie)' },
+  'varsel.messagePlaceholder': { da: 'Fx: Forhøjet bakterieindhold efter kraftig regn — badning frarådes.', en: 'E.g.: Elevated bacteria levels after heavy rain — bathing not advised.', fr: 'Ex : Taux de bactéries élevé après de fortes pluies — baignade déconseillée.' },
+  'varsel.expiresIn':    { da: 'Udløber om', en: 'Expires in', fr: 'Expire dans' },
+  'varsel.hours':        { da: 'timer', en: 'hours', fr: 'heures' },
+  'varsel.days':         { da: 'dage', en: 'days', fr: 'jours' },
+  'varsel.submit':       { da: 'Udsend kommunalt varsel — synligt med det samme', en: 'Publish council alert — visible immediately', fr: "Publier l'alerte de la mairie — visible immédiatement" },
+
+  // ── "Borgerindberetninger" card ──
+  'vurd.intro':          { da: 'De enkelte badevandsindberetninger indsendt af borgere for jeres badesteder — til læsning, ikke redigering. Alge- og affaldsrapporter er markeret særskilt, da de kan betyde at badestedet bør besigtiges.', en: 'The individual bathing-water reports submitted by citizens for your sites — read-only. Algae and litter reports are marked separately, since they may mean the site should be inspected.', fr: "Les signalements individuels de baignade soumis par les citoyens pour vos sites — en lecture seule. Les signalements d'algues et de déchets sont marqués séparément, car ils peuvent indiquer qu'une inspection du site est nécessaire." },
+  'vurd.show':           { da: 'Vis', en: 'Show', fr: 'Afficher' },
+  'vurd.all':            { da: 'Alle vurderinger', en: 'All reports', fr: 'Tous les signalements' },
+  'vurd.priorityOnly':   { da: 'Kun alger & affald', en: 'Algae & litter only', fr: 'Algues et déchets uniquement' },
+  'vurd.algaeOnly':      { da: 'Kun alger', en: 'Algae only', fr: 'Algues uniquement' },
+  'vurd.litterOnly':     { da: 'Kun affald', en: 'Litter only', fr: 'Déchets uniquement' },
+  'vurd.murkyOnly':      { da: 'Kun uklart vand', en: 'Murky water only', fr: 'Eau trouble uniquement' },
+  'vurd.looksFineOnly':  { da: 'Kun "ser fint ud"', en: 'Only "looks fine"', fr: 'Seulement « semble correct »' },
+  'vurd.firefightersOnly': { da: 'Kun brandmænd', en: 'Firefighters only', fr: 'Pompiers uniquement' },
+
+  // ── "Kommune-benchmark" card ──
+  'kb.intro':            { da: 'Jeres kommunes håndtering af badevand/overløb sammenlignet med landets øvrige deltagende kommuner. Rå hændelsestal er indekseret pr. antal badesteder, for at korrigere for at bedre overvågning i sig selv registrerer flere hændelser end dårligere overvågning — se rapporten "Datakvalitet", som viser dette direkte.', en: 'How your council handles bathing water/overflows compared to other participating councils nationwide. Raw event counts are indexed per number of bathing sites, to correct for the fact that better monitoring itself records more events than worse monitoring — see the "Data quality" report, which shows this directly.', fr: "La gestion des eaux de baignade/débordements de votre mairie comparée aux autres mairies participantes à l'échelle nationale. Les nombres bruts d'événements sont indexés par nombre de sites de baignade, pour corriger le fait qu'une meilleure surveillance enregistre en elle-même plus d'événements qu'une surveillance moins bonne — voir le rapport « Qualité des données », qui le montre directement." },
+  'kb.report':           { da: 'Rapport', en: 'Report', fr: 'Rapport' },
+  'kb.overall':          { da: 'Samlet placering', en: 'Overall ranking', fr: 'Classement général' },
+  'kb.alerts':           { da: 'Varsler', en: 'Alerts', fr: 'Alertes' },
+  'kb.closedDays':       { da: 'Lukkedage', en: 'Days closed', fr: 'Jours de fermeture' },
+  'kb.reports':          { da: 'Badestedsindberetninger', en: 'Bathing site reports', fr: 'Signalements des sites de baignade' },
+  'kb.dataQuality':      { da: 'Datakvalitet', en: 'Data quality', fr: 'Qualité des données' },
+
+  // ── Skilte tab ──
+  'skilte.pdf.title':    { da: 'Download PDF-skilte', en: 'Download PDF signage', fr: 'Télécharger les panneaux PDF' },
+  'skilte.pdf.intro':    { da: 'Ét samlet PDF-dokument med ét printbart A4-skilt pr. badested, inklusiv QR-kode og jeres kommunes eget logo øverst — til opsætning ved badestederne. Adskiller sig fra det almindelige QR-skilt borgerne selv kan udskrive fra badestedssiden ved netop logoet.', en: 'One combined PDF with one printable A4 sign per bathing site, including a QR code and your council’s own logo at the top — for putting up at the sites. Differs from the plain QR sign citizens can print themselves from the site page in exactly the logo.', fr: "Un document PDF unique avec un panneau A4 imprimable par site de baignade, incluant un QR code et le logo de votre mairie en haut — à installer sur les sites. Se distingue du panneau QR simple que les citoyens peuvent imprimer eux-mêmes depuis la page du site précisément par le logo." },
+  'skilte.pdf.download': { da: '📄 Download alle PDF-skilte', en: '📄 Download all PDF signs', fr: '📄 Télécharger tous les panneaux PDF' },
+  'skilte.eps.title':    { da: 'Download QR EPS-filer', en: 'Download QR EPS files', fr: 'Télécharger les fichiers QR EPS' },
+  'skilte.eps.intro':    { da: 'Rene QR-koder som EPS-vektorfiler til professionelt tryk — vælg selv præcis de skilte I ønsker trykt.', en: 'Plain QR codes as EPS vector files for professional printing — choose exactly which signs you want printed.', fr: "Codes QR simples au format vectoriel EPS pour une impression professionnelle — choisissez exactement les panneaux à imprimer." },
+  'skilte.live.title':   { da: 'Live digitale skilte', en: 'Live digital signage', fr: 'Panneaux numériques en direct' },
+  'skilte.live.intro':   { da: 'Kopiér en iframe-kode pr. badested til en skærm på stedet — skiltet opdaterer sig selv automatisk, hver gang der er nye data (ca. hvert 15. minut). Viser samme offentlige badevandsstatus som badestedets egen side.', en: 'Copy an iframe snippet per bathing site to a screen on location — the sign updates itself automatically whenever there’s new data (roughly every 15 minutes). Shows the same public bathing-water status as the site’s own page.', fr: "Copiez un extrait iframe par site de baignade sur un écran sur place — le panneau se met à jour automatiquement à chaque nouvelle donnée (environ toutes les 15 minutes). Affiche le même statut public de baignade que la page du site." },
+
+  // ── Opsætning tab ──
+  'opsaetning.oauth.title': { da: 'OAuth-opsætning', en: 'OAuth setup', fr: 'Configuration OAuth' },
+  'opsaetning.oauth.intro': { da: 'Lad jeres medarbejdere logge ind med kommunens eget OAuth/OIDC-login i stedet for et midlertidigt trial-link.', en: 'Let your staff log in with your council’s own OAuth/OIDC login instead of a temporary trial link.', fr: "Permettez à votre personnel de se connecter avec le login OAuth/OIDC propre à votre mairie au lieu d'un lien d'essai temporaire." },
+  'opsaetning.oauth.btn':   { da: '⚙️ OAuth-opsætning', en: '⚙️ OAuth setup', fr: '⚙️ Configuration OAuth' },
+  'opsaetning.more':        { da: 'Flere indstillinger følger senere.', en: 'More settings coming later.', fr: "D'autres paramètres arriveront plus tard." },
+
+  // ── History bar (buildMonthBarHtml, used in Badested-statistik row expand) ──
+  'hist.noMonthData':    { da: 'Ingen data for denne måned.', en: 'No data for this month.', fr: 'Aucune donnée pour ce mois.' },
+  'hist.greenDays':      { da: 'grønne dage', en: 'green days', fr: 'jours verts' },
+  'hist.yellowDays':     { da: 'gule dage', en: 'yellow days', fr: 'jours jaunes' },
+  'hist.redDays':        { da: 'røde dage', en: 'red days', fr: 'jours rouges' },
+  'hist.daysNoData':     { da: 'dage uden data', en: 'days with no data', fr: 'jours sans données' },
+
+  // ── Risk donut (buildRiskDonutSvg) + legend (buildRiskLegendHtml) ──
+  'donut.noDataYet':     { da: 'Ingen data endnu', en: 'No data yet', fr: 'Pas encore de données' },
+  'donut.safeDays':      { da: 'sikre dage', en: 'safe days', fr: 'jours sûrs' },
+  'donut.moderateRisk':  { da: 'moderat risiko', en: 'moderate risk', fr: 'risque modéré' },
+  'donut.highRisk':      { da: 'høj risiko', en: 'high risk', fr: 'risque élevé' },
+  'donut.noData':        { da: 'uden data', en: 'with no data', fr: 'sans données' },
+  'donut.daysWithData':  { da: 'dage m. data', en: 'days w/ data', fr: 'jours avec données' },
+  'legend.safe':         { da: 'Sikkert', en: 'Safe', fr: 'Sûr' },
+  'legend.moderate':     { da: 'Moderat', en: 'Moderate', fr: 'Modéré' },
+  'legend.highRisk':     { da: 'Høj risiko', en: 'High risk', fr: 'Risque élevé' },
+  'legend.noData':       { da: 'Ingen data', en: 'No data', fr: 'Aucune donnée' },
+  'unit.day':            { da: 'dag', en: 'day', fr: 'jour' },
+  'unit.days':           { da: 'dage', en: 'days', fr: 'jours' },
+  'thisMonth':           { da: 'Denne måned', en: 'This month', fr: 'Ce mois-ci' },
+
+  // ── loadAlertStats (Badevandssteder card) ──
+  'stat.pickCustomRange': { da: 'Vælg både fra- og til-dato for en brugerdefineret periode.', en: 'Pick both a from- and to-date for a custom period.', fr: 'Choisissez une date de début et de fin pour une période personnalisée.' },
+  'stat.err':             { da: 'Kunne ikke hente statistik.', en: 'Could not load statistics.', fr: 'Impossible de charger les statistiques.' },
+  'stat.errConn':         { da: 'Kunne ikke hente statistik — tjek din forbindelse.', en: 'Could not load statistics — check your connection.', fr: 'Impossible de charger les statistiques — vérifiez votre connexion.' },
+  'stat.noneFound':       { da: 'Ingen badesteder fundet.', en: 'No bathing sites found.', fr: 'Aucun site de baignade trouvé.' },
+  'unit.alert':           { da: 'varsel', en: 'alert', fr: 'alerte' },
+  'unit.alerts':          { da: 'varsler', en: 'alerts', fr: 'alertes' },
+  'unit.subscriber':      { da: 'abonnent', en: 'subscriber', fr: 'abonné' },
+  'unit.subscribers':     { da: 'abonnenter', en: 'subscribers', fr: 'abonnés' },
+
+  // ── renderTrendChart (stats.html-ported trend graphs) ──
+  'trend.noneYet':        { da: 'Ingen data endnu — første punkt gemmes i løbet af i dag', en: 'No data yet — the first point is saved later today', fr: "Pas encore de données — le premier point sera enregistré aujourd'hui" },
+  'trend.tooFewPoints':   { da: 'for lidt historik til en graf endnu', en: 'not enough history for a chart yet', fr: 'pas encore assez d’historique pour un graphique' },
+  'trend.overTime':       { da: 'over tid, seneste værdi', en: 'over time, latest value', fr: 'dans le temps, dernière valeur' },
+
+  // ── renderVarselBarChart (Overløb tab's history chart) ──
+  'ovl.trend.none':       { da: 'Ingen overløbsvarsler registreret i perioden endnu', en: 'No overflow alerts recorded in the period yet', fr: "Aucune alerte de débordement encore enregistrée sur la période" },
+
+  // ── loadKommuneStats (Statistik card) ──
+  'kstat.views':          { da: '# Visninger', en: '# Views', fr: '# Vues' },
+  'kstat.viewsNote':      { da: 'Badesteder eller overløb, seneste 90 dage', en: 'Bathing sites or overflows, last 90 days', fr: 'Sites de baignade ou débordements, 90 derniers jours' },
+  'kstat.subscribers':    { da: '# Abonnenter', en: '# Subscribers', fr: '# Abonnés' },
+  'kstat.subscribersNote': { da: 'Webpush, på tværs af', en: 'Push, across', fr: 'Push, sur' },
+  'kstat.reports':        { da: '# Indberetninger', en: '# Reports', fr: '# Signalements' },
+  'kstat.alerts':         { da: '# Varsler', en: '# Alerts', fr: '# Alertes' },
+  'kstat.alertsNote':     { da: 'Risikovarsler, kommunale varsler og indberetningskvitteringer', en: 'Risk alerts, council alerts and report acknowledgements', fr: 'Alertes de risque, alertes de la mairie et accusés de réception des signalements' },
+  'kstat.viewsOverTime':  { da: 'Visninger over tid', en: 'Views over time', fr: 'Vues dans le temps' },
+  'kstat.alertsOverTime': { da: 'Varsler over tid', en: 'Alerts over time', fr: 'Alertes dans le temps' },
+  'kstat.subscribersOverTime': { da: 'Abonnenter over tid', en: 'Subscribers over time', fr: 'Abonnés dans le temps' },
+
+  // ── VURD_TYPE_META / VURD_ALGAE_LEVEL_LABELS (citizen report badges) ──
+  'vurd.type.looksFine':     { da: 'Ser fint ud', en: 'Looks fine', fr: 'Semble correct' },
+  'vurd.type.algaeSeen':     { da: 'Alger set', en: 'Algae seen', fr: 'Algues observées' },
+  'vurd.type.murkyWater':    { da: 'Uklart vand', en: 'Murky water', fr: 'Eau trouble' },
+  'vurd.type.litter':        { da: 'Affald', en: 'Litter', fr: 'Déchets' },
+  'vurd.type.firefighters':  { da: 'Brandmænd set', en: 'Firefighters seen', fr: 'Pompiers observés' },
+  'vurd.algaeLevel.none':    { da: 'Ingen', en: 'None', fr: 'Aucune' },
+  'vurd.algaeLevel.few':     { da: 'Få', en: 'Few', fr: 'Peu' },
+  'vurd.algaeLevel.many':    { da: 'Mange', en: 'Many', fr: 'Beaucoup' },
+  'vurd.err':                { da: 'Kunne ikke hente indberetninger.', en: 'Could not load reports.', fr: 'Impossible de charger les signalements.' },
+  'vurd.errConn':            { da: 'Kunne ikke hente indberetninger — tjek din forbindelse.', en: 'Could not load reports — check your connection.', fr: 'Impossible de charger les signalements — vérifiez votre connexion.' },
+  'vurd.noneForFilter':      { da: 'Ingen indberetninger fundet for dette filter.', en: 'No reports found for this filter.', fr: 'Aucun signalement trouvé pour ce filtre.' },
+  'vurd.mayNeedInspection':  { da: '⚠ Kan kræve besigtigelse', en: '⚠ May require inspection', fr: '⚠ Peut nécessiter une inspection' },
+  'vurd.seePhoto':           { da: 'Se indsendt foto', en: 'View submitted photo', fr: 'Voir la photo envoyée' },
+  'vurd.photoAlt':           { da: 'Foto vedhæftet vurdering', en: 'Photo attached to report', fr: 'Photo jointe au signalement' },
+  'pager.prev':              { da: '‹ Forrige', en: '‹ Previous', fr: '‹ Précédent' },
+  'pager.next':              { da: 'Næste ›', en: 'Next ›', fr: 'Suivant ›' },
+  'pager.of':                { da: 'af', en: 'of', fr: 'sur' },
+
+  // ── Kommune-benchmark card ──
+  'kb.colCouncil':       { da: 'Kommune', en: 'Council', fr: 'Mairie' },
+  'kb.colIndexed':       { da: 'Indekseret', en: 'Indexed', fr: 'Indexé' },
+  'kb.err':              { da: 'Kunne ikke hente kommune-benchmark.', en: 'Could not load council benchmark.', fr: 'Impossible de charger le comparatif des mairies.' },
+  'kb.errConn':          { da: 'Kunne ikke hente kommune-benchmark — tjek din forbindelse.', en: 'Could not load council benchmark — check your connection.', fr: 'Impossible de charger le comparatif des mairies — vérifiez votre connexion.' },
+  'kb.tooFewSites':      { da: 'For få badesteder til sammenligning (under 3)', en: 'Too few bathing sites to compare (under 3)', fr: 'Trop peu de sites de baignade pour comparer (moins de 3)' },
+  'kb.dqNote':           { da: 'Andel af kommunens PULS-udløbspunkter med reelt målt data (ikke estimeret/ingen data). Vises SEPARAT fra de øvrige rapporter, indgår ikke i samlet placering — forklarer hvorfor en kommune med bedre overvågning kan have flere registrerede hændelser uden at det reelt er et dårligere resultat.', en: 'Share of the council’s PULS outfall points with genuinely measured data (not estimated/no data). Shown SEPARATELY from the other reports and doesn’t count toward the overall ranking — explains why a council with better monitoring can have more recorded events without that actually being a worse result.', fr: "Part des points de rejet PULS de la mairie avec des données réellement mesurées (non estimées/sans données). Affiché SÉPARÉMENT des autres rapports et ne compte pas dans le classement général — explique pourquoi une mairie avec une meilleure surveillance peut avoir plus d'événements enregistrés sans que ce soit réellement un moins bon résultat." },
+  'kb.dqShare':          { da: 'Andel', en: 'Share', fr: 'Part' },
+  'kb.dqMeasured':       { da: 'Målt / i alt', en: 'Measured / total', fr: 'Mesuré / total' },
+  'kb.overallLabel':     { da: 'Samlet placering', en: 'Overall ranking', fr: 'Classement général' },
+  'kb.overallNote':      { da: 'badesteder · ligevægtet gennemsnit af Varsler/Lukkedage/Badestedsindberetninger', en: 'bathing sites · weighted average of Alerts/Days closed/Bathing site reports', fr: 'sites de baignade · moyenne pondérée des Alertes/Jours de fermeture/Signalements des sites' },
+  'kb.notRanked':        { da: 'Jeres kommune indgår ikke i hovedrangeringen for denne periode — enten under grænsen på 3 badesteder (se listen nederst), eller ingen matchende data endnu.', en: 'Your council isn’t included in the main ranking for this period — either under the 3-site threshold (see the list below), or no matching data yet.', fr: "Votre mairie ne figure pas dans le classement principal pour cette période — soit en dessous du seuil de 3 sites (voir la liste ci-dessous), soit aucune donnée correspondante pour l'instant." },
+  'kb.seeFullRanking':   { da: 'Se fuld rangering', en: 'See full ranking', fr: 'Voir le classement complet' },
+  'kb.councils':         { da: 'kommuner', en: 'councils', fr: 'mairies' },
+  'kb.weightedAvgNote':  { da: 'Ligevægtet gennemsnit af rangene i de tre rapporter til højre — lavest samlet tal er bedst.', en: 'Weighted average of the ranks in the three reports to the right — lowest overall number is best.', fr: 'Moyenne pondérée des rangs dans les trois rapports à droite — le nombre global le plus bas est le meilleur.' },
+  'kb.colOverall':       { da: 'Samlet', en: 'Overall', fr: 'Général' },
+  'kb.colAlerts':        { da: 'Varsler', en: 'Alerts', fr: 'Alertes' },
+  'kb.colClosedDays':    { da: 'Lukkedage', en: 'Days closed', fr: 'Jours de fermeture' },
+  'kb.colReports':       { da: 'Indberetninger', en: 'Reports', fr: 'Signalements' },
+  'kb.colTotalReports':  { da: 'Total # indberetninger', en: 'Total # reports', fr: 'Total # signalements' },
+  'kb.reportAlertsNote': { da: 'Risikovarsler pr. badested i perioden — færrest indekseret = bedst placering.', en: 'Risk alerts per bathing site in the period — fewest indexed = best ranking.', fr: 'Alertes de risque par site de baignade sur la période — le moins indexé = meilleur classement.' },
+  'kb.reportClosedNote': { da: 'Dage med mindst ét lukket/varslet badested, pr. badested i perioden — færrest indekseret = bedst placering.', en: 'Days with at least one closed/alerted bathing site, per site in the period — fewest indexed = best ranking.', fr: 'Jours avec au moins un site de baignade fermé/en alerte, par site sur la période — le moins indexé = meilleur classement.' },
+  'kb.reportVurdNote':   { da: 'Indsendte borgerindberetninger pr. badested i perioden — flest indekseret = bedst placering (modsat retning af Varsler/Lukkedage).', en: 'Citizen reports submitted per bathing site in the period — most indexed = best ranking (opposite direction from Alerts/Days closed).', fr: 'Signalements citoyens soumis par site de baignade sur la période — le plus indexé = meilleur classement (sens inverse des Alertes/Jours de fermeture).' },
+
+  // ── loadOverrideBadesteder / submitOverride / loadActiveOverrides / clearOverride ──
+  'ov.noneFound':        { da: 'Ingen badesteder fundet', en: 'No bathing sites found', fr: 'Aucun site de baignade trouvé' },
+  'ov.err':              { da: 'Kunne ikke hente badesteder', en: 'Could not load bathing sites', fr: 'Impossible de charger les sites de baignade' },
+  'ov.fillAllFields':    { da: 'Udfyld alle felter — varighed skal være et positivt tal.', en: 'Fill in all fields — duration must be a positive number.', fr: 'Remplissez tous les champs — la durée doit être un nombre positif.' },
+  'ov.thisSite':         { da: 'dette badested', en: 'this bathing site', fr: 'ce site de baignade' },
+  'ov.confirmSend':      { da: 'Udsend kommunalt varsel', en: 'Publish council alert', fr: "Publier l'alerte de la mairie" },
+  'ov.confirmSendBody':  { da: 'for', en: 'for', fr: 'pour' },
+  'ov.confirmSendVisible': { da: 'Banneret på badestedets side + et push til abonnenter bliver ØJEBLIKKELIGT synligt, og gælder i', en: 'The banner on the site’s page + a push to subscribers becomes visible IMMEDIATELY, and lasts', fr: 'La bannière sur la page du site + une notification push aux abonnés devient visible IMMÉDIATEMENT, et dure' },
+  'ov.confirmSendNote':  { da: 'Dette ændrer IKKE badestedets officielle status eller risikoprocent — kun banneret.', en: 'This does NOT change the site’s official status or risk percentage — only the banner.', fr: 'Ceci ne modifie PAS le statut officiel du site ni son pourcentage de risque — seulement la bannière.' },
+  'ov.sending':          { da: 'Sender…', en: 'Sending…', fr: 'Envoi…' },
+  'ov.errSend':          { da: 'Kunne ikke udsende kommunalt varsel.', en: 'Could not publish council alert.', fr: "Impossible de publier l'alerte de la mairie." },
+  'ov.sentOk':           { da: '✓ Banner sat og synligt med det samme — gælder til', en: '✓ Banner set and visible immediately — valid until', fr: '✓ Bannière définie et visible immédiatement — valable jusqu’au' },
+  'ov.subscribersNotified': { da: 'abonnent(er) varslet.', en: 'subscriber(s) notified.', fr: 'abonné(s) notifié(s).' },
+  'ov.statusUnchanged':  { da: '(Officiel status/risikoprocent er uændret.)', en: '(Official status/risk percentage is unchanged.)', fr: '(Le statut officiel/pourcentage de risque est inchangé.)' },
+  'ov.errSendConn':      { da: 'Kunne ikke udsende kommunalt varsel — tjek din forbindelse.', en: 'Could not publish council alert — check your connection.', fr: "Impossible de publier l'alerte de la mairie — vérifiez votre connexion." },
+  'ov.noneActive':       { da: 'Ingen aktive overstyringer lige nu.', en: 'No active overrides right now.', fr: "Aucune dérogation active pour le moment." },
+  'ov.validUntil':       { da: 'Gælder til', en: 'Valid until', fr: 'Valable jusqu’au' },
+  'ov.clearNow':         { da: 'Ryd nu', en: 'Clear now', fr: 'Effacer maintenant' },
+  'ov.confirmClear':     { da: 'Ryd det kommunale varsel nu, før det naturligt udløber? Banneret fjernes øjeblikkeligt fra badestedets side.', en: 'Clear this council alert now, before it naturally expires? The banner is removed from the site’s page immediately.', fr: "Effacer cette alerte de la mairie maintenant, avant son expiration naturelle ? La bannière est retirée immédiatement de la page du site." },
+
+  // ── loadSkiltBadesteder / toggleSkiltEmbed (Skilte tab) ──
+  'skilte.err':          { da: 'Kunne ikke hente badesteder.', en: 'Could not load bathing sites.', fr: 'Impossible de charger les sites de baignade.' },
+  'skilte.errConn':      { da: 'Kunne ikke hente badesteder — tjek din forbindelse.', en: 'Could not load bathing sites — check your connection.', fr: 'Impossible de charger les sites de baignade — vérifiez votre connexion.' },
+  'skilte.noneFound':    { da: 'Ingen badesteder fundet.', en: 'No bathing sites found.', fr: 'Aucun site de baignade trouvé.' },
+  'skilte.downloadEps':  { da: 'Download EPS', en: 'Download EPS', fr: 'Télécharger EPS' },
+  'skilte.copyIframe':   { da: '🔗 Kopiér iframe', en: '🔗 Copy iframe', fr: '🔗 Copier l’iframe' },
+  'skilte.iframeTitle':  { da: 'Badevand —', en: 'Bathing water —', fr: 'Eaux de baignade —' },
+
+  // ── renderVarselBarChart bar tooltips/aria-label ──
+  'ovl.trend.barTooltip': { da: 'gul,', en: 'yellow,', fr: 'jaune,' },
+  'ovl.trend.barTooltipRed': { da: 'rød', en: 'red', fr: 'rouge' },
+  'ovl.trend.ariaLabel':  { da: 'Overløbsvarsler over tid, i alt', en: 'Overflow alerts over time, total', fr: 'Alertes de débordement dans le temps, total' },
+  'ovl.trend.inPeriod':   { da: 'i perioden', en: 'in the period', fr: 'sur la période' },
+};
+function tr(key) {
+  const entry = T[key];
+  if (!entry) { console.warn('[i18n] missing key:', key); return key; }
+  return entry[LANG] ?? entry.da ?? key;
+}
+
 function escHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
 function statusBadge(status) {
   const cls = status === 'active' ? 'badge-active' : status === 'suspended' ? 'badge-suspended' : 'badge-trial';
-  const label = status === 'active' ? 'Aktiv' : status === 'suspended' ? 'Suspenderet' : 'Trial';
+  const label = status === 'active' ? tr('status.active') : status === 'suspended' ? tr('status.suspended') : tr('status.trial');
   return `<span class="badge ${cls}">${label}</span>`;
 }
 
+const DATE_LOCALE = { da: 'da-DK', en: 'en-GB', fr: 'fr-FR' };
 function fmtDate(iso) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' });
+  return new Date(iso).toLocaleDateString(DATE_LOCALE[LANG], { year: 'numeric', month: 'long', day: 'numeric' });
 }
 
 function currentMonthStr() {
@@ -504,15 +895,16 @@ function render() {
   const t = window.__TENANT__;
   const content = document.getElementById('content');
   if (!t) {
-    content.innerHTML = '<div class="err">Ikke logget ind, eller sessionen er udløbet.</div>';
+    content.innerHTML = `<div class="err">${tr('err.notLoggedIn')}</div>`;
     return;
   }
+  const AUTH_METHOD_KEY = { trial: 'auth.trial', oauth: 'auth.oauth', password: 'auth.password' };
   content.innerHTML = `
     <div class="dash-header">
       ${t.logoUrl ? `<img class="dash-logo" src="${escHtml(t.logoUrl)}" alt="" onerror="this.remove()">` : ''}
       <div>
         <h1>🏛 ${escHtml(t.name)}</h1>
-        <div class="sub">Kommune-dashboard — logget ind via ${{ trial: 'trial-adgang', oauth: 'kommunens eget OAuth-login', password: 'e-mail/adgangskode' }[t.authMethod] || 'ukendt metode'}</div>
+        <div class="sub">${tr('dash.sub')} ${tr(AUTH_METHOD_KEY[t.authMethod] || 'auth.unknown')}</div>
       </div>
     </div>
 
@@ -520,26 +912,26 @@ function render() {
          dashboard, default-aktiv) og "Badevand" (al tidligere eksisterende
          rapportering, flyttet uændret ind i sit eget tab-panel nedenfor). -->
     <div class="tab-bar">
-      <button type="button" class="tab-btn active" data-tab="overloeb" onclick="switchDashTab('overloeb')">Overløb</button>
-      <button type="button" class="tab-btn" data-tab="badevand" onclick="switchDashTab('badevand')">Badevand</button>
-      <button type="button" class="tab-btn" data-tab="skilte" onclick="switchDashTab('skilte')">Skilte</button>
-      <button type="button" class="tab-btn" data-tab="opsaetning" onclick="switchDashTab('opsaetning')">Opsætning</button>
+      <button type="button" class="tab-btn active" data-tab="overloeb" onclick="switchDashTab('overloeb')">${tr('tab.overloeb')}</button>
+      <button type="button" class="tab-btn" data-tab="badevand" onclick="switchDashTab('badevand')">${tr('tab.badevand')}</button>
+      <button type="button" class="tab-btn" data-tab="skilte" onclick="switchDashTab('skilte')">${tr('tab.skilte')}</button>
+      <button type="button" class="tab-btn" data-tab="opsaetning" onclick="switchDashTab('opsaetning')">${tr('tab.opsaetning')}</button>
     </div>
 
     <div class="tab-panel active" id="tab-overloeb">
       <div class="card" id="card-overloeb-map">
-        <h2>Overløb lige nu</h2>
+        <h2>${tr('ovl.map.title')}</h2>
         <div class="ovl-totals">
-          <div class="ovl-total ovl-total-red"><span class="ovl-total-value" id="ovl-t-roed">–</span><span class="ovl-total-label">Røde overløb</span></div>
-          <div class="ovl-total ovl-total-yellow"><span class="ovl-total-value" id="ovl-t-gul">–</span><span class="ovl-total-label">Gule overløb</span></div>
-          <div class="ovl-total ovl-total-green"><span class="ovl-total-value" id="ovl-t-groen">–</span><span class="ovl-total-label">Grønne overløb</span></div>
+          <div class="ovl-total ovl-total-red"><span class="ovl-total-value" id="ovl-t-roed">–</span><span class="ovl-total-label">${tr('ovl.total.red')}</span></div>
+          <div class="ovl-total ovl-total-yellow"><span class="ovl-total-value" id="ovl-t-gul">–</span><span class="ovl-total-label">${tr('ovl.total.yellow')}</span></div>
+          <div class="ovl-total ovl-total-green"><span class="ovl-total-value" id="ovl-t-groen">–</span><span class="ovl-total-label">${tr('ovl.total.green')}</span></div>
         </div>
         <div class="ovl-nodata-note" id="ovl-nodata-note"></div>
 
         <div class="stat-controls">
-          <label>Prognose</label>
+          <label>${tr('ovl.forecast.label')}</label>
           <div class="ovl-horizon-toggle" id="ovl-horizon-toggle">
-            <button type="button" class="ovl-horizon-btn active" data-horizon="nu" onclick="setOverloebHorizon('nu')">Nu</button>
+            <button type="button" class="ovl-horizon-btn active" data-horizon="nu" onclick="setOverloebHorizon('nu')">${tr('ovl.horizon.now')}</button>
             <button type="button" class="ovl-horizon-btn" data-horizon="24h" onclick="setOverloebHorizon('24h')">24h</button>
             <button type="button" class="ovl-horizon-btn" data-horizon="72h" onclick="setOverloebHorizon('72h')">72h</button>
           </div>
@@ -547,16 +939,16 @@ function render() {
                dkvand's #lag-btn/#lag-body, kun de lag kommune-kortet har
                data for (se planens afgrænsning). -->
           <div class="ovl-lag-wrap">
-            <button type="button" onclick="toggleOvlLagPanel()">🗺️ Lag</button>
+            <button type="button" onclick="toggleOvlLagPanel()">${tr('ovl.layers.btn')}</button>
             <div id="ovl-lag-body" class="ovl-lag-body">
-              <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-badesteder" onclick="toggleOvlLayer('badesteder')">🏖 Badesteder</button>
-              <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-udloeb" onclick="toggleOvlLayer('udloeb')">📍 Udløbspunkter</button>
-              <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-ringe" onclick="toggleOvlLayer('ringe')">⚠ Varselsringe</button>
-              <button type="button" class="ovl-layer-btn" id="ovl-layerbtn-rbuRegn" onclick="toggleOvlLayer('rbuRegn')">🔴 RBU Regn</button>
-              <button type="button" class="ovl-layer-btn" id="ovl-layerbtn-rbuKloak" onclick="toggleOvlLayer('rbuKloak')">🟤 RBU Kloak</button>
+              <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-badesteder" onclick="toggleOvlLayer('badesteder')">${tr('ovl.layer.badesteder')}</button>
+              <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-udloeb" onclick="toggleOvlLayer('udloeb')">${tr('ovl.layer.udloeb')}</button>
+              <button type="button" class="ovl-layer-btn active" id="ovl-layerbtn-ringe" onclick="toggleOvlLayer('ringe')">${tr('ovl.layer.ringe')}</button>
+              <button type="button" class="ovl-layer-btn" id="ovl-layerbtn-rbuRegn" onclick="toggleOvlLayer('rbuRegn')">${tr('ovl.layer.rbuRegn')}</button>
+              <button type="button" class="ovl-layer-btn" id="ovl-layerbtn-rbuKloak" onclick="toggleOvlLayer('rbuKloak')">${tr('ovl.layer.rbuKloak')}</button>
             </div>
           </div>
-          <button type="button" onclick="toggleOvlFullscreen()" style="margin-left:auto">⛶ Fuld skærm</button>
+          <button type="button" onclick="toggleOvlFullscreen()" style="margin-left:auto">${tr('ovl.fullscreen')}</button>
         </div>
 
         <!-- RETTET (bruger-rapporteret — detaljepanelet åbnede "under
@@ -576,69 +968,69 @@ function render() {
           </div>
         </div>
         <div class="ovl-map-legend">
-          <span><span class="ovl-legend-dot" style="background:#2d7d4f"></span>Grøn</span>
-          <span><span class="ovl-legend-dot" style="background:#d4a020"></span>Gul</span>
-          <span><span class="ovl-legend-dot" style="background:#c84b1f"></span>Rød</span>
-          <span><span class="ovl-legend-ring"></span>Aktiv varselsring (udløb)</span>
+          <span><span class="ovl-legend-dot" style="background:#2d7d4f"></span>${tr('ovl.legend.green')}</span>
+          <span><span class="ovl-legend-dot" style="background:#d4a020"></span>${tr('ovl.legend.yellow')}</span>
+          <span><span class="ovl-legend-dot" style="background:#c84b1f"></span>${tr('ovl.legend.red')}</span>
+          <span><span class="ovl-legend-ring"></span>${tr('ovl.legend.ring')}</span>
         </div>
       </div>
 
       <div class="card" id="card-overloeb-varsler">
-        <h2>Udløb med aktive varsler</h2>
-        <div id="ovl-varsler-content">Indlæser…</div>
+        <h2>${tr('ovl.varsler.title')}</h2>
+        <div id="ovl-varsler-content">${tr('loading')}</div>
       </div>
 
       <div class="card" id="card-overloeb-historik">
-        <h2>Historik — overløbsvarsler</h2>
-        <div class="ov-intro">Antal nye gul/rød-varsler pr. dag i kommunen, seneste 90 dage.</div>
-        <div class="trend-chart-wrap" id="ovl-historik-chart">Indlæser…</div>
+        <h2>${tr('ovl.historik.title')}</h2>
+        <div class="ov-intro">${tr('ovl.historik.intro')}</div>
+        <div class="trend-chart-wrap" id="ovl-historik-chart">${tr('loading')}</div>
       </div>
 
       <div class="card" id="card-overloeb-prioriteret">
-        <h2>Prioriterede overløb</h2>
+        <h2>${tr('ovl.prio.title')}</h2>
         <div class="stat-controls">
-          <label for="ovl-prio-period">Periode</label>
+          <label for="ovl-prio-period">${tr('period.label')}</label>
           <select id="ovl-prio-period" onchange="onOvlPrioPeriodChange()">
-            <option value="today">I dag</option>
-            <option value="7d">Sidste 7 dage</option>
-            <option value="month">Måned</option>
-            <option value="quarter" selected>Sidste kvartal</option>
-            <option value="year">Sidste år</option>
+            <option value="today">${tr('period.today')}</option>
+            <option value="7d">${tr('period.7d')}</option>
+            <option value="month">${tr('period.month')}</option>
+            <option value="quarter" selected>${tr('period.quarter')}</option>
+            <option value="year">${tr('period.year')}</option>
           </select>
           <input type="month" id="ovl-prio-month" value="${currentMonthStr()}" onchange="loadOverloebPrioriteret()" style="display:none">
         </div>
         <div class="ovl-toggle" id="ovl-prio-sort-toggle">
-          <button type="button" class="ovl-toggle-btn active" data-sort="varsler" onclick="setOvlPrioSort('varsler')">Flest varsler</button>
-          <button type="button" class="ovl-toggle-btn" data-sort="udledning" onclick="setOvlPrioSort('udledning')">Størst estimeret udledning</button>
+          <button type="button" class="ovl-toggle-btn active" data-sort="varsler" onclick="setOvlPrioSort('varsler')">${tr('ovl.prio.sortAlerts')}</button>
+          <button type="button" class="ovl-toggle-btn" data-sort="udledning" onclick="setOvlPrioSort('udledning')">${tr('ovl.prio.sortVolume')}</button>
         </div>
-        <div id="ovl-prio-content">Indlæser…</div>
-        <div class="ovl-prio-note">Estimeret udledning er baseret på PULS' gennemsnitlige udledningsmængde pr. hændelse × antal registrerede varsler i perioden — IKKE en målt mængde.</div>
+        <div id="ovl-prio-content">${tr('loading')}</div>
+        <div class="ovl-prio-note">${tr('ovl.prio.note')}</div>
       </div>
 
       <div class="card" id="card-overloeb-embed">
-        <h2>Indlejr kort</h2>
-        <div class="ov-intro">Vis kortet på jeres egen hjemmeside via en iframe — opdaterer sig selv live, samme data som ovenfor.</div>
-        <button type="button" onclick="generateOverloebEmbed()">🔗 Generér indlejrings-link</button>
-        <button type="button" onclick="revokeOverloebEmbeds()">Tilbagekald alle indlejrings-links</button>
+        <h2>${tr('ovl.embed.title')}</h2>
+        <div class="ov-intro">${tr('ovl.embed.intro')}</div>
+        <button type="button" onclick="generateOverloebEmbed()">${tr('ovl.embed.generate')}</button>
+        <button type="button" onclick="revokeOverloebEmbeds()">${tr('ovl.embed.revokeAll')}</button>
         <div id="ovl-embed-result"></div>
       </div>
     </div>
 
     <div class="tab-panel" id="tab-badevand">
     <nav class="dash-toc">
-      <a href="#card-status">Status</a>
-      <a href="#card-badevandssteder">Badevandssteder</a>
-      <a href="#card-varsel">Kommunalt Varsel</a>
-      <a href="#card-statistik">Statistik</a>
-      <a href="#card-vurderinger">Borgerindberetninger</a>
-      <a href="#card-benchmark">Kommune-benchmark</a>
+      <a href="#card-status">${tr('toc.status')}</a>
+      <a href="#card-badevandssteder">${tr('toc.badevandssteder')}</a>
+      <a href="#card-varsel">${tr('toc.varsel')}</a>
+      <a href="#card-statistik">${tr('toc.statistik')}</a>
+      <a href="#card-vurderinger">${tr('toc.vurderinger')}</a>
+      <a href="#card-benchmark">${tr('toc.benchmark')}</a>
     </nav>
 
     <div class="card" id="card-status">
-      <h2>Status</h2>
-      <div class="row"><span>Status</span><span>${statusBadge(t.status)}</span></div>
-      ${t.status === 'trial' ? `<div class="row"><span>Trial udløber</span><span>${fmtDate(t.trialExpiresAt)}</span></div>` : ''}
-      ${t.agreementSignedAt ? `<div class="row"><span>Aftale underskrevet</span><span>${fmtDate(t.agreementSignedAt)}</span></div>` : ''}
+      <h2>${tr('status.label')}</h2>
+      <div class="row"><span>${tr('status.label')}</span><span>${statusBadge(t.status)}</span></div>
+      ${t.status === 'trial' ? `<div class="row"><span>${tr('status.trialExpires')}</span><span>${fmtDate(t.trialExpiresAt)}</span></div>` : ''}
+      ${t.agreementSignedAt ? `<div class="row"><span>${tr('status.agreementSigned')}</span><span>${fmtDate(t.agreementSignedAt)}</span></div>` : ''}
     </div>
 
     <!-- RETTET (bruger-krav 2026-08-20 — "fusionér panelerne Badevandshistorik
@@ -651,9 +1043,9 @@ function render() {
          eksisterende "Sidste 7/30 dage"-donuts, i stedet for en separat,
          altid-synlig liste for ALLE badesteder på én gang. -->
     <div class="card" id="card-badevandssteder">
-      <h2>Badevandssteder</h2>
+      <h2>${tr('toc.badevandssteder')}</h2>
       <div class="stat-controls">
-        <label for="stat-period">Periode</label>
+        <label for="stat-period">${tr('period.label')}</label>
         <!-- RETTET (bruger-krav 2026-08-20 — standardiseret periode-vælger
              på tværs af Badevandssteder/Kommune-benchmark): Dag/Uge/Måned/
              Kvartal/År/Brugerdefineret. Værdierne (today/7d/quarter/year)
@@ -664,12 +1056,12 @@ function render() {
              onStatPeriodChange() og server.js's ?from=&to=-udvidelse af
              GET /admin/api/badested-alert-stats. -->
         <select id="stat-period" onchange="onStatPeriodChange()">
-          <option value="today">Dag</option>
-          <option value="7d">Uge</option>
-          <option value="month">Måned</option>
-          <option value="quarter">Kvartal</option>
-          <option value="year">År</option>
-          <option value="custom">Brugerdefineret</option>
+          <option value="today">${tr('period.day')}</option>
+          <option value="7d">${tr('period.week')}</option>
+          <option value="month">${tr('period.month')}</option>
+          <option value="quarter">${tr('period.quarterShort')}</option>
+          <option value="year">${tr('period.yearShort')}</option>
+          <option value="custom">${tr('period.custom')}</option>
         </select>
         <input type="month" id="stat-month" value="${currentMonthStr()}" onchange="loadAlertStats()" style="display:none">
         <span id="stat-custom-range" style="display:none">
@@ -677,107 +1069,93 @@ function render() {
           <input type="date" id="stat-to" onchange="loadAlertStats()">
         </span>
       </div>
-      <div id="stat-content">Indlæser…</div>
+      <div id="stat-content">${tr('loading')}</div>
     </div>
 
     <div class="card" id="card-varsel">
-      <h2>Kommunalt Varsel</h2>
-      <div class="ov-intro">
-        Et banner på badestedets side og i push til abonnenter — ændrer
-        IKKE badestedets officielle status eller risikoprocent, kun
-        indholdet af banneret.
-      </div>
+      <h2>${tr('toc.varsel')}</h2>
+      <div class="ov-intro">${tr('varsel.intro')}</div>
       <div id="ov-active"></div>
       <form id="ov-form" onsubmit="return submitOverride(event)">
         <div class="ov-field">
-          <label for="ov-badested">Badested</label>
+          <label for="ov-badested">${tr('varsel.site')}</label>
           <select id="ov-badested" required></select>
         </div>
         <div class="ov-field">
-          <label for="ov-bucket">Farve/alvorlighed i banneret (ændrer IKKE den officielle status)</label>
+          <label for="ov-bucket">${tr('varsel.severity')}</label>
           <select id="ov-bucket" required>
-            <option value="groen">Grøn — informativ</option>
-            <option value="gul">Gul — moderat varsel</option>
-            <option value="roed">Rød — alvorligt varsel</option>
-            <option value="lukket">Lukket for badning</option>
+            <option value="groen">${tr('varsel.green')}</option>
+            <option value="gul">${tr('varsel.yellow')}</option>
+            <option value="roed">${tr('varsel.red')}</option>
+            <option value="lukket">${tr('varsel.closed')}</option>
           </select>
         </div>
         <div class="ov-field">
-          <label for="ov-message">Varsel til offentligheden (vises i banner med jeres kommunenavn/logo)</label>
-          <textarea id="ov-message" required maxlength="500" rows="3" placeholder="Fx: Forhøjet bakterieindhold efter kraftig regn — badning frarådes."></textarea>
+          <label for="ov-message">${tr('varsel.message')}</label>
+          <textarea id="ov-message" required maxlength="500" rows="3" placeholder="${tr('varsel.messagePlaceholder')}"></textarea>
         </div>
         <div class="ov-field ov-duration">
           <div style="flex:0 0 auto">
-            <label for="ov-duration-value">Udløber om</label>
+            <label for="ov-duration-value">${tr('varsel.expiresIn')}</label>
             <input type="number" id="ov-duration-value" min="1" step="1" required value="24">
           </div>
           <select id="ov-duration-unit">
-            <option value="hours">timer</option>
-            <option value="days" selected>dage</option>
+            <option value="hours">${tr('varsel.hours')}</option>
+            <option value="days" selected>${tr('varsel.days')}</option>
           </select>
         </div>
-        <button type="submit">Udsend kommunalt varsel — synligt med det samme</button>
+        <button type="submit">${tr('varsel.submit')}</button>
         <div id="ov-result"></div>
       </form>
     </div>
 
     <div class="card" id="card-statistik">
-      <h2>Statistik</h2>
-      <div id="kstat-content">Indlæser…</div>
+      <h2>${tr('toc.statistik')}</h2>
+      <div id="kstat-content">${tr('loading')}</div>
     </div>
 
     <div class="card" id="card-vurderinger">
-      <h2>Borgerindberetninger</h2>
-      <div class="ov-intro">
-        De enkelte badevandsindberetninger indsendt af borgere for jeres
-        badesteder — til læsning, ikke redigering. Alge- og affaldsrapporter
-        er markeret særskilt, da de kan betyde at badestedet bør besigtiges.
-      </div>
+      <h2>${tr('toc.vurderinger')}</h2>
+      <div class="ov-intro">${tr('vurd.intro')}</div>
       <div class="stat-controls">
-        <label for="vurd-filter">Vis</label>
+        <label for="vurd-filter">${tr('vurd.show')}</label>
         <select id="vurd-filter" onchange="onVurdFilterChange()">
-          <option value="alle">Alle vurderinger</option>
-          <option value="prioritet">Kun alger &amp; affald</option>
-          <option value="alger_set">Kun alger</option>
-          <option value="affald">Kun affald</option>
-          <option value="uklart_vand">Kun uklart vand</option>
-          <option value="ser_fint_ud">Kun "ser fint ud"</option>
-          <option value="brandmaend_set">Kun brandmænd</option>
+          <option value="alle">${tr('vurd.all')}</option>
+          <option value="prioritet">${tr('vurd.priorityOnly')}</option>
+          <option value="alger_set">${tr('vurd.algaeOnly')}</option>
+          <option value="affald">${tr('vurd.litterOnly')}</option>
+          <option value="uklart_vand">${tr('vurd.murkyOnly')}</option>
+          <option value="ser_fint_ud">${tr('vurd.looksFineOnly')}</option>
+          <option value="brandmaend_set">${tr('vurd.firefightersOnly')}</option>
         </select>
       </div>
-      <div id="vurd-content">Indlæser…</div>
+      <div id="vurd-content">${tr('loading')}</div>
     </div>
 
     <div class="card" id="card-benchmark">
-      <h2>Kommune-benchmark</h2>
-      <div class="ov-intro">
-        Jeres kommunes håndtering af badevand/overløb sammenlignet med landets
-        øvrige deltagende kommuner. Rå hændelsestal er indekseret pr. antal
-        badesteder, for at korrigere for at bedre overvågning i sig selv
-        registrerer flere hændelser end dårligere overvågning — se
-        rapporten "Datakvalitet", som viser dette direkte.
-      </div>
+      <h2>${tr('toc.benchmark')}</h2>
+      <div class="ov-intro">${tr('kb.intro')}</div>
       <div class="stat-controls">
-        <label for="kb-report">Rapport</label>
+        <label for="kb-report">${tr('kb.report')}</label>
         <select id="kb-report" onchange="onKbReportChange()">
-          <option value="samlet">Samlet placering</option>
-          <option value="varsler">Varsler</option>
-          <option value="lukkedage">Lukkedage</option>
-          <option value="vurderinger">Badestedsindberetninger</option>
-          <option value="datakvalitet">Datakvalitet</option>
+          <option value="samlet">${tr('kb.overall')}</option>
+          <option value="varsler">${tr('kb.alerts')}</option>
+          <option value="lukkedage">${tr('kb.closedDays')}</option>
+          <option value="vurderinger">${tr('kb.reports')}</option>
+          <option value="datakvalitet">${tr('kb.dataQuality')}</option>
         </select>
         <span id="kb-period-controls">
-          <label for="kb-period">Periode</label>
+          <label for="kb-period">${tr('period.label')}</label>
           <!-- RETTET (bruger-krav 2026-08-20 — standardiseret periode-
                vælger, se Badevandssteder-panelets tilsvarende kommentar):
                kun labels ændret (Dag/Uge/Kvartal/År), værdier uændrede. -->
           <select id="kb-period" onchange="onKbPeriodChange()">
-            <option value="today">Dag</option>
-            <option value="7d">Uge</option>
-            <option value="month">Måned</option>
-            <option value="quarter" selected>Kvartal</option>
-            <option value="year">År</option>
-            <option value="custom">Brugerdefineret</option>
+            <option value="today">${tr('period.day')}</option>
+            <option value="7d">${tr('period.week')}</option>
+            <option value="month">${tr('period.month')}</option>
+            <option value="quarter" selected>${tr('period.quarterShort')}</option>
+            <option value="year">${tr('period.yearShort')}</option>
+            <option value="custom">${tr('period.custom')}</option>
           </select>
           <input type="month" id="kb-month" value="${currentMonthStr()}" onchange="loadKommuneBenchmark()" style="display:none">
           <span id="kb-custom-range" style="display:none">
@@ -786,7 +1164,7 @@ function render() {
           </span>
         </span>
       </div>
-      <div id="kb-content">Indlæser…</div>
+      <div id="kb-content">${tr('loading')}</div>
     </div>
     </div>
 
@@ -795,35 +1173,21 @@ function render() {
          genereringen (server-side PDF/EPS, ingen klient-afhængighed). -->
     <div class="tab-panel" id="tab-skilte">
       <div class="card" id="card-skilte-pdf">
-        <h2>Download PDF-skilte</h2>
-        <div class="ov-intro">
-          Ét samlet PDF-dokument med ét printbart A4-skilt pr. badested,
-          inklusiv QR-kode og jeres kommunes eget logo øverst — til
-          opsætning ved badestederne. Adskiller sig fra det almindelige
-          QR-skilt borgerne selv kan udskrive fra badestedssiden ved netop
-          logoet.
-        </div>
-        <a href="/admin/api/skilte/pdf" download class="btn-link">📄 Download alle PDF-skilte</a>
+        <h2>${tr('skilte.pdf.title')}</h2>
+        <div class="ov-intro">${tr('skilte.pdf.intro')}</div>
+        <a href="/admin/api/skilte/pdf" download class="btn-link">${tr('skilte.pdf.download')}</a>
       </div>
 
       <div class="card" id="card-skilte-eps">
-        <h2>Download QR EPS-filer</h2>
-        <div class="ov-intro">
-          Rene QR-koder som EPS-vektorfiler til professionelt tryk — vælg
-          selv præcis de skilte I ønsker trykt.
-        </div>
-        <div id="skilte-eps-content">Indlæser…</div>
+        <h2>${tr('skilte.eps.title')}</h2>
+        <div class="ov-intro">${tr('skilte.eps.intro')}</div>
+        <div id="skilte-eps-content">${tr('loading')}</div>
       </div>
 
       <div class="card" id="card-skilte-live">
-        <h2>Live digitale skilte</h2>
-        <div class="ov-intro">
-          Kopiér en iframe-kode pr. badested til en skærm på stedet —
-          skiltet opdaterer sig selv automatisk, hver gang der er nye data
-          (ca. hvert 15. minut). Viser samme offentlige badevandsstatus som
-          badestedets egen side.
-        </div>
-        <div id="skilte-live-content">Indlæser…</div>
+        <h2>${tr('skilte.live.title')}</h2>
+        <div class="ov-intro">${tr('skilte.live.intro')}</div>
+        <div id="skilte-live-content">${tr('loading')}</div>
       </div>
     </div>
 
@@ -832,14 +1196,11 @@ function render() {
          flyttet til øverst til højre i skærmbilledet, se .dash-topbar). -->
     <div class="tab-panel" id="tab-opsaetning">
       <div class="card" id="card-opsaetning-oauth">
-        <h2>OAuth-opsætning</h2>
-        <div class="ov-intro">
-          Lad jeres medarbejdere logge ind med kommunens eget OAuth/OIDC-
-          login i stedet for et midlertidigt trial-link.
-        </div>
-        <button type="button" onclick="location.href='/admin/settings/oauth'">⚙️ OAuth-opsætning</button>
+        <h2>${tr('opsaetning.oauth.title')}</h2>
+        <div class="ov-intro">${tr('opsaetning.oauth.intro')}</div>
+        <button type="button" onclick="location.href='/admin/settings/oauth'">${tr('opsaetning.oauth.btn')}</button>
       </div>
-      <div class="ov-intro" style="margin-top:.5rem">Flere indstillinger følger senere.</div>
+      <div class="ov-intro" style="margin-top:.5rem">${tr('opsaetning.more')}</div>
     </div>
   `;
   loadOverrideBadesteder().then(loadActiveOverrides);
@@ -904,14 +1265,18 @@ function ovlRiskBucket(r) {
   return 'groen';
 }
 
-const OVL_DATA_QUALITY_LABEL = { 0: 'Reelle data', 1: 'Verificeret nul', 2: 'Estimeret', 3: 'Ingen data' };
+// LANG-aware — see T's 'ovl.dataQuality.*' entries. Kept as functions
+// (not plain lookup objects like the pre-i18n version) so every call site
+// automatically re-resolves for the current LANG, no per-site tr() call
+// needed at the point of use.
+function ovlDataQualityLabel(code) { return T[`ovl.dataQuality.${code}`] ? tr(`ovl.dataQuality.${code}`) : tr('unknown'); }
 
 // groen/gul/roed/ingen-data matcher risk-model.js's riskBucket()-strenge
 // 1:1 — lukket dækker en aktiv kommune-override med bucket 'lukket' (se
 // badested-override-logic.js's OVERRIDE_BUCKETS), som kun badesteder (ikke
 // udløb) kan have.
 const OVL_BUCKET_COLOR = { roed: '#c84b1f', gul: '#d4a020', groen: '#2d7d4f', lukket: '#3a3a3a', 'ingen-data': '#1a6faf' };
-const OVL_BUCKET_LABEL = { roed: 'Rød', gul: 'Gul', groen: 'Grøn', lukket: 'Lukket', 'ingen-data': 'Ingen data' };
+function ovlBucketLabel(bucket) { return T[`ovl.bucket.${bucket}`] ? tr(`ovl.bucket.${bucket}`) : bucket; }
 
 // RETTET (bruger-rapporteret — "lokationsprikkerne skal have samme farver
 // som fra dkvand kortet til borgerne") — badested-prikkerne farves allerede
@@ -941,8 +1306,8 @@ function ovlRiskColor(r) {
 // kommune-kortet zoom-gradueres ikke (få hundrede punkter, ikke 21.375),
 // så kun "tæt"-udseendet er relevant her.
 const OVL_RBU_STYLE = {
-  wastewater: { fill: '#8b5a2b', stroke: '#4a2c14', label: 'Kloak' },
-  stormwater: { fill: '#c0392b', stroke: '#8b1a1a', label: 'Regn' },
+  wastewater: { fill: '#8b5a2b', stroke: '#4a2c14' },
+  stormwater: { fill: '#c0392b', stroke: '#8b1a1a' },
 };
 
 // NYT: samme selv-hostede, kun-Danmark tileserver som dansk-overloeb-
@@ -1014,21 +1379,22 @@ async function loadOvlRbu() {
   try {
     const resp = await fetch('/admin/api/overloeb-rbu', { cache: 'no-store' });
     const data = await resp.json();
-    if (!resp.ok) { console.warn('Kunne ikke hente RBU-punkter:', data.error); return; }
+    if (!resp.ok) { console.warn(tr('rbu.err'), data.error); return; }
     for (const p of (data.rbu || [])) {
       if (p.lat == null || p.lng == null) continue;
       const style = p.isWastewater ? OVL_RBU_STYLE.wastewater : OVL_RBU_STYLE.stormwater;
+      const label = p.isWastewater ? tr('type.wastewater') : tr('rbu.rain');
       const targetLayer = p.isWastewater ? ovlRbuKloakLayer : ovlRbuRegnLayer;
       L.circleMarker([p.lat, p.lng], {
         radius: 5, fillColor: style.fill, color: style.stroke, weight: 2, fillOpacity: 0.75, opacity: 0.95,
       }).bindTooltip(
-        `<strong>${escHtml(p.navn || 'RBU-punkt')}</strong><br>${escHtml(style.label)}${p.vandomraade ? ' · ' + escHtml(p.vandomraade) : ''}`,
+        `<strong>${escHtml(p.navn || tr('rbu.point'))}</strong><br>${escHtml(label)}${p.vandomraade ? ' · ' + escHtml(p.vandomraade) : ''}`,
         { sticky: true }
       ).addTo(targetLayer);
     }
     ovlRbuLoaded = true;
   } catch (e) {
-    console.warn('Kunne ikke hente RBU-punkter:', e.message);
+    console.warn(tr('rbu.err'), e.message);
   }
 }
 
@@ -1045,12 +1411,12 @@ async function loadOverloebStatus() {
     const resp = await fetch(`/admin/api/overloeb-status?horizon=${encodeURIComponent(ovlHorizon)}`, { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) {
-      document.getElementById('ovl-varsler-content').innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente overløbsstatus.')}</div>`;
+      document.getElementById('ovl-varsler-content').innerHTML = `<div class="err">${escHtml(data.error || tr('ovl.err.status'))}</div>`;
       return;
     }
     renderOverloeb(data);
   } catch (e) {
-    document.getElementById('ovl-varsler-content').innerHTML = '<div class="err">Kunne ikke hente overløbsstatus — tjek din forbindelse.</div>';
+    document.getElementById('ovl-varsler-content').innerHTML = `<div class="err">${tr('ovl.err.statusConn')}</div>`;
   }
 }
 
@@ -1059,7 +1425,7 @@ function renderOverloeb(data) {
   document.getElementById('ovl-t-gul').textContent   = data.totals.gul;
   document.getElementById('ovl-t-groen').textContent = data.totals.groen;
   document.getElementById('ovl-nodata-note').textContent = data.totals.ingenData > 0
-    ? `${data.totals.ingenData} udløb uden vejrdata lige nu — ikke talt med ovenfor.`
+    ? `${data.totals.ingenData} ${tr('ovl.noWeatherData')}`
     : '';
 
   ovlBadestedLayer.clearLayers();
@@ -1075,7 +1441,7 @@ function renderOverloeb(data) {
     const marker = L.circleMarker([b.lat, b.lng], {
       radius: 8, fillColor: color, color: '#fff', weight: 2, fillOpacity: 0.9,
     }).bindTooltip(
-      `<strong>🏖 ${escHtml(b.navn)}</strong><br>${escHtml(OVL_BUCKET_LABEL[b.bucket] || b.bucket)}`,
+      `<strong>🏖 ${escHtml(b.navn)}</strong><br>${escHtml(ovlBucketLabel(b.bucket))}`,
       { sticky: true }
     ).addTo(ovlBadestedLayer);
     // NYT (bruger-krav 2026-08-20 — "samtlige informationer tilgængelige
@@ -1096,12 +1462,12 @@ function renderOverloeb(data) {
     // bruger derimod ovlRiskColor()'s kontinuerlige grøn→gul→rød-lerp, se
     // dens filhoved.
     const color = ovlRiskColor(u.risk);
-    const typeLabel = u.isWastewater ? 'Kloak' : 'Regnvand';
-    const riskPct = u.risk != null ? Math.round(u.risk * 100) + '%' : 'ingen data';
+    const typeLabel = u.isWastewater ? tr('type.wastewater') : tr('type.stormwater');
+    const riskPct = u.risk != null ? Math.round(u.risk * 100) + '%' : tr('ovl.bucket.ingen-data');
     const marker = L.circleMarker([u.lat, u.lng], {
       radius: 4, fillColor: color, color: 'rgba(255,255,255,.4)', weight: 1, fillOpacity: 0.85,
     }).bindTooltip(
-      `<strong>🚰 ${escHtml(u.navn)}</strong><br>${escHtml(typeLabel)} · ${escHtml(OVL_BUCKET_LABEL[u.bucket] || u.bucket)} (${riskPct})`,
+      `<strong>🚰 ${escHtml(u.navn)}</strong><br>${escHtml(typeLabel)} · ${escHtml(ovlBucketLabel(u.bucket))} (${riskPct})`,
       { sticky: true }
     ).addTo(ovlUdloebLayer);
     // NYT (bruger-ønske 2026-08-19): klik åbner det fulde detaljepanel —
@@ -1134,18 +1500,18 @@ function renderOverloeb(data) {
 
   const varslerEl = document.getElementById('ovl-varsler-content');
   if (data.varsler.length === 0) {
-    varslerEl.innerHTML = '<div class="ovl-alert-empty">Ingen aktive gul/rød-varsler for kommunens overløb lige nu.</div>';
+    varslerEl.innerHTML = `<div class="ovl-alert-empty">${tr('ovl.noActiveAlerts')}</div>`;
   } else {
     varslerEl.innerHTML = data.varsler.map(u => {
-      const typeLabel = u.isWastewater ? 'Kloak' : 'Regnvand';
+      const typeLabel = u.isWastewater ? tr('type.wastewater') : tr('type.stormwater');
       const riskPct = u.risk != null ? Math.round(u.risk * 100) : null;
       return `
         <div class="ovl-alert-row risk-${u.bucket}">
           <div class="ovl-alert-top">
             <span class="ovl-alert-name">${escHtml(u.navn)}</span>
-            <span class="ovl-alert-chip risk-${u.bucket}">${escHtml(OVL_BUCKET_LABEL[u.bucket])}${riskPct != null ? ' · ' + riskPct + '%' : ''}</span>
+            <span class="ovl-alert-chip risk-${u.bucket}">${escHtml(ovlBucketLabel(u.bucket))}${riskPct != null ? ' · ' + riskPct + '%' : ''}</span>
           </div>
-          <div class="ovl-alert-meta">${escHtml(typeLabel)} · prognose ${(u.forecastMM ?? 0).toFixed(1)} mm · observeret ${(u.todayMM ?? 0).toFixed(1)} mm</div>
+          <div class="ovl-alert-meta">${escHtml(typeLabel)} · ${tr('ovl.alert.forecast')} ${(u.forecastMM ?? 0).toFixed(1)} mm · ${tr('ovl.alert.observed')} ${(u.todayMM ?? 0).toFixed(1)} mm</div>
         </div>
       `;
     }).join('');
@@ -1176,38 +1542,38 @@ function openOvlUdlobPanel(u) {
   const panel = document.getElementById('ovl-udlob-panel');
   const sheet = document.getElementById('ovl-panel-sheet');
   if (!panel || !sheet) return;
-  const typeLabel = u.isWastewater ? 'Kloak' : 'Regnvand';
-  const qualityLabel = OVL_DATA_QUALITY_LABEL[u.dataQuality] ?? 'Ukendt';
+  const typeLabel = u.isWastewater ? tr('type.wastewater') : tr('type.stormwater');
+  const qualityLabel = ovlDataQualityLabel(u.dataQuality);
   const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(u.lat)},${encodeURIComponent(u.lng)}`;
   const literTekst = u.meanVolumePerEvent != null
-    ? `${Math.round(u.meanVolumePerEvent * 1000).toLocaleString('da-DK')} L/hændelse`
-    : 'Ukendt';
+    ? `${Math.round(u.meanVolumePerEvent * 1000).toLocaleString(DATE_LOCALE[LANG])} ${tr('ovl.panel.litersPerEvent')}`
+    : tr('unknown');
   sheet.innerHTML = `
     <div class="ovl-panel-top">
       <div>
         <div class="ovl-panel-title">🚰 ${escHtml(u.navn)}</div>
-        <div class="ovl-panel-sub">${escHtml(typeLabel)} · PULS-udløb</div>
+        <div class="ovl-panel-sub">${escHtml(typeLabel)} · ${tr('ovl.panel.pulsOutfall')}</div>
       </div>
       <button type="button" class="ovl-panel-close" onclick="closeOvlUdlobPanel()">✕</button>
     </div>
     <div class="ovl-panel-bars">
-      ${ovlBarRow('Nu', u.riskNu)}
-      ${ovlBarRow('24h prognose', u.foreRisk24h)}
-      ${ovlBarRow('72h prognose', u.foreRisk72h)}
+      ${ovlBarRow(tr('ovl.panel.now'), u.riskNu)}
+      ${ovlBarRow(tr('ovl.panel.forecast24h'), u.foreRisk24h)}
+      ${ovlBarRow(tr('ovl.panel.forecast72h'), u.foreRisk72h)}
     </div>
     <div class="ovl-panel-chips">
-      <span class="ovl-alert-chip risk-${ovlRiskBucket(u.viralScore)}">Viral ${u.viralScore != null ? Math.round(u.viralScore * 100) + '%' : '—'}</span>
-      <span class="ovl-alert-chip risk-${ovlRiskBucket(u.algaeScore)}">Alger ${u.algaeScore != null ? Math.round(u.algaeScore * 100) + '%' : '—'}</span>
+      <span class="ovl-alert-chip risk-${ovlRiskBucket(u.viralScore)}">${tr('ovl.panel.viral')} ${u.viralScore != null ? Math.round(u.viralScore * 100) + '%' : '—'}</span>
+      <span class="ovl-alert-chip risk-${ovlRiskBucket(u.algaeScore)}">${tr('ovl.panel.algae')} ${u.algaeScore != null ? Math.round(u.algaeScore * 100) + '%' : '—'}</span>
     </div>
     <div class="ovl-panel-stamdata">
-      <div>📍 <a href="${mapsUrl}" target="_blank" rel="noopener">Se på Google Maps</a></div>
-      <div>💧 Recipient: ${escHtml(u.waterArea || 'Ukendt')}</div>
-      <div>📊 Datakvalitet: ${escHtml(qualityLabel)}</div>
-      <div>🪣 Gennemsnitlig udledning: ${literTekst}</div>
+      <div>📍 <a href="${mapsUrl}" target="_blank" rel="noopener">${tr('ovl.panel.googleMaps')}</a></div>
+      <div>💧 ${tr('ovl.panel.recipient')}: ${escHtml(u.waterArea || tr('unknown'))}</div>
+      <div>📊 ${tr('ovl.panel.dataQuality')}: ${escHtml(qualityLabel)}</div>
+      <div>🪣 ${tr('ovl.panel.avgDischarge')}: ${literTekst}</div>
     </div>
     ${ovlFullPulsDataHtml(u)}
-    <div class="ovl-panel-rain-title">Nedbør — seneste 7 dage</div>
-    <div id="ovl-panel-rain">Indlæser…</div>
+    <div class="ovl-panel-rain-title">${tr('ovl.panel.rain7d')}</div>
+    <div id="ovl-panel-rain">${tr('loading')}</div>
   `;
   panel.classList.add('open');
   loadOvlRainChart(u.weatherKey);
@@ -1222,33 +1588,35 @@ function openOvlUdlobPanel(u) {
 // det.
 function ovlNum(n, unit) {
   if (n == null) return '—';
-  return `${Number(n).toLocaleString('da-DK', { maximumFractionDigits: 2 })}${unit ? ' ' + unit : ''}`;
+  return `${Number(n).toLocaleString(DATE_LOCALE[LANG], { maximumFractionDigits: 2 })}${unit ? ' ' + unit : ''}`;
 }
 function ovlFullPulsDataHtml(u) {
+  const kgYear = tr('unit.kgYear');
+  const yearOrLatest = u.latestDischargeYear ?? tr('puls.thisYear');
   const rows = [
-    ['Udløbstype', u.type || '—'],
-    ['Kloaksystem-kode', u.sewerStructure || '—'],
-    ['Reduceret opland', ovlNum(u.reducedArea, 'ha')],
-    ['Seneste registrerede udledningsår', u.latestDischargeYear ?? '—'],
-    [`Volumen (${u.latestDischargeYear ?? 'seneste år'})`, ovlNum(u.volumeM3, 'm³')],
-    [`Overløbshændelser (${u.latestDischargeYear ?? 'seneste år'})`, u.eventsPerYear ?? '—'],
-    ['Regntærskel (model)', ovlNum(u.thresholdMm, 'mm')],
-    ['Overløbssandsynlighed (basis)', u.overflowProbBase != null ? ovlNum(u.overflowProbBase * 100, '%') : '—'],
-    ['COD (kemisk iltforbrug)', ovlNum(u.cod, 'kg/år')],
-    ['BOD (biokemisk iltforbrug)', ovlNum(u.bod, 'kg/år')],
-    ['Kvælstof (N)', ovlNum(u.nitrogen, 'kg/år')],
-    ['Fosfor (P)', ovlNum(u.phosphor, 'kg/år')],
-    [`Normalår-volumen (${u.normalYear ?? '—'})`, ovlNum(u.normalVol, 'm³')],
-    ['Normalår-hændelser', u.normalEv ?? '—'],
-    ['Normalår-COD', ovlNum(u.normalCod, 'kg/år')],
-    ['Normalår-BOD', ovlNum(u.normalBod, 'kg/år')],
-    ['Normalår-kvælstof', ovlNum(u.normalNitrogen, 'kg/år')],
-    ['Normalår-fosfor', ovlNum(u.normalPhosphor, 'kg/år')],
-    ['PULS outfallId', u.outfallId || '—'],
+    [tr('puls.outletType'), u.type || '—'],
+    [tr('puls.sewerCode'), u.sewerStructure || '—'],
+    [tr('puls.reducedArea'), ovlNum(u.reducedArea, 'ha')],
+    [tr('puls.latestYear'), u.latestDischargeYear ?? '—'],
+    [`${tr('puls.volume')} (${yearOrLatest})`, ovlNum(u.volumeM3, 'm³')],
+    [`${tr('puls.events')} (${yearOrLatest})`, u.eventsPerYear ?? '—'],
+    [tr('puls.threshold'), ovlNum(u.thresholdMm, 'mm')],
+    [tr('puls.probBase'), u.overflowProbBase != null ? ovlNum(u.overflowProbBase * 100, '%') : '—'],
+    [tr('puls.cod'), ovlNum(u.cod, kgYear)],
+    [tr('puls.bod'), ovlNum(u.bod, kgYear)],
+    [tr('puls.nitrogen'), ovlNum(u.nitrogen, kgYear)],
+    [tr('puls.phosphor'), ovlNum(u.phosphor, kgYear)],
+    [`${tr('puls.normalVolume')} (${u.normalYear ?? '—'})`, ovlNum(u.normalVol, 'm³')],
+    [tr('puls.normalEvents'), u.normalEv ?? '—'],
+    [tr('puls.normalCod'), ovlNum(u.normalCod, kgYear)],
+    [tr('puls.normalBod'), ovlNum(u.normalBod, kgYear)],
+    [tr('puls.normalNitrogen'), ovlNum(u.normalNitrogen, kgYear)],
+    [tr('puls.normalPhosphor'), ovlNum(u.normalPhosphor, kgYear)],
+    [tr('puls.outfallId'), u.outfallId || '—'],
   ];
   return `
     <details class="ovl-panel-full-data">
-      <summary>Fuld PULS-stamdata</summary>
+      <summary>${tr('puls.title')}</summary>
       <div class="ovl-panel-stamdata">
         ${rows.map(([label, val]) => `<div>${escHtml(label)}: ${escHtml(String(val))}</div>`).join('')}
       </div>
@@ -1262,13 +1630,13 @@ function closeOvlUdlobPanel() {
 // NYT (bruger-krav 2026-08-20) — REQUIRED-SYNCED med dansk-overloeb-kort.html's
 // colorBadevandByRisk()/badested-skilt.html's riskInfo() — samme tre
 // særlige `source`-tilstande, samme menneskelæsbare betydning.
-const BADESTED_SOURCE_LABEL = {
-  'ingen-bekraeftet':     'Bekræftet ingen aktiv kilde (sikkert)',
-  'nedstroms-bekraeftet': 'Kendte udløb strømbekræftet nedstrøms (sikkert)',
-  'ingen':                'Intet bekræftet match',
-  'server-utilgaengelig': 'Serverdata utilgængelig',
-  kystvand:               'Kystvand',
-  soe:                    'Sø',
+const BADESTED_SOURCE_KEY = {
+  'ingen-bekraeftet':     'source.confirmedNone',
+  'nedstroms-bekraeftet': 'source.confirmedDownstream',
+  'ingen':                'source.noMatch',
+  'server-utilgaengelig': 'source.serverUnavailable',
+  kystvand:               'source.coastal',
+  soe:                    'source.lake',
 };
 
 // NYT (bruger-krav 2026-08-20 — "samtlige informationer tilgængelige for
@@ -1289,13 +1657,13 @@ const BADESTED_SOURCE_LABEL = {
 // overloeb-status.js (samme kilde som det offentlige site læser).
 function buildOutletListHtml(outlets) {
   if (!Array.isArray(outlets) || outlets.length === 0) {
-    return '<div style="font-size:.8rem;color:var(--ink-soft);padding:.4rem 0">Ingen individuelle udløb matchet.</div>';
+    return `<div style="font-size:.8rem;color:var(--ink-soft);padding:.4rem 0">${tr('outlets.none')}</div>`;
   }
   return [...outlets].sort((a, b) => (b.riskScore || 0) - (a.riskScore || 0)).slice(0, 15).map(pt => {
     const risk = pt.riskScore || 0;
     const color = risk >= 0.6 ? '#c84b1f' : risk >= 0.2 ? '#d4a020' : '#2d7d4f';
     const subParts = [escHtml(pt.municipality || '—')];
-    if (pt.travelTimeHours != null) subParts.push(`${(pt.travelTimeHours / 24).toFixed(1)} dages rejsetid`);
+    if (pt.travelTimeHours != null) subParts.push(`${(pt.travelTimeHours / 24).toFixed(1)} ${tr('outlets.travelDays')}`);
     else if (pt.dist != null) subParts.push(`${pt.dist.toFixed(1)} km`);
     return `<div class="bv-outlet-row">
       <div style="width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0"></div>
@@ -1314,37 +1682,37 @@ function openBadestedDetailPanel(b) {
   if (!panel || !sheet) return;
   const mapsUrl = `https://www.google.com/maps?q=${encodeURIComponent(b.lat)},${encodeURIComponent(b.lng)}`;
   const publicUrl = b.slug ? `/badested/${encodeURIComponent(b.slug)}` : null;
-  const sourceLabel = BADESTED_SOURCE_LABEL[b.source] || (b.source ? escHtml(b.source) : 'Ukendt');
-  const confidenceLabel = b.dataConfidence ? escHtml(b.dataConfidence) : 'Ukendt';
+  const sourceLabel = BADESTED_SOURCE_KEY[b.source] ? tr(BADESTED_SOURCE_KEY[b.source]) : (b.source ? escHtml(b.source) : tr('unknown'));
+  const confidenceLabel = b.dataConfidence ? escHtml(b.dataConfidence) : tr('unknown');
   const overrideHtml = b.overrideInfo?.message
-    ? `<div class="ovl-alert-chip risk-${b.overrideInfo.bucket === 'roed' ? 'roed' : b.overrideInfo.bucket === 'gul' ? 'gul' : 'groen'}" style="display:block;margin-top:.5rem">📢 Kommunalt varsel: ${escHtml(b.overrideInfo.message)}</div>`
+    ? `<div class="ovl-alert-chip risk-${b.overrideInfo.bucket === 'roed' ? 'roed' : b.overrideInfo.bucket === 'gul' ? 'gul' : 'groen'}" style="display:block;margin-top:.5rem">${tr('badested.override')} ${escHtml(b.overrideInfo.message)}</div>`
     : '';
   sheet.innerHTML = `
     <div class="ovl-panel-top">
       <div>
         <div class="ovl-panel-title">🏖 ${escHtml(b.navn)}</div>
-        <div class="ovl-panel-sub">${escHtml(OVL_BUCKET_LABEL[b.bucket] || b.bucket)} · Badested</div>
+        <div class="ovl-panel-sub">${escHtml(ovlBucketLabel(b.bucket))} · ${tr('badested.type')}</div>
       </div>
       <button type="button" class="ovl-panel-close" onclick="closeOvlUdlobPanel()">✕</button>
     </div>
     <div class="ovl-panel-bars">
-      ${ovlBarRow('Bakteriel (nu)', b.bact)}
-      ${ovlBarRow('Viral (nu)', b.viral)}
-      ${ovlBarRow('Alger', b.algae)}
-      ${ovlBarRow('24h prognose', b.forecast)}
+      ${ovlBarRow(tr('badested.bacterial'), b.bact)}
+      ${ovlBarRow(tr('badested.viral'), b.viral)}
+      ${ovlBarRow(tr('ovl.panel.algae'), b.algae)}
+      ${ovlBarRow(tr('ovl.panel.forecast24h'), b.forecast)}
     </div>
     ${overrideHtml}
     <div class="ovl-panel-stamdata">
-      <div>📍 <a href="${mapsUrl}" target="_blank" rel="noopener">Se på Google Maps</a></div>
-      ${publicUrl ? `<div>🔗 <a href="${publicUrl}" target="_blank" rel="noopener">Se badestedets offentlige side</a></div>` : ''}
-      <div>🧭 Kilde: ${sourceLabel}</div>
-      <div>📊 Datakonfidens: ${confidenceLabel}</div>
-      <div>🔔 ${b.subscriberCount ?? 0} webpush-abonnent${(b.subscriberCount ?? 0) === 1 ? '' : 'er'}</div>
+      <div>📍 <a href="${mapsUrl}" target="_blank" rel="noopener">${tr('ovl.panel.googleMaps')}</a></div>
+      ${publicUrl ? `<div>🔗 <a href="${publicUrl}" target="_blank" rel="noopener">${tr('badested.publicPage')}</a></div>` : ''}
+      <div>🧭 ${tr('badested.source')}: ${sourceLabel}</div>
+      <div>📊 ${tr('badested.confidence')}: ${confidenceLabel}</div>
+      <div>🔔 ${b.subscriberCount ?? 0} ${tr((b.subscriberCount ?? 0) === 1 ? 'badested.subscriber' : 'badested.subscribers')}</div>
     </div>
-    <div class="ovl-panel-rain-title">🚰 Udløb der påvirker badevandet (${b.outletCount})</div>
+    <div class="ovl-panel-rain-title">${tr('badested.outletsAffecting')} (${b.outletCount})</div>
     <div class="ovl-panel-stamdata">${buildOutletListHtml(b.outlets)}</div>
-    <div class="ovl-panel-rain-title">Historik</div>
-    <div class="bv-history-summary" id="ovl-panel-history">Indlæser…</div>
+    <div class="ovl-panel-rain-title">${tr('badested.history')}</div>
+    <div class="bv-history-summary" id="ovl-panel-history">${tr('loading')}</div>
   `;
   panel.classList.add('open');
   loadBadestedDetailHistory(b.id);
@@ -1370,7 +1738,7 @@ async function loadBadestedDetailHistory(badestedId) {
       if (!counts || counts.daysFound === 0) {
         return `<div class="bv-history-block">
           <div class="bv-history-block-title">${title}</div>
-          <div style="font-size:.75rem;color:var(--ink-soft);padding:.6rem 0">Endnu ingen historik.</div>
+          <div style="font-size:.75rem;color:var(--ink-soft);padding:.6rem 0">${tr('history.none')}</div>
         </div>`;
       }
       return `<div class="bv-history-block">
@@ -1378,9 +1746,9 @@ async function loadBadestedDetailHistory(badestedId) {
         <div class="bv-history-inner">${buildRiskDonutSvg(counts)}${buildRiskLegendHtml(counts)}</div>
       </div>`;
     };
-    el.innerHTML = `${block('Sidste 7 dage', summary.week)}${block('Sidste 30 dage', summary.month)}`;
+    el.innerHTML = `${block(tr('period.7d'), summary.week)}${block(tr('period.30d'), summary.month)}`;
   } catch (e) {
-    el.innerHTML = '<div style="color:var(--ink-soft);font-size:.8rem">Kunne ikke hente historik lige nu.</div>';
+    el.innerHTML = `<div style="color:var(--ink-soft);font-size:.8rem">${tr('history.err')}</div>`;
   }
 }
 
@@ -1391,14 +1759,14 @@ async function loadBadestedDetailHistory(badestedId) {
 async function loadOvlRainChart(weatherKey) {
   const el = document.getElementById('ovl-panel-rain');
   if (!el) return;
-  if (!weatherKey) { el.innerHTML = '<div class="trend-empty">Ingen vejrdata for denne lokation</div>'; return; }
+  if (!weatherKey) { el.innerHTML = `<div class="trend-empty">${tr('rain.noData')}</div>`; return; }
   try {
     const resp = await fetch(`/api/weather/weekly?key=${encodeURIComponent(weatherKey)}`, { cache: 'no-store' });
     const data = await resp.json();
-    if (!resp.ok) { el.innerHTML = '<div class="trend-empty">Kunne ikke hente nedbørsdata</div>'; return; }
+    if (!resp.ok) { el.innerHTML = `<div class="trend-empty">${tr('rain.err')}</div>`; return; }
     renderOvlRainChart('ovl-panel-rain', data.hourlyWeek || []);
   } catch (e) {
-    el.innerHTML = '<div class="trend-empty">Kunne ikke hente nedbørsdata</div>';
+    el.innerHTML = `<div class="trend-empty">${tr('rain.err')}</div>`;
   }
 }
 
@@ -1410,7 +1778,7 @@ function renderOvlRainChart(containerId, hourlyWeek) {
   const wrap = document.getElementById(containerId);
   if (!wrap) return;
   if (!hourlyWeek || hourlyWeek.length === 0) {
-    wrap.innerHTML = '<div class="trend-empty">Ingen nedbørsdata</div>';
+    wrap.innerHTML = `<div class="trend-empty">${tr('rain.none')}</div>`;
     return;
   }
   const days = [];
@@ -1428,10 +1796,10 @@ function renderOvlRainChart(containerId, hourlyWeek) {
     return `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(0, h).toFixed(1)}" fill="#4fb8d6"><title>${v.toFixed(1)} mm</title></rect>`;
   }).join('');
   wrap.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:80px" role="img" aria-label="Nedbør seneste 7 dage">
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:80px" role="img" aria-label="${tr('rain.chartLabel')}">
       ${bars}
       <text x="0" y="${H}" font-size="8" fill="#9fb0bb">−7d</text>
-      <text x="${W}" y="${H}" font-size="8" fill="#9fb0bb" text-anchor="end">i dag</text>
+      <text x="${W}" y="${H}" font-size="8" fill="#9fb0bb" text-anchor="end">${tr('rain.today')}</text>
     </svg>
   `;
 }
@@ -1460,12 +1828,12 @@ async function loadOverloebHistorik() {
     const resp = await fetch('/admin/api/overloeb-varsler-historik', { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) {
-      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente historik.')}</div>`;
+      el.innerHTML = `<div class="err">${escHtml(data.error || tr('ovl.historik.err'))}</div>`;
       return;
     }
     renderVarselBarChart('ovl-historik-chart', data.trend);
   } catch (e) {
-    el.innerHTML = '<div class="err">Kunne ikke hente historik — tjek din forbindelse.</div>';
+    el.innerHTML = `<div class="err">${tr('ovl.historik.errConn')}</div>`;
   }
 }
 
@@ -1489,13 +1857,13 @@ function setOvlPrioSort(sortBy) {
 
 function fmtLiter(n) {
   if (n == null) return '—';
-  return `${Math.round(n).toLocaleString('da-DK')} L`;
+  return `${Math.round(n).toLocaleString(DATE_LOCALE[LANG])} L`;
 }
 
 async function loadOverloebPrioriteret() {
   const el = document.getElementById('ovl-prio-content');
   if (!el) return;
-  el.textContent = 'Indlæser…';
+  el.textContent = tr('loading');
   const period = document.getElementById('ovl-prio-period').value;
   const month = document.getElementById('ovl-prio-month').value;
   const qs = new URLSearchParams({ period, sortBy: ovlPrioSort });
@@ -1504,27 +1872,27 @@ async function loadOverloebPrioriteret() {
     const resp = await fetch(`/admin/api/overloeb-prioriteret?${qs.toString()}`, { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) {
-      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente prioriteret liste.')}</div>`;
+      el.innerHTML = `<div class="err">${escHtml(data.error || tr('ovl.prio.errList'))}</div>`;
       return;
     }
     if (data.liste.length === 0) {
-      el.innerHTML = '<div class="ovl-alert-empty">Ingen overløbsvarsler registreret i denne periode.</div>';
+      el.innerHTML = `<div class="ovl-alert-empty">${tr('ovl.prio.empty')}</div>`;
       return;
     }
     el.innerHTML = `
       <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
-        <td>#</td><td>Udløb</td><td>Type</td><td class="n">Varsler</td><td class="n">Est. udledning</td>
+        <td>#</td><td>${tr('ovl.prio.colOutlet')}</td><td>${tr('ovl.prio.colType')}</td><td class="n">${tr('ovl.prio.colAlerts')}</td><td class="n">${tr('ovl.prio.colDischarge')}</td>
       </tr></thead><tbody>${data.liste.map((r, i) => `
         <tr>
           <td>${i + 1}</td>
           <td>${escHtml(r.navn)}</td>
-          <td>${r.isWastewater === false ? 'Regnvand' : 'Kloak'}</td>
+          <td>${r.isWastewater === false ? tr('type.stormwater') : tr('type.wastewater')}</td>
           <td class="n">${r.varslerTotal} <span style="color:var(--ink-soft);font-size:.72rem">(${r.varslerGul}g/${r.varslerRoed}r)</span></td>
           <td class="n">${fmtLiter(r.estimeretLiterTotal)}</td>
         </tr>`).join('')}</tbody></table>
     `;
   } catch (e) {
-    el.innerHTML = '<div class="err">Kunne ikke hente prioriteret liste — tjek din forbindelse.</div>';
+    el.innerHTML = `<div class="err">${tr('ovl.prio.errListConn')}</div>`;
   }
 }
 
@@ -1553,24 +1921,24 @@ document.addEventListener('fullscreenchange', () => { if (ovlMap) setTimeout(() 
 // kommunens egen hjemmeside.
 async function generateOverloebEmbed() {
   const el = document.getElementById('ovl-embed-result');
-  el.textContent = 'Genererer…';
+  el.textContent = tr('generating');
   try {
     const resp = await fetch('/admin/api/overloeb-embed-token', { method: 'POST' });
     const data = await resp.json();
     if (!resp.ok) {
-      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke generere indlejrings-link.')}</div>`;
+      el.innerHTML = `<div class="err">${escHtml(data.error || tr('ovl.embed.errGenerate'))}</div>`;
       return;
     }
-    const snippet = `<iframe src="${data.embedUrl}" style="width:100%;height:520px;border:0" title="Overløb — live kort"></iframe>`;
+    const snippet = `<iframe src="${data.embedUrl}" style="width:100%;height:520px;border:0" title="${tr('ovl.embed.iframeTitle')}"></iframe>`;
     el.innerHTML = `
       <div class="ovl-embed-box">
         <textarea id="ovl-embed-snippet" readonly onclick="this.select()">${escHtml(snippet)}</textarea>
-        <button type="button" onclick="copyOverloebEmbedSnippet()">Kopiér</button>
+        <button type="button" onclick="copyOverloebEmbedSnippet()">${tr('copy')}</button>
         <div class="copy-note" id="ovl-embed-copy-note"></div>
       </div>
     `;
   } catch (e) {
-    el.innerHTML = '<div class="err">Kunne ikke generere indlejrings-link — tjek din forbindelse.</div>';
+    el.innerHTML = `<div class="err">${tr('ovl.embed.errGenerateConn')}</div>`;
   }
 }
 
@@ -1580,23 +1948,23 @@ function copyOverloebEmbedSnippet() {
   ta.select();
   navigator.clipboard?.writeText(ta.value).then(() => {
     const note = document.getElementById('ovl-embed-copy-note');
-    if (note) { note.textContent = '✓ Kopieret'; setTimeout(() => { note.textContent = ''; }, 2500); }
+    if (note) { note.textContent = tr('copied'); setTimeout(() => { note.textContent = ''; }, 2500); }
   });
 }
 
 async function revokeOverloebEmbeds() {
-  if (!confirm('Tilbagekald ALLE eksisterende indlejrings-links for jeres kommune? Ethvert sted de er indlejret, holder op med at virke med det samme.')) return;
+  if (!confirm(tr('ovl.embed.confirmRevoke'))) return;
   try {
     const resp = await fetch('/admin/api/overloeb-embed-token/revoke-all', { method: 'POST' });
     const data = await resp.json();
     const el = document.getElementById('ovl-embed-result');
     if (!resp.ok) {
-      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke tilbagekalde indlejrings-links.')}</div>`;
+      el.innerHTML = `<div class="err">${escHtml(data.error || tr('ovl.embed.errRevoke'))}</div>`;
       return;
     }
-    el.innerHTML = '<div class="copy-note" style="color:var(--ok)">✓ Alle indlejrings-links er tilbagekaldt.</div>';
+    el.innerHTML = `<div class="copy-note" style="color:var(--ok)">${tr('ovl.embed.revokedOk')}</div>`;
   } catch (e) {
-    document.getElementById('ovl-embed-result').innerHTML = '<div class="err">Kunne ikke tilbagekalde — tjek din forbindelse.</div>';
+    document.getElementById('ovl-embed-result').innerHTML = `<div class="err">${tr('ovl.embed.errRevokeConn')}</div>`;
   }
 }
 
@@ -1611,37 +1979,37 @@ async function loadSkiltBadesteder() {
   const epsEl = document.getElementById('skilte-eps-content');
   const liveEl = document.getElementById('skilte-live-content');
   if (!epsEl || !liveEl) return;
-  epsEl.textContent = 'Indlæser…';
-  liveEl.textContent = 'Indlæser…';
+  epsEl.textContent = tr('loading');
+  liveEl.textContent = tr('loading');
   try {
     const resp = await fetch('/admin/api/skilte/badesteder', { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) {
-      const msg = `<div class="err">${escHtml(data.error || 'Kunne ikke hente badesteder.')}</div>`;
+      const msg = `<div class="err">${escHtml(data.error || tr('skilte.err'))}</div>`;
       epsEl.innerHTML = msg; liveEl.innerHTML = msg;
       return;
     }
     _skilteBadesteder = data.badesteder || [];
     if (_skilteBadesteder.length === 0) {
-      const msg = '<div class="ovl-alert-empty">Ingen badesteder fundet.</div>';
+      const msg = `<div class="ovl-alert-empty">${tr('skilte.noneFound')}</div>`;
       epsEl.innerHTML = msg; liveEl.innerHTML = msg;
       return;
     }
     epsEl.innerHTML = _skilteBadesteder.map(b => `
       <div class="skilte-row">
         <span class="skilte-row-name">${escHtml(b.navn)}</span>
-        <a class="btn-link" href="/admin/api/skilte/qr-eps/${encodeURIComponent(b.id)}" download>Download EPS</a>
+        <a class="btn-link" href="/admin/api/skilte/qr-eps/${encodeURIComponent(b.id)}" download>${tr('skilte.downloadEps')}</a>
       </div>
     `).join('');
     liveEl.innerHTML = _skilteBadesteder.map(b => `
       <div class="skilte-row">
         <span class="skilte-row-name">${escHtml(b.navn)}</span>
-        <button type="button" onclick="toggleSkiltEmbed('${escHtml(String(b.id))}')">🔗 Kopiér iframe</button>
+        <button type="button" onclick="toggleSkiltEmbed('${escHtml(String(b.id))}')">${tr('skilte.copyIframe')}</button>
       </div>
       <div class="skilte-embed-box" id="skilte-embed-${escHtml(String(b.id))}" style="display:none"></div>
     `).join('');
   } catch (e) {
-    const msg = '<div class="err">Kunne ikke hente badesteder — tjek din forbindelse.</div>';
+    const msg = `<div class="err">${tr('skilte.errConn')}</div>`;
     epsEl.innerHTML = msg; liveEl.innerHTML = msg;
   }
 }
@@ -1665,11 +2033,11 @@ function toggleSkiltEmbed(badestedId) {
     // udskrive fra badestedssiden) — server.js's rute viser kun logoet,
     // når netop dette parameter er sat, se dens filhoved.
     const url = `${location.origin}/skilt/${b.slug}?kommunelogo=1`;
-    const snippet = `<iframe src="${url}" style="width:100%;height:100%;min-height:400px;border:0" title="Badevand — ${b.navn}"></iframe>`;
+    const snippet = `<iframe src="${url}" style="width:100%;height:100%;min-height:400px;border:0" title="${tr('skilte.iframeTitle')} ${b.navn}"></iframe>`;
     box.innerHTML = `
       <div class="skilte-embed-box">
         <textarea readonly onclick="this.select()">${escHtml(snippet)}</textarea>
-        <button type="button" onclick="copySkiltEmbed(this)">Kopiér</button>
+        <button type="button" onclick="copySkiltEmbed(this)">${tr('copy')}</button>
         <span class="copy-note"></span>
       </div>
     `;
@@ -1682,7 +2050,7 @@ function copySkiltEmbed(btn) {
   ta.select();
   navigator.clipboard?.writeText(ta.value).then(() => {
     const note = box.querySelector('.copy-note');
-    if (note) { note.textContent = ' ✓ Kopieret'; setTimeout(() => { note.textContent = ''; }, 2500); }
+    if (note) { note.textContent = ' ' + tr('copied'); setTimeout(() => { note.textContent = ''; }, 2500); }
   });
 }
 
@@ -1716,16 +2084,16 @@ async function getMonthBuckets(month) {
 // hele bjælken. Samme visuelle sprog (.hist-bar/.hist-seg-*) som det
 // tidligere separate Badevandshistorik-kort brugte.
 function buildMonthBarHtml(b) {
-  if (!b) return '<div style="font-size:.75rem;color:var(--ink-soft)">Ingen data for denne måned.</div>';
+  if (!b) return `<div style="font-size:.75rem;color:var(--ink-soft)">${tr('hist.noMonthData')}</div>`;
   const total = (b.green || 0) + (b.yellow || 0) + (b.red || 0) + (b.noData || 0);
   const pct = n => total > 0 ? Math.round(100 * n / total) : 0;
   return `
     <div class="hist-bar">
-      <div class="hist-seg-green"  style="width:${pct(b.green)}%"  title="${b.green} grønne dage"></div>
-      <div class="hist-seg-yellow" style="width:${pct(b.yellow)}%" title="${b.yellow} gule dage"></div>
-      <div class="hist-seg-red"    style="width:${pct(b.red)}%"    title="${b.red} røde dage"></div>
+      <div class="hist-seg-green"  style="width:${pct(b.green)}%"  title="${b.green} ${tr('hist.greenDays')}"></div>
+      <div class="hist-seg-yellow" style="width:${pct(b.yellow)}%" title="${b.yellow} ${tr('hist.yellowDays')}"></div>
+      <div class="hist-seg-red"    style="width:${pct(b.red)}%"    title="${b.red} ${tr('hist.redDays')}"></div>
     </div>
-    <div class="hist-counts">🟢 ${b.green}&nbsp;&nbsp;🟡 ${b.yellow}&nbsp;&nbsp;🔴 ${b.red}${b.noData ? `&nbsp;&nbsp;· ${b.noData} dage uden data` : ''}</div>
+    <div class="hist-counts">🟢 ${b.green}&nbsp;&nbsp;🟡 ${b.yellow}&nbsp;&nbsp;🔴 ${b.red}${b.noData ? `&nbsp;&nbsp;· ${b.noData} ${tr('hist.daysNoData')}` : ''}</div>
   `;
 }
 
@@ -1755,7 +2123,7 @@ function buildRiskDonutSvg(counts) {
   const size = 76, r = 30, cx = size / 2, cy = size / 2, strokeW = 11;
   const circumference = 2 * Math.PI * r;
   if (total === 0) {
-    return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="Ingen data endnu">` +
+    return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" aria-label="${tr('donut.noDataYet')}">` +
       `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="${strokeW}"></circle></svg>`;
   }
   const segments = [
@@ -1777,10 +2145,10 @@ function buildRiskDonutSvg(counts) {
   }).join('');
   const daysWithData = lav + moderat + hoej;
   return `<svg viewBox="0 0 ${size} ${size}" width="${size}" height="${size}" role="img" ` +
-    `aria-label="${lav} sikre dage, ${moderat} moderat risiko, ${hoej} høj risiko${ingenData ? ', ' + ingenData + ' uden data' : ''}">` +
+    `aria-label="${lav} ${tr('donut.safeDays')}, ${moderat} ${tr('donut.moderateRisk')}, ${hoej} ${tr('donut.highRisk')}${ingenData ? ', ' + ingenData + ' ' + tr('donut.noData') : ''}">` +
     strokes +
     `<text x="${cx}" y="${cy + 1}" text-anchor="middle" dominant-baseline="middle" font-size="14" font-weight="800" fill="var(--ink)">${daysWithData}</text>` +
-    `<text x="${cx}" y="${cy + 12}" text-anchor="middle" font-size="6" fill="var(--ink-soft)">dage m. data</text>` +
+    `<text x="${cx}" y="${cy + 12}" text-anchor="middle" font-size="6" fill="var(--ink-soft)">${tr('donut.daysWithData')}</text>` +
     `</svg>`;
 }
 
@@ -1788,11 +2156,12 @@ function buildRiskDonutSvg(counts) {
 // eksplicit ønske, i modsætning til dansk-overloeb-kort.html's chips).
 function buildRiskLegendHtml(counts) {
   const { lav = 0, moderat = 0, hoej = 0, ingenData = 0 } = counts || {};
+  const unitFor = n => tr(n === 1 ? 'unit.day' : 'unit.days');
   const rows = [
-    lav       > 0 ? `<div>Sikkert ${lav} ${lav === 1 ? 'dag' : 'dage'}</div>`                  : '',
-    moderat   > 0 ? `<div>Moderat ${moderat} ${moderat === 1 ? 'dag' : 'dage'}</div>`           : '',
-    hoej      > 0 ? `<div>Høj risiko ${hoej} ${hoej === 1 ? 'dag' : 'dage'}</div>`               : '',
-    ingenData > 0 ? `<div>Ingen data ${ingenData} ${ingenData === 1 ? 'dag' : 'dage'}</div>`     : '',
+    lav       > 0 ? `<div>${tr('legend.safe')} ${lav} ${unitFor(lav)}</div>`                : '',
+    moderat   > 0 ? `<div>${tr('legend.moderate')} ${moderat} ${unitFor(moderat)}</div>`    : '',
+    hoej      > 0 ? `<div>${tr('legend.highRisk')} ${hoej} ${unitFor(hoej)}</div>`          : '',
+    ingenData > 0 ? `<div>${tr('legend.noData')} ${ingenData} ${unitFor(ingenData)}</div>`  : '',
   ].filter(Boolean);
   return `<div class="bv-history-legend">${rows.join('')}</div>`;
 }
@@ -1808,7 +2177,7 @@ async function toggleBadestedHistory(badestedId) {
   const isOpen = el.classList.toggle('open');
   if (!isOpen || el.dataset.loaded === '1') return;
 
-  el.innerHTML = '<div style="color:var(--ink-soft);font-size:.8rem;padding:.4rem 0">Indlæser…</div>';
+  el.innerHTML = `<div style="color:var(--ink-soft);font-size:.8rem;padding:.4rem 0">${tr('loading')}</div>`;
   try {
     let summary = _badestedHistoryCache.get(badestedId);
     const summaryPromise = summary ? Promise.resolve(summary) : (async () => {
@@ -1827,7 +2196,7 @@ async function toggleBadestedHistory(badestedId) {
       if (!counts || counts.daysFound === 0) {
         return `<div class="bv-history-block">
           <div class="bv-history-block-title">${title}</div>
-          <div style="font-size:.75rem;color:var(--ink-soft);padding:.6rem 0">Endnu ingen historik.</div>
+          <div style="font-size:.75rem;color:var(--ink-soft);padding:.6rem 0">${tr('history.none')}</div>
         </div>`;
       }
       return `<div class="bv-history-block">
@@ -1836,9 +2205,9 @@ async function toggleBadestedHistory(badestedId) {
       </div>`;
     };
     el.innerHTML = `
-      <div class="bv-history-summary">${block('Sidste 7 dage', summary.week)}${block('Sidste 30 dage', summary.month)}</div>
+      <div class="bv-history-summary">${block(tr('period.7d'), summary.week)}${block(tr('period.30d'), summary.month)}</div>
       <div style="margin-top:.6rem">
-        <div class="bv-history-block-title">Denne måned</div>
+        <div class="bv-history-block-title">${tr('thisMonth')}</div>
         ${buildMonthBarHtml(monthBuckets.get(String(badestedId)))}
       </div>
     `;
@@ -1851,7 +2220,7 @@ async function toggleBadestedHistory(badestedId) {
 async function loadAlertStats() {
   const statEl = document.getElementById('stat-content');
   if (!statEl) return;
-  statEl.textContent = 'Indlæser…';
+  statEl.textContent = tr('loading');
   const period = document.getElementById('stat-period').value;
   const month = document.getElementById('stat-month').value;
   const qs = new URLSearchParams();
@@ -1859,7 +2228,7 @@ async function loadAlertStats() {
     const from = document.getElementById('stat-from').value;
     const to   = document.getElementById('stat-to').value;
     if (!from || !to) {
-      statEl.innerHTML = '<div class="hist-warning">Vælg både fra- og til-dato for en brugerdefineret periode.</div>';
+      statEl.innerHTML = `<div class="hist-warning">${tr('stat.pickCustomRange')}</div>`;
       return;
     }
     qs.set('from', from);
@@ -1872,7 +2241,7 @@ async function loadAlertStats() {
     const resp = await fetch(`/admin/api/badested-alert-stats?${qs.toString()}`, { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) {
-      statEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente statistik.')}</div>`;
+      statEl.innerHTML = `<div class="err">${escHtml(data.error || tr('stat.err'))}</div>`;
       return;
     }
     if (data.warning) {
@@ -1880,7 +2249,7 @@ async function loadAlertStats() {
       return;
     }
     if (!data.badesteder || data.badesteder.length === 0) {
-      statEl.innerHTML = '<div class="stat-empty">Ingen badesteder fundet.</div>';
+      statEl.innerHTML = `<div class="stat-empty">${tr('stat.noneFound')}</div>`;
       return;
     }
     // NYT (bruger-ønske 2026-08-20) — hver række er nu klikbar og folder
@@ -1889,12 +2258,12 @@ async function loadAlertStats() {
     statEl.innerHTML = data.badesteder.map(b => `
       <div class="stat-row" onclick="toggleBadestedHistory('${b.id}')">
         <span class="stat-name">${escHtml(b.navn)}</span>
-        <span class="stat-nums">${b.alertCount} varsel${b.alertCount === 1 ? '' : 'er'} · ${b.subscriberCount} abonnent${b.subscriberCount === 1 ? '' : 'er'}</span>
+        <span class="stat-nums">${b.alertCount} ${tr(b.alertCount === 1 ? 'unit.alert' : 'unit.alerts')} · ${b.subscriberCount} ${tr(b.subscriberCount === 1 ? 'unit.subscriber' : 'unit.subscribers')}</span>
       </div>
       <div class="stat-detail" id="stat-detail-${b.id}"></div>
     `).join('');
   } catch (e) {
-    statEl.innerHTML = '<div class="err">Kunne ikke hente statistik — tjek din forbindelse.</div>';
+    statEl.innerHTML = `<div class="err">${tr('stat.errConn')}</div>`;
   }
 }
 
@@ -1908,18 +2277,18 @@ function fmtDateShort(d) {
   const [, m, day] = d.split('-');
   return `${day}/${m}`;
 }
-function fmtCount(n) { return Math.round(n).toLocaleString('da-DK'); }
+function fmtCount(n) { return Math.round(n).toLocaleString(DATE_LOCALE[LANG]); }
 
 let _trendChartSeq = 0;
 function renderTrendChart(containerId, points, opts) {
   const wrap = document.getElementById(containerId);
   if (!wrap) return;
   if (points.length === 0) {
-    wrap.innerHTML = '<div class="trend-empty">Ingen data endnu — første punkt gemmes i løbet af i dag</div>';
+    wrap.innerHTML = `<div class="trend-empty">${tr('trend.noneYet')}</div>`;
     return;
   }
   if (points.length === 1) {
-    wrap.innerHTML = `<div class="trend-empty">${fmtCount(points[0].value)} (${fmtDateShort(points[0].date)}) — for lidt historik til en graf endnu</div>`;
+    wrap.innerHTML = `<div class="trend-empty">${fmtCount(points[0].value)} (${fmtDateShort(points[0].date)}) — ${tr('trend.tooFewPoints')}</div>`;
     return;
   }
 
@@ -1944,7 +2313,7 @@ function renderTrendChart(containerId, points, opts) {
   const gradId = `trendGrad${_trendChartSeq++}`;
 
   wrap.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${opts.label} over tid, seneste værdi ${fmtCount(last.value)}">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${opts.label} ${tr('trend.overTime')} ${fmtCount(last.value)}">
       <defs>
         <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" class="trend-grad-stop-1"/>
@@ -2013,7 +2382,7 @@ function renderVarselBarChart(containerId, points) {
   const wrap = document.getElementById(containerId);
   if (!wrap) return;
   if (points.length === 0) {
-    wrap.innerHTML = '<div class="trend-empty">Ingen overløbsvarsler registreret i perioden endnu</div>';
+    wrap.innerHTML = `<div class="trend-empty">${tr('ovl.trend.none')}</div>`;
     return;
   }
 
@@ -2034,7 +2403,7 @@ function renderVarselBarChart(containerId, points) {
     const roedH = (p.roed / vMax) * plotH;
     const gulY = plotB - gulH;
     const roedY = gulY - roedH;
-    const titleText = `${escHtml(p.date)}: ${p.gul} gul, ${p.roed} rød`;
+    const titleText = `${escHtml(p.date)}: ${p.gul} ${tr('ovl.trend.barTooltip')} ${p.roed} ${tr('ovl.trend.barTooltipRed')}`;
     return `<g>
       ${p.gul > 0  ? `<rect x="${x}" y="${gulY.toFixed(1)}" width="${barW.toFixed(1)}" height="${gulH.toFixed(1)}" fill="#d4a020"><title>${titleText}</title></rect>` : ''}
       ${p.roed > 0 ? `<rect x="${x}" y="${roedY.toFixed(1)}" width="${barW.toFixed(1)}" height="${roedH.toFixed(1)}" fill="#c84b1f"><title>${titleText}</title></rect>` : ''}
@@ -2044,7 +2413,7 @@ function renderVarselBarChart(containerId, points) {
   const totalSum = totals.reduce((a, b) => a + b, 0);
 
   wrap.innerHTML = `
-    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Overløbsvarsler over tid, i alt ${totalSum} i perioden">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${tr('ovl.trend.ariaLabel')} ${totalSum} ${tr('ovl.trend.inPeriod')}">
       <line class="trend-grid-line" x1="${plotL}" y1="${plotT}" x2="${plotR}" y2="${plotT}"/>
       <line class="trend-grid-line" x1="${plotL}" y1="${plotB}" x2="${plotR}" y2="${plotB}"/>
       ${bars}
@@ -2068,12 +2437,12 @@ function renderVarselBarChart(containerId, points) {
 async function loadKommuneStats() {
   const el = document.getElementById('kstat-content');
   if (!el) return;
-  el.textContent = 'Indlæser…';
+  el.textContent = tr('loading');
   try {
     const resp = await fetch('/admin/api/stats', { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) {
-      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente statistik.')}</div>`;
+      el.innerHTML = `<div class="err">${escHtml(data.error || tr('stat.err'))}</div>`;
       return;
     }
     if (data.warning) {
@@ -2083,47 +2452,47 @@ async function loadKommuneStats() {
     el.innerHTML = `
       <div class="kstat-grid">
         <div class="kstat-box">
-          <div class="kstat-label"># Visninger</div>
+          <div class="kstat-label">${tr('kstat.views')}</div>
           <div class="kstat-value">${data.views.total}</div>
-          <div class="kstat-note">Badesteder eller overløb, seneste 90 dage</div>
+          <div class="kstat-note">${tr('kstat.viewsNote')}</div>
         </div>
         <div class="kstat-box">
-          <div class="kstat-label"># Abonnenter</div>
+          <div class="kstat-label">${tr('kstat.subscribers')}</div>
           <div class="kstat-value">${data.subscribers}</div>
-          <div class="kstat-note">Webpush, på tværs af ${data.badestedCount} badested${data.badestedCount === 1 ? '' : 'er'}</div>
+          <div class="kstat-note">${tr('kstat.subscribersNote')} ${data.badestedCount} ${tr(data.badestedCount === 1 ? 'badested.type' : 'toc.badevandssteder').toLowerCase()}</div>
         </div>
         <div class="kstat-box">
-          <div class="kstat-label"># Indberetninger</div>
+          <div class="kstat-label">${tr('kstat.reports')}</div>
           <div class="kstat-value">${data.vurderinger.total}</div>
-          <div class="kstat-note">${data.vurderinger.last7d} seneste 7 dage · ${data.vurderinger.last30d} seneste 30 dage</div>
+          <div class="kstat-note">${data.vurderinger.last7d} ${tr('period.7d').toLowerCase()} · ${data.vurderinger.last30d} ${tr('period.30d').toLowerCase()}</div>
         </div>
         <div class="kstat-box">
-          <div class="kstat-label"># Varsler</div>
+          <div class="kstat-label">${tr('kstat.alerts')}</div>
           <div class="kstat-value">${data.alertsTotal}</div>
-          <div class="kstat-note">Risikovarsler, kommunale varsler og indberetningskvitteringer</div>
+          <div class="kstat-note">${tr('kstat.alertsNote')}</div>
         </div>
       </div>
 
       <div class="trend-grid">
         <div class="trend-card">
-          <h2>Visninger over tid</h2>
+          <h2>${tr('kstat.viewsOverTime')}</h2>
           <div class="trend-chart-wrap" id="kstat-trend-views"></div>
         </div>
         <div class="trend-card">
-          <h2>Varsler over tid</h2>
+          <h2>${tr('kstat.alertsOverTime')}</h2>
           <div class="trend-chart-wrap" id="kstat-trend-alerts"></div>
         </div>
         <div class="trend-card">
-          <h2>Abonnenter over tid</h2>
+          <h2>${tr('kstat.subscribersOverTime')}</h2>
           <div class="trend-chart-wrap" id="kstat-trend-subscribers"></div>
         </div>
       </div>
     `;
-    renderTrendChart('kstat-trend-views', data.trends.views, { label: 'Visninger' });
-    renderTrendChart('kstat-trend-alerts', data.trends.alerts, { label: 'Varsler' });
-    renderTrendChart('kstat-trend-subscribers', data.trends.subscribers, { label: 'Abonnenter' });
+    renderTrendChart('kstat-trend-views', data.trends.views, { label: tr('kstat.views').replace('# ', '') });
+    renderTrendChart('kstat-trend-alerts', data.trends.alerts, { label: tr('kstat.alerts').replace('# ', '') });
+    renderTrendChart('kstat-trend-subscribers', data.trends.subscribers, { label: tr('kstat.subscribers').replace('# ', '') });
   } catch (e) {
-    el.innerHTML = '<div class="err">Kunne ikke hente statistik — tjek din forbindelse.</div>';
+    el.innerHTML = `<div class="err">${tr('stat.errConn')}</div>`;
   }
 }
 
@@ -2134,10 +2503,10 @@ async function loadKommuneStats() {
 // isFlagged() nedenfor — fordi de er dem der reelt kan udløse en fysisk
 // besigtigelse (bruger-krav), ikke en teknisk egenskab ved dataene.
 const VURD_TYPE_META = {
-  ser_fint_ud:    { icon: '✓',  color: '#2d7d4f', label: 'Ser fint ud' },
-  alger_set:      { icon: '🌿', color: '#d4a020', label: 'Alger set' },
-  uklart_vand:    { icon: '💧', color: '#c84b1f', label: 'Uklart vand' },
-  affald:         { icon: '🗑', color: '#5a6b78', label: 'Affald' },
+  ser_fint_ud:    { icon: '✓',  color: '#2d7d4f', labelKey: 'vurd.type.looksFine' },
+  alger_set:      { icon: '🌿', color: '#d4a020', labelKey: 'vurd.type.algaeSeen' },
+  uklart_vand:    { icon: '💧', color: '#c84b1f', labelKey: 'vurd.type.murkyWater' },
+  affald:         { icon: '🗑', color: '#5a6b78', labelKey: 'vurd.type.litter' },
   // NYT (bruger-ønske 2026-08-21): kun for kystnære badesteder, se
   // dansk-overloeb-kort.html's isKystvandBadested() — søer sender aldrig
   // denne type, men badgen defineres her uændret så visningen er konsistent
@@ -2145,10 +2514,10 @@ const VURD_TYPE_META = {
   // RETTET: 🪼 renderer blåt på stort set alle platforme (fuldfarve-emoji
   // kan ikke omfarves via CSS) — "Brandmænd" er specifikt den røde art,
   // samme lille inline SVG-silhuet som dansk-overloeb-kort.html bruger.
-  brandmaend_set: { icon: '<svg width="14" height="14" viewBox="0 0 24 24" style="vertical-align:-2px" xmlns="http://www.w3.org/2000/svg"><path d="M12 3c-4.4 0-8 3.4-8 7.5 0 1.6.9 2.5 2 2.5h12c1.1 0 2-.9 2-2.5C20 6.4 16.4 3 12 3z" fill="#c0392b"/><path d="M7 14c-.3 1.2-1 2-1 4M9.5 14c-.2 1.6-.7 3-.7 5M12 14c0 2-.3 3.5-.3 6M14.5 14c.2 1.6.7 3 .7 5M17 14c.3 1.2 1 2 1 4" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>', color: '#c0392b', label: 'Brandmænd set' },
+  brandmaend_set: { icon: '<svg width="14" height="14" viewBox="0 0 24 24" style="vertical-align:-2px" xmlns="http://www.w3.org/2000/svg"><path d="M12 3c-4.4 0-8 3.4-8 7.5 0 1.6.9 2.5 2 2.5h12c1.1 0 2-.9 2-2.5C20 6.4 16.4 3 12 3z" fill="#c0392b"/><path d="M7 14c-.3 1.2-1 2-1 4M9.5 14c-.2 1.6-.7 3-.7 5M12 14c0 2-.3 3.5-.3 6M14.5 14c.2 1.6.7 3 .7 5M17 14c.3 1.2 1 2 1 4" stroke="#c0392b" stroke-width="1.6" stroke-linecap="round" fill="none"/></svg>', color: '#c0392b', labelKey: 'vurd.type.firefighters' },
 };
 const VURD_FLAGGED_TYPES = new Set(['alger_set', 'affald']);
-const VURD_ALGAE_LEVEL_LABELS = { ingen: 'Ingen', faa: 'Få', mange: 'Mange' };
+const VURD_ALGAE_LEVEL_KEYS = { ingen: 'vurd.algaeLevel.none', faa: 'vurd.algaeLevel.few', mange: 'vurd.algaeLevel.many' };
 const VURD_PAGE_SIZE = 10; // bruger-ønske 2026-08-18 — kun 10 ad gangen, med forrige/næste
 
 let _vurderingerCache = [];
@@ -2161,19 +2530,19 @@ function isFlaggedVurdering(v) {
 async function loadVurderinger() {
   const el = document.getElementById('vurd-content');
   if (!el) return;
-  el.textContent = 'Indlæser…';
+  el.textContent = tr('loading');
   try {
     const resp = await fetch('/admin/api/vurderinger', { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) {
-      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente indberetninger.')}</div>`;
+      el.innerHTML = `<div class="err">${escHtml(data.error || tr('vurd.err'))}</div>`;
       return;
     }
     _vurderingerCache = data.vurderinger || [];
     _vurdPage = 0;
     renderVurderinger();
   } catch (e) {
-    el.innerHTML = '<div class="err">Kunne ikke hente indberetninger — tjek din forbindelse.</div>';
+    el.innerHTML = `<div class="err">${tr('vurd.errConn')}</div>`;
   }
 }
 
@@ -2200,7 +2569,7 @@ function renderVurderinger() {
   else if (filter !== 'alle') list = list.filter(v => v.types.includes(filter));
 
   if (list.length === 0) {
-    el.innerHTML = '<div class="vurd-empty">Ingen indberetninger fundet for dette filter.</div>';
+    el.innerHTML = `<div class="vurd-empty">${tr('vurd.noneForFilter')}</div>`;
     return;
   }
 
@@ -2212,9 +2581,13 @@ function renderVurderinger() {
   const rowsHtml = pageList.map(v => {
     const flagged = isFlaggedVurdering(v);
     const badgesHtml = v.types.map(t => {
-      const meta = VURD_TYPE_META[t] || { icon: '•', color: 'var(--ink-soft)', label: t };
+      const meta = VURD_TYPE_META[t];
+      const label = meta ? tr(meta.labelKey) : t;
+      const color = meta ? meta.color : 'var(--ink-soft)';
+      const icon = meta ? meta.icon : '•';
       const level = t === 'alger_set' ? v.algaeLevel : (t === 'brandmaend_set' ? v.brandmaendLevel : null);
-      return `<span class="vurd-type-badge" style="color:${meta.color}">${meta.icon} ${escHtml(meta.label)}${level ? ` (${escHtml(VURD_ALGAE_LEVEL_LABELS[level] || level)})` : ''}</span>`;
+      const levelKey = level ? VURD_ALGAE_LEVEL_KEYS[level] : null;
+      return `<span class="vurd-type-badge" style="color:${color}">${icon} ${escHtml(label)}${levelKey ? ` (${escHtml(tr(levelKey))})` : (level ? ` (${escHtml(level)})` : '')}</span>`;
     }).join('');
     const nameHtml = v.badestedSlug
       ? `<a href="/badested/${encodeURIComponent(v.badestedSlug)}" target="_blank" rel="noopener">${escHtml(v.badestedNavn)}</a>`
@@ -2226,17 +2599,17 @@ function renderVurderinger() {
           <span class="vurd-time">${fmtDateTime(v.createdAt)}</span>
         </div>
         <div class="vurd-types">${badgesHtml}</div>
-        ${flagged ? '<div class="vurd-flag-note">⚠ Kan kræve besigtigelse</div>' : ''}
-        ${v.photoUrl ? `<a class="vurd-photo-link" href="${escHtml(v.photoUrl)}" target="_blank" rel="noopener">Se indsendt foto <img src="${escHtml(v.photoUrl)}" alt="Foto vedhæftet vurdering" loading="lazy"></a>` : ''}
+        ${flagged ? `<div class="vurd-flag-note">${tr('vurd.mayNeedInspection')}</div>` : ''}
+        ${v.photoUrl ? `<a class="vurd-photo-link" href="${escHtml(v.photoUrl)}" target="_blank" rel="noopener">${tr('vurd.seePhoto')} <img src="${escHtml(v.photoUrl)}" alt="${tr('vurd.photoAlt')}" loading="lazy"></a>` : ''}
       </div>
     `;
   }).join('');
 
   const pagerHtml = totalPages > 1 ? `
     <div class="vurd-pager">
-      <button type="button" onclick="changeVurdPage(-1)" ${_vurdPage === 0 ? 'disabled' : ''}>‹ Forrige</button>
-      <span class="vurd-pager-note">${start + 1}–${Math.min(start + VURD_PAGE_SIZE, list.length)} af ${list.length}</span>
-      <button type="button" onclick="changeVurdPage(1)" ${_vurdPage >= totalPages - 1 ? 'disabled' : ''}>Næste ›</button>
+      <button type="button" onclick="changeVurdPage(-1)" ${_vurdPage === 0 ? 'disabled' : ''}>${tr('pager.prev')}</button>
+      <span class="vurd-pager-note">${start + 1}–${Math.min(start + VURD_PAGE_SIZE, list.length)} ${tr('pager.of')} ${list.length}</span>
+      <button type="button" onclick="changeVurdPage(1)" ${_vurdPage >= totalPages - 1 ? 'disabled' : ''}>${tr('pager.next')}</button>
     </div>` : '';
 
   el.innerHTML = `<div class="vurd-list">${rowsHtml}</div>${pagerHtml}`;
@@ -2288,7 +2661,7 @@ function kbRankTable(unitNote, list, key, rangKey, ownNavn) {
   return `
     <div class="kb-unit-note">${escHtml(unitNote)}</div>
     <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
-      <td>#</td><td>Kommune</td><td class="n">Indekseret</td>
+      <td>#</td><td>${tr('kb.colCouncil')}</td><td class="n">${tr('kb.colIndexed')}</td>
     </tr></thead><tbody>${rowsHtml}</tbody></table>
     ${kbLavNHtml}`;
 }
@@ -2305,7 +2678,7 @@ let kbLavNHtml = '';
 async function loadKommuneBenchmark() {
   const el = document.getElementById('kb-content');
   if (!el) return;
-  el.textContent = 'Indlæser…';
+  el.textContent = tr('loading');
 
   const report = document.getElementById('kb-report').value;
   const qs = new URLSearchParams();
@@ -2315,7 +2688,7 @@ async function loadKommuneBenchmark() {
       const from = document.getElementById('kb-from').value;
       const to   = document.getElementById('kb-to').value;
       if (!from || !to) {
-        el.innerHTML = '<div class="hist-warning">Vælg både fra- og til-dato for en brugerdefineret periode.</div>';
+        el.innerHTML = `<div class="hist-warning">${tr('stat.pickCustomRange')}</div>`;
         return;
       }
       qs.set('from', from);
@@ -2332,7 +2705,7 @@ async function loadKommuneBenchmark() {
     const resp = await fetch(`/admin/api/kommune-benchmark?${qs.toString()}`, { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok) {
-      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente kommune-benchmark.')}</div>`;
+      el.innerHTML = `<div class="err">${escHtml(data.error || tr('kb.err'))}</div>`;
       return;
     }
 
@@ -2340,7 +2713,7 @@ async function loadKommuneBenchmark() {
     const N = data.hovedranking.length;
 
     kbLavNHtml = data.lavN.length
-      ? `<h3 class="kb-subhead">For få badesteder til sammenligning (under 3)</h3>
+      ? `<h3 class="kb-subhead">${tr('kb.tooFewSites')}</h3>
          <div class="kb-lav-n-list">${data.lavN.map(r => `${escHtml(r.kommuneNavn)} (${r.badestedCount})`).join(' · ')}</div>`
       : '';
 
@@ -2352,9 +2725,9 @@ async function loadKommuneBenchmark() {
           <td class="n">${d.reeltMaalt} / ${d.udloebPunkter}</td>
         </tr>`).join('');
       el.innerHTML = `
-        <div class="kb-unit-note">Andel af kommunens PULS-udløbspunkter med reelt målt data (ikke estimeret/ingen data). Vises SEPARAT fra de øvrige rapporter, indgår ikke i samlet placering — forklarer hvorfor en kommune med bedre overvågning kan have flere registrerede hændelser uden at det reelt er et dårligere resultat.</div>
+        <div class="kb-unit-note">${tr('kb.dqNote')}</div>
         <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
-          <td>Kommune</td><td class="n">Andel</td><td class="n">Målt / i alt</td>
+          <td>${tr('kb.colCouncil')}</td><td class="n">${tr('kb.dqShare')}</td><td class="n">${tr('kb.dqMeasured')}</td>
         </tr></thead><tbody>${dqRows}</tbody></table>`;
       return;
     }
@@ -2363,11 +2736,11 @@ async function loadKommuneBenchmark() {
       const own = data.hovedranking.find(r => r.kommuneNavn.toLowerCase() === ownNavn.toLowerCase());
       const summaryHtml = own
         ? `<div class="kstat-grid"><div class="kstat-box">
-             <div class="kstat-label">Samlet placering</div>
-             <div class="kstat-value">#${Math.round(own.samletRang)} af ${N}</div>
-             <div class="kstat-note">${escHtml(own.kommuneNavn)} · ${own.badestedCount} badesteder · ligevægtet gennemsnit af Varsler/Lukkedage/Badestedsindberetninger</div>
+             <div class="kstat-label">${tr('kb.overallLabel')}</div>
+             <div class="kstat-value">#${Math.round(own.samletRang)} ${tr('pager.of')} ${N}</div>
+             <div class="kstat-note">${escHtml(own.kommuneNavn)} · ${own.badestedCount} ${tr('toc.badevandssteder').toLowerCase()} · ${tr('kb.overallNote')}</div>
            </div></div>`
-        : `<div class="hist-warning">Jeres kommune indgår ikke i hovedrangeringen for denne periode — enten under grænsen på 3 badesteder (se listen nederst), eller ingen matchende data endnu.</div>`;
+        : `<div class="hist-warning">${tr('kb.notRanked')}</div>`;
       const sorted = [...data.hovedranking].sort((a, b) => a.samletRang - b.samletRang);
       // NYT (bruger-ønske 2026-08-18): total # indberetninger (RÅ tal, ikke
       // indekseret pr. badested som rangVurderinger er) — vurderingerRaw
@@ -2383,10 +2756,10 @@ async function loadKommuneBenchmark() {
       // kommunes tal, tabellen er kun for dem der vil sammenligne på tværs.
       el.innerHTML = summaryHtml
         + `<details class="kb-details">
-             <summary>Se fuld rangering (${N} kommuner)</summary>
-             <div class="kb-unit-note">Ligevægtet gennemsnit af rangene i de tre rapporter til højre — lavest samlet tal er bedst.</div>
+             <summary>${tr('kb.seeFullRanking')} (${N} ${tr('kb.councils')})</summary>
+             <div class="kb-unit-note">${tr('kb.weightedAvgNote')}</div>
              <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
-               <td>Samlet</td><td>Kommune</td><td class="n">Varsler</td><td class="n">Lukkedage</td><td class="n">Indberetninger</td><td class="n">Total # indberetninger</td>
+               <td>${tr('kb.colOverall')}</td><td>${tr('kb.colCouncil')}</td><td class="n">${tr('kb.colAlerts')}</td><td class="n">${tr('kb.colClosedDays')}</td><td class="n">${tr('kb.colReports')}</td><td class="n">${tr('kb.colTotalReports')}</td>
              </tr></thead><tbody>${rowsHtml}</tbody></table>
            </details>`
         + kbLavNHtml;
@@ -2394,20 +2767,20 @@ async function loadKommuneBenchmark() {
     }
 
     const REPORTS = {
-      varsler:      ['Risikovarsler pr. badested i perioden — færrest indekseret = bedst placering.', 'varslerIndekseret', 'rangVarsler'],
-      lukkedage:    ['Dage med mindst ét lukket/varslet badested, pr. badested i perioden — færrest indekseret = bedst placering.', 'lukkedageIndekseret', 'rangLukkedage'],
-      vurderinger:  ['Indsendte borgerindberetninger pr. badested i perioden — flest indekseret = bedst placering (modsat retning af Varsler/Lukkedage).', 'vurderingerIndekseret', 'rangVurderinger'],
+      varsler:      [tr('kb.reportAlertsNote'), 'varslerIndekseret', 'rangVarsler'],
+      lukkedage:    [tr('kb.reportClosedNote'), 'lukkedageIndekseret', 'rangLukkedage'],
+      vurderinger:  [tr('kb.reportVurdNote'), 'vurderingerIndekseret', 'rangVurderinger'],
     };
     const [unitNote, key, rangKey] = REPORTS[report];
     el.innerHTML = kbRankTable(unitNote, data.hovedranking, key, rangKey, ownNavn);
   } catch (e) {
-    el.innerHTML = '<div class="err">Kunne ikke hente kommune-benchmark — tjek din forbindelse.</div>';
+    el.innerHTML = `<div class="err">${tr('kb.errConn')}</div>`;
   }
 }
 
 function fmtDateTime(iso) {
   if (!iso) return '—';
-  return new Date(iso).toLocaleString('da-DK', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+  return new Date(iso).toLocaleString(DATE_LOCALE[LANG], { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
 }
 
 // NYT (Kommunepakke, modul 6). ov-badesteder genbruger bevidst samme
@@ -2427,9 +2800,9 @@ async function loadOverrideBadesteder() {
     ovBadesteder = (resp.ok && data.badesteder) || [];
     sel.innerHTML = ovBadesteder.length
       ? ovBadesteder.map(b => `<option value="${escHtml(b.id)}">${escHtml(b.navn)}</option>`).join('')
-      : '<option value="">Ingen badesteder fundet</option>';
+      : `<option value="">${tr('ov.noneFound')}</option>`;
   } catch (e) {
-    sel.innerHTML = '<option value="">Kunne ikke hente badesteder</option>';
+    sel.innerHTML = `<option value="">${tr('ov.err')}</option>`;
   }
 }
 
@@ -2443,17 +2816,18 @@ async function submitOverride(e) {
   const durationValue = Number(document.getElementById('ov-duration-value').value);
   const durationUnit = document.getElementById('ov-duration-unit').value;
   if (!badestedId || !message || !Number.isFinite(durationValue) || durationValue <= 0) {
-    resultEl.innerHTML = '<div class="err">Udfyld alle felter — varighed skal være et positivt tal.</div>';
+    resultEl.innerHTML = `<div class="err">${tr('ov.fillAllFields')}</div>`;
     return false;
   }
   const durationHours = durationUnit === 'days' ? durationValue * 24 : durationValue;
   const bucketLabel = bucketSel.selectedOptions[0].textContent;
-  const navn = (ovBadesteder.find(b => String(b.id) === badestedId) || {}).navn || 'dette badested';
-  if (!confirm(`Udsend kommunalt varsel ("${bucketLabel}") for ${navn}?\n\nBanneret på badestedets side + et push til abonnenter bliver ØJEBLIKKELIGT synligt, og gælder i ${durationValue} ${durationUnit === 'days' ? 'dage' : 'timer'}.\n\nDette ændrer IKKE badestedets officielle status eller risikoprocent — kun banneret.`)) {
+  const navn = (ovBadesteder.find(b => String(b.id) === badestedId) || {}).navn || tr('ov.thisSite');
+  const durationUnitLabel = tr(durationUnit === 'days' ? 'varsel.days' : 'varsel.hours');
+  if (!confirm(`${tr('ov.confirmSend')} ("${bucketLabel}") ${tr('ov.confirmSendBody')} ${navn}?\n\n${tr('ov.confirmSendVisible')} ${durationValue} ${durationUnitLabel}.\n\n${tr('ov.confirmSendNote')}`)) {
     return false;
   }
 
-  resultEl.textContent = 'Sender…';
+  resultEl.textContent = tr('ov.sending');
   try {
     const resp = await fetch('/admin/api/override', {
       method: 'POST',
@@ -2462,15 +2836,15 @@ async function submitOverride(e) {
     });
     const data = await resp.json();
     if (!resp.ok) {
-      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke udsende kommunalt varsel.')}</div>`;
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || tr('ov.errSend'))}</div>`;
       return false;
     }
-    resultEl.innerHTML = `<div class="ov-ok">✓ Banner sat og synligt med det samme — gælder til ${fmtDateTime(data.expiresAt)}.${data.pushSent ? ` ${data.pushSent} abonnent(er) varslet.` : ''} (Officiel status/risikoprocent er uændret.)</div>`;
+    resultEl.innerHTML = `<div class="ov-ok">${tr('ov.sentOk')} ${fmtDateTime(data.expiresAt)}.${data.pushSent ? ` ${data.pushSent} ${tr('ov.subscribersNotified')}` : ''} ${tr('ov.statusUnchanged')}</div>`;
     document.getElementById('ov-message').value = '';
     loadActiveOverrides();
     loadAlertStats();
   } catch (e) {
-    resultEl.innerHTML = '<div class="err">Kunne ikke udsende kommunalt varsel — tjek din forbindelse.</div>';
+    resultEl.innerHTML = `<div class="err">${tr('ov.errSendConn')}</div>`;
   }
   return false;
 }
@@ -2482,7 +2856,7 @@ async function loadActiveOverrides() {
     const resp = await fetch('/admin/api/overrides', { cache: 'no-store' });
     const data = await resp.json();
     if (!resp.ok || !data.overrides || data.overrides.length === 0) {
-      el.innerHTML = '<div class="ov-none">Ingen aktive overstyringer lige nu.</div>';
+      el.innerHTML = `<div class="ov-none">${tr('ov.noneActive')}</div>`;
       return;
     }
     el.innerHTML = data.overrides.map(o => {
@@ -2491,8 +2865,8 @@ async function loadActiveOverrides() {
         <div class="ov-active-row">
           <div><strong>${escHtml(navn)}</strong> — ${escHtml(o.bucket)}</div>
           <div class="ov-active-msg">${escHtml(o.message)}</div>
-          <div class="ov-active-meta">Gælder til ${fmtDateTime(o.expires_at)}</div>
-          <button type="button" onclick="clearOverride('${escHtml(o.badested_id)}')">Ryd nu</button>
+          <div class="ov-active-meta">${tr('ov.validUntil')} ${fmtDateTime(o.expires_at)}</div>
+          <button type="button" onclick="clearOverride('${escHtml(o.badested_id)}')">${tr('ov.clearNow')}</button>
         </div>`;
     }).join('');
   } catch (e) {
@@ -2501,7 +2875,7 @@ async function loadActiveOverrides() {
 }
 
 async function clearOverride(badestedId) {
-  if (!confirm('Ryd det kommunale varsel nu, før det naturligt udløber? Banneret fjernes øjeblikkeligt fra badestedets side.')) return;
+  if (!confirm(tr('ov.confirmClear'))) return;
   try {
     const resp = await fetch(`/admin/api/override/${encodeURIComponent(badestedId)}/clear`, { method: 'POST' });
     if (resp.ok) loadActiveOverrides();

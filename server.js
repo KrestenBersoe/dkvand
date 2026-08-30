@@ -1041,6 +1041,15 @@ app.get('/admin/dashboard', tenantAdmin.requireTenantSession, async (req, res) =
       trialExpiresAt: tenant.trial_expires_at,
       agreementSignedAt: tenant.agreement_signed_at,
       authMethod: req.tenant.authMethod,
+      // NYT (bruger-krav 2026-08-30 — "Login og dashboard skal være på
+      // dansk, engelsk eller fransk afhængig af hvilket land brugeren
+      // kommer fra"): samme kilde login.html's ?country=-parameter allerede
+      // stammer FRA (ukwater's/frwater's egne GET /login-redirects), men
+      // her læst fra tenantens EGEN DB-post i stedet for en query-parameter
+      // — mere robust, da dashboardet nås via et direkte link efter login,
+      // ikke en videresendt URL-parameter. countryCode findes allerede på
+      // tenant (se tenant-admin.js's country_code-kolonne).
+      countryCode: tenant.country_code,
       // NYT (bruger-krav 2026-08-20 — "selve dashboard skal bruge dette
       // logo"): samme "klientens browser henter direkte fra logo_url"-
       // mønster som skiltenes ?kommunelogo=1 og det kommunale varsel-

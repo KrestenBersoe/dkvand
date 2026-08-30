@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════
-// admin-dashboard-stats.js — cross-market admin dashboard (bruger-krav
+// admin-dashboard.js — cross-market admin dashboard (bruger-krav
 // 2026-08-27), delt mellem internal-choose-country.html (country='ALL') og
 // internal-country-admin.html (country=dens eget land)
 // ═══════════════════════════════════════════════════════════════════════════
