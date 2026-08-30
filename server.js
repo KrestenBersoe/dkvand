@@ -520,7 +520,7 @@ app.get(['/', '/dansk-overloeb-kort.html'], (req, res) => {
 // indhold (installationer, webpush-abonnenter, indberetninger, udsendte
 // varsler) lever nu i det interne, periode-følsomme dashboard på
 // /internal/choose-country og /internal/admin/<land>, se admin-stats.js og
-// admin-dashboard-stats.js. Ingen anden side linkede til /stats (bekræftet
+// admin-dashboard.js. Ingen anden side linkede til /stats (bekræftet
 // ved gennemgang før fjernelse).
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2456,11 +2456,11 @@ app.get('/overloeb-sw.js', (req, res) => {
 // politik som HTML'en selv) tvinger en (billig, ETag-baseret) revalidering
 // ved hver indlæsning i stedet, mens denne funktion stadig er under aktiv
 // iteration.
-// NYT (cross-market admin-dashboard): admin-dashboard-stats.js er SAMME
+// NYT (cross-market admin-dashboard): admin-dashboard.js er SAMME
 // slags bevidst-offentlig .js-fil (loadet via <script src> fra
 // internal-choose-country.html/internal-country-admin.html) — tilføjet til
 // SAMME navngivne-undtagelse-loop, ikke en ny, duplikeret rute.
-for (const publicJsFile of ['windy-currents.js', 'leaflet-canvas-layer.js', 'admin-dashboard-stats.js']) {
+for (const publicJsFile of ['windy-currents.js', 'leaflet-canvas-layer.js', 'admin-dashboard.js']) {
   app.get('/' + publicJsFile, (req, res) => {
     res.set('Cache-Control', 'no-cache');
     res.type('application/javascript');

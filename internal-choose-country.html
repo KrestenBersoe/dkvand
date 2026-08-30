@@ -19,20 +19,28 @@
     color: var(--ink);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
-  /* NYT (cross-market admin-dashboard): udvidet fra 420px (kun de tre
-     landekort) til samme bredde som stats.html/internal-country-admin.html,
-     nu hvor siden også rummer dashboardets stat-grid/trend-grafer. */
+  /* NYT (cross-market admin-dashboard): udvidet fra 420px (kun landevælgeren)
+     til samme bredde som stats.html/internal-country-admin.html, nu hvor
+     siden også rummer dashboardets stat-grid/trend-grafer. */
   .wrap { max-width: 760px; margin: 0 auto; }
   h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
   .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
-  .country-cards { max-width: 420px; }
-  .country-card {
-    display: block; background: rgba(255,255,255,.03); border: 1px solid var(--border);
-    border-radius: 12px; padding: 1.1rem 1.3rem; margin-bottom: .8rem; text-decoration: none; color: var(--ink);
+  /* RETTET (bruger-krav 2026-08-30 — "små knapper i toppen, ikke et stort
+     panel med flag"): landevælgeren var oprindeligt tre store kort (flag +
+     navn + produkt), der skubbede selve valget ned under en indledende
+     overskrift. Erstattet med SAMME små pille-knapper i en .top-bar som
+     internal-country-admin.html's egen #country-switcher — samme CSS,
+     bevidst dupliceret her (samme etablerede mønster som resten af filen)
+     fremfor en delt stylesheet. Ingen .active-tilstand her (i modsætning
+     til country-admin-siden) — denne side har intet "nuværende land" at
+     fremhæve, alle tre er ligestillede valg. */
+  .top-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-bottom: .3rem; }
+  .country-switcher { display: flex; gap: .4rem; }
+  .country-switcher a {
+    font-size: .78rem; color: var(--ink-soft); text-decoration: none; padding: .3rem .6rem;
+    border-radius: 6px; border: 1px solid var(--border);
   }
-  .country-card:hover { border-color: var(--accent); background: rgba(79,184,214,.06); }
-  .country-card .name { font-size: 1rem; font-weight: 700; }
-  .country-card .product { font-size: .8rem; color: var(--ink-soft); margin-top: .15rem; }
+  .country-switcher a:hover { color: var(--ink); background: rgba(255,255,255,.06); }
   #staff-identity { font-size: .8rem; color: var(--ink-soft); margin-top: 1.5rem; }
   #staff-identity a { color: var(--accent); }
 
@@ -41,7 +49,7 @@
      internal-country-admin.html — bevidst dupliceret her fremfor en delt
      CSS-fil, samme etablerede mønster som de øvrige internal-*.html-sider
      allerede følger for hinanden (kun JS-logikken er delt, se
-     admin-dashboard-stats.js). ────────────────────────────────────────── */
+     admin-dashboard.js). ────────────────────────────────────────── */
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
   .card {
     background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px;
@@ -87,30 +95,21 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>📊 Alle markeder</h1>
+  <div class="top-bar">
+    <h1>🏛 Administration</h1>
+    <div class="country-switcher">
+      <a href="/internal/admin/DK">Danmark</a>
+      <a href="/internal/admin/UK">United Kingdom</a>
+      <a href="/internal/admin/FR">France</a>
+    </div>
+  </div>
   <div class="sub" id="staff-identity"></div>
 
+  <h1 style="margin-top:2rem">📊 Alle markeder</h1>
   <div id="admin-dashboard-root"></div>
-
-  <h1 style="margin-top:2rem">🏛 Vælg land</h1>
-  <div class="sub">Vælg hvilket lands kommuner/councils/mairies du vil administrere.</div>
-  <div class="country-cards">
-    <a class="country-card" href="/internal/admin/DK">
-      <div class="name">🇩🇰 Danmark</div>
-      <div class="product">dkvand — kommuner</div>
-    </a>
-    <a class="country-card" href="/internal/admin/UK">
-      <div class="name">🇬🇧 United Kingdom</div>
-      <div class="product">ukwater — councils</div>
-    </a>
-    <a class="country-card" href="/internal/admin/FR">
-      <div class="name">🇫🇷 France</div>
-      <div class="product">frwater — mairies</div>
-    </a>
-  </div>
 </div>
 
-<script src="/admin-dashboard-stats.js"></script>
+<script src="/admin-dashboard.js"></script>
 <script>
 // Samme "hvem er logget ind + log ud"-mønster som internal-country-admin.html.
 async function loadStaffIdentity() {
