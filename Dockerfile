@@ -148,7 +148,7 @@ COPY leaflet-canvas-layer.js ./
 # navngivet route i server.js"-mønster som de to filer ovenfor — se dens
 # egen kommentar for hvorfor .js aldrig må dækkes af den generelle
 # PUBLIC_STATIC_EXTENSIONS-allowlist.
-COPY admin-dashboard-stats.js ./
+COPY admin-dashboard.js ./
 COPY badevand-risk.js ./
 # RETTET (produktionsudfald 2026-08-20 — samme "crasher øjeblikkeligt uden
 # denne linje"-fælde som resten af de lokale moduler i denne fil, se
