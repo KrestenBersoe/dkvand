@@ -67,8 +67,8 @@ const ready = query(`
   );
   INSERT INTO countries (code, name, product_base_url, municipality_login_path) VALUES
     ('DK', 'Danmark', 'https://www.ditbadevand.dk', '/admin/trial/'),
-    ('UK', 'United Kingdom', 'https://ukwater.fly.dev', '/council.html#token='),
-    ('FR', 'France', 'https://frwater.fly.dev', '/mairie.html#token=')
+    ('UK', 'United Kingdom', 'https://islandswim.co.uk', '/council.html#token='),
+    ('FR', 'France', 'https://vigiebaignade.fr', '/mairie.html#token=')
   ON CONFLICT (code) DO NOTHING;
 
   CREATE TABLE IF NOT EXISTS tenants (
