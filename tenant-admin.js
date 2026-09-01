@@ -1,0 +1,692 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// tenant-admin.js — Kommunepakke, modul 1: tenant-model, database-skema,
+// tenant-/trial-CRUD
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// ⚠️ Dette er UDELUKKENDE fundamentet — se planen (cached-toasting-stardust.md)
+// for den fulde afgrænsning. Denne fil bygger IKKE:
+//   - selvbetjent OAuth-konfigurationsflow (næste modul — tenant_oauth_configs
+//     oprettes her, men forbliver tom/manuelt udfyldt indtil UI'en findes)
+//   - dynamisk OAuth-login-middleware (modulet derefter, openid-client)
+//   - noget dashboard-indhold (historik/rapporter/analyser/overstyring —
+//     senere moduler)
+//   - web-login til ditbadevand.dk's eget driftspersonale — trial-udstedelse
+//     sker via scripts/create-tenant-trial.js, kørt af nogen med allerede
+//     eksisterende server-/Fly-adgang, samme tillidsgrænse som at køre en
+//     hvilken som helst anden scripts/-fil i dette repo i dag.
+//
+// ── Tenant-adgang, to veje ind ──────────────────────────────────────────────
+// 1. Trial: ditbadevand.dk's driftsteam opretter en tenant og udsteder et
+//    tidsbegrænset, engangsgenereret login-link (scripts/create-tenant-trial.js
+//    → consumeTrialLogin() nedenfor). Bevidst den ENESTE fungerende login-vej
+//    i dette modul — ingen OAuth-udbyder er sat op for et trial endnu.
+// 2. OAuth (fremtidigt modul): kommunens egen udbyder, konfigureret via
+//    tenant_oauth_configs. Genbruger PRÆCIS samme sessions-cookie-mekanisme
+//    (tenant-session.js) som trial-loginet, blot med authMethod:'oauth' i
+//    stedet for 'trial'.
+//
+// ── Filopdeling (VIGTIGT) ────────────────────────────────────────────────
+// Kryptering/sessions-cookie/adgangs-middleware ligger IKKE her, men i
+// tenant-session.js — den fil har BEVIDST ingen afhængighed af db.js, så den
+// kan unit-testes uden en levende database (se tenant-session.test.js). Denne
+// fil requirer og re-eksporterer den, så server.js fortsat kun behøver ét
+// require for hele Kommunepakke-modulet (samme mønster som badestedObs/
+// seoPages). Selve skemaoprettelsen herunder udfører et REELT, levende
+// databasekald ved import — derfor må denne fil ALDRIG blive et require af
+// tenant-session.test.js (ville kræve en Postgres-forbindelse for at teste
+// rene funktioner).
+// ═══════════════════════════════════════════════════════════════════════════
+
+'use strict';
+const crypto = require('crypto');
+const https  = require('https');
+const dns    = require('dns');
+const { URL } = require('url');
+const bcrypt = require('bcryptjs');
+const { query } = require('./db');
+const tenantSession = require('./tenant-session');
+const oauthValidation = require('./oauth-config-validation');
+
+const BCRYPT_ROUNDS = 12; // samme værdi/begrundelse som admin-users.js
+
+// ── Database-opsætning — samme mønster som badested-observations.js: egen
+// CREATE TABLE IF NOT EXISTS, eksporteret ready-promise, afventet i
+// server.js's Promise.all(...) før serveren begynder at lytte.
+const ready = query(`
+  -- NYT (Fælles login på tværs af dkvand/ukwater/frwater — se planens
+  -- "Single authentication solution"): tenants er ikke længere udelukkende
+  -- danske kommuner — country_code (tilføjet nedenfor) afgør hvilket
+  -- produkt en tenant reelt hører til, og product_base_url/
+  -- municipality_login_path afgør hvor et trial-/OAuth-login skal
+  -- håndteres videre til (se sso-handoff.js), når det IKKE er 'DK'.
+  CREATE TABLE IF NOT EXISTS countries (
+    code                     TEXT PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    product_base_url         TEXT NOT NULL,
+    municipality_login_path  TEXT NOT NULL
+  );
+  INSERT INTO countries (code, name, product_base_url, municipality_login_path) VALUES
+    ('DK', 'Danmark', 'https://www.ditbadevand.dk', '/admin/trial/'),
+    ('UK', 'United Kingdom', 'https://islandswim.co.uk', '/council.html#token='),
+    ('FR', 'France', 'https://vigiebaignade.fr', '/mairie.html#token=')
+  ON CONFLICT (code) DO NOTHING;
+
+  CREATE TABLE IF NOT EXISTS tenants (
+    id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name                TEXT NOT NULL,
+    status              TEXT NOT NULL DEFAULT 'trial',
+    trial_started_at    TIMESTAMPTZ,
+    trial_expires_at    TIMESTAMPTZ,
+    agreement_signed_at TIMESTAMPTZ,
+    created_by          TEXT,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    logo_url            TEXT
+  );
+  -- RETTET (Kommunepakke, modul 6): logo_url tilføjet EFTER at tenants
+  -- allerede kørte i produktion (modul 1) — CREATE TABLE IF NOT EXISTS
+  -- ovenfor tilføjer ALDRIG en kolonne til en allerede-eksisterende tabel,
+  -- kun ALTER TABLE gør. Selve kolonnedefinitionen i CREATE TABLE-blokken
+  -- ovenfor er derfor kun til gavn for en fuldstændig frisk installation —
+  -- denne linje er den, der reelt opgraderer det allerede kørende skema.
+  -- IF NOT EXISTS gør den trygt idempotent (gentagne opstarter no-op'er).
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS logo_url TEXT;
+  -- NYT: DEFAULT 'DK' udfylder samtlige EKSISTERENDE rækker (de danske
+  -- kommuner, der allerede kørte før dette felt fandtes) i samme ALTER —
+  -- det ER migreringen af de danske tenants til det fælles skema, ingen
+  -- separat data-flytning nødvendig. REFERENCES countries(code) kræver
+  -- countries-tabellen (og dens 'DK'-række) oprettet FØR denne linje —
+  -- se rækkefølgen ovenfor.
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS country_code TEXT NOT NULL DEFAULT 'DK' REFERENCES countries(code);
+  -- NYT (single login på tværs af system-/country-/municipality-tier — se
+  -- planens "Build UI for admin and municipality users with a single
+  -- login"): en tenant havde hidtil INGEN individuel login-e-mail overhovedet
+  -- (adgang skete udelukkende via et delt trial-link eller kommunens egen
+  -- OAuth-udbyder, se filhovedets "to veje ind") — begge NULLable, en tenant
+  -- uden dem kan stadig kun logge ind via trial-link/OAuth som før. Unikt
+  -- indeks (ikke en tabel-CONSTRAINT — Postgres understøtter ikke ADD
+  -- CONSTRAINT ... IF NOT EXISTS generelt) tillader flere NULL'er (ingen
+  -- login_email sat), men forbyder to tenants med SAMME login_email.
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS login_email TEXT;
+  ALTER TABLE tenants ADD COLUMN IF NOT EXISTS password_hash TEXT;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_tenants_login_email ON tenants(login_email);
+
+  CREATE TABLE IF NOT EXISTS tenant_oauth_configs (
+    tenant_id                UUID PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
+    provider_type            TEXT NOT NULL,
+    client_id                TEXT NOT NULL,
+    client_secret_ciphertext BYTEA NOT NULL,
+    client_secret_iv         BYTEA NOT NULL,
+    client_secret_auth_tag   BYTEA NOT NULL,
+    discovery_url            TEXT NOT NULL,
+    allowed_email_domains    TEXT[] NOT NULL,
+    verified_at              TIMESTAMPTZ,
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at               TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+
+  CREATE TABLE IF NOT EXISTS tenant_trial_logins (
+    id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id    UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    token_hash   TEXT NOT NULL,
+    issued_by    TEXT,
+    issued_note  TEXT,
+    expires_at   TIMESTAMPTZ NOT NULL,
+    revoked_at   TIMESTAMPTZ,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE INDEX IF NOT EXISTS idx_trial_token_hash ON tenant_trial_logins(token_hash);
+
+  -- NYT (Overløb-fanen, iframe-indlejring — bruger-ønske 2026-08-19): SAMME
+  -- ét-vejs-hash-opskrift som tenant_trial_logins ovenfor (kun token_hash
+  -- gemmes, aldrig det rå token), men en EGEN tabel, ikke en genbrug af
+  -- trial-logins — semantisk et andet formål (permanent offentligt
+  -- indlejrings-link til ét bestemt live-kort, IKKE et login der sætter en
+  -- sessions-cookie) og en anden levetid (ingen expires_at — et embed-link
+  -- er tiltænkt at leve indtil eksplicit tilbagekaldt, ikke udløbe som et
+  -- trial). Bevidst IKKE en stateless HMAC-signeret token (se
+  -- tenant-session.js's signPayload/verifyPayload) — et sådant token kan
+  -- kun spærres ved at rotere HELE sitets SESSION_SECRET, hvilket ville
+  -- logge alle kommuner ud på én gang. Denne tabel gør ÉT bestemt
+  -- indlejrings-link individuelt tilbagekaldeligt.
+  CREATE TABLE IF NOT EXISTS tenant_embed_tokens (
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    token_hash  TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    revoked_at  TIMESTAMPTZ
+  );
+  CREATE INDEX IF NOT EXISTS idx_embed_token_hash ON tenant_embed_tokens(token_hash);
+`).then(() => console.info('tenant-admin: Postgres-skema klar'))
+  .catch(e => { console.error('tenant-admin: skemaoprettelse fejlede —', e.message); throw e; });
+
+// ── Tenant-/trial-CRUD ───────────────────────────────────────────────────────
+
+/**
+ * @param {{name: string, status?: 'trial'|'active', trialDays?: number|null, createdBy?: string|null}} p
+ */
+async function createTenant({ name, status = 'trial', trialDays = null, createdBy = null, logoUrl = null, countryCode = 'DK', loginEmail = null, password = null }) {
+  const now = new Date();
+  const trialStartedAt = status === 'trial' ? now : null;
+  const trialExpiresAt = status === 'trial' && trialDays != null
+    ? new Date(now.getTime() + trialDays * 24 * 3600 * 1000)
+    : null;
+  // NYT (Kommunepakke, modul 6): logoUrl er valgfrit, staff-sat ved
+  // oprettelse (samme princip som name selv) — vist i overstyrings-
+  // banneret (badested-overrides.js) hvis/når kommunen bruger overstyrings-
+  // funktionen. Kun let formatvalidering (https://) — hentes DIREKTE af
+  // borgerens browser (<img src>), aldrig server-side, så modul 2's SSRF-
+  // beskyttelse er ikke relevant her (serveren rører aldrig selve billedet).
+  if (logoUrl != null && !/^https:\/\//i.test(logoUrl)) {
+    const err = new Error('logo_url skal starte med https://.');
+    err.code = 'VALIDATION'; throw err;
+  }
+  // NYT (single login): begge valgfri, men skal følges ad — et login_email
+  // uden password ville være en konto, ingen nogensinde kan logge ind på;
+  // et password uden login_email ville aldrig kunne slås op ved login.
+  if ((loginEmail && !password) || (password && !loginEmail)) {
+    const err = new Error('login_email og password skal enten begge angives, eller ingen af dem.');
+    err.code = 'VALIDATION'; throw err;
+  }
+  const passwordHash = password ? await bcrypt.hash(password, BCRYPT_ROUNDS) : null;
+  const { rows } = await query(
+    `INSERT INTO tenants (name, status, trial_started_at, trial_expires_at, created_by, logo_url, country_code, login_email, password_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     RETURNING id, name, status, trial_started_at, trial_expires_at, created_at, logo_url, country_code`,
+    [name, status, trialStartedAt, trialExpiresAt, createdBy, logoUrl, countryCode, loginEmail ? loginEmail.toLowerCase().trim() : null, passwordHash]
+  );
+  return rows[0];
+}
+
+/**
+ * Sætter/erstatter en tenants login_email+password — samme regel som
+ * createTenant() (begge eller ingen). Kaldt både af staff (ved oprettelse
+ * eller senere) og tænkt genbrugt af en fremtidig selvbetjent "skift
+ * adgangskode"-side i selve kommune-dashboardet (findes endnu ikke, se
+ * planens afgrænsning).
+ * @param {string} tenantId
+ * @param {{loginEmail: string, password: string}} p
+ */
+async function setTenantPassword(tenantId, { loginEmail, password }) {
+  if (!loginEmail || !password) {
+    const err = new Error('login_email og password er begge påkrævet.');
+    err.code = 'VALIDATION'; throw err;
+  }
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  await query(
+    `UPDATE tenants SET login_email = $2, password_hash = $3 WHERE id = $1`,
+    [tenantId, loginEmail.toLowerCase().trim(), passwordHash]
+  );
+}
+
+/**
+ * Verificerer email+password mod tenants.login_email/password_hash — den
+ * NYE tredje adgangsvej ved siden af trial-link og OAuth (se filhovedets "to
+ * veje ind", nu tre). Samme generiske null-ved-enten-fejl og timing-safe
+ * dummy-hash-princip som admin-users.js's verifyAdminUserPassword() — se
+ * dens kommentar for den fulde begrundelse.
+ * @param {string} email
+ * @param {string} password
+ * @returns {Promise<{tenantId: string, tenantName: string, tenantStatus: string, countryCode: string}|null>}
+ */
+async function verifyTenantPassword(email, password) {
+  if (!email || !password) return null;
+  const { rows } = await query(
+    `SELECT id, name, status, country_code, password_hash FROM tenants WHERE login_email = $1`,
+    [String(email).toLowerCase().trim()]
+  );
+  const row = rows[0];
+  if (!row || !row.password_hash) {
+    await bcrypt.compare(password, '$2a$12$C6UzMDM.H6dfI/f/IKcEeO0h5vN6q6zLGZ4jK9CqMkQ4jz2Zc.5Fq');
+    return null;
+  }
+  const match = await bcrypt.compare(password, row.password_hash);
+  if (!match) return null;
+  return { tenantId: row.id, tenantName: row.name, tenantStatus: row.status, countryCode: row.country_code };
+}
+
+/**
+ * Genererer et engangs-token, gemmer KUN dets SHA-256-hash (samme ét-vejs-
+ * princip som badested-observations.js's hashIp()) — det rå token returneres
+ * HER og ALDRIG persisteret, kaldestedet (scripts/create-tenant-trial.js) er
+ * eneste sted der ser det i klartekst.
+ * @param {{tenantId: string, expiresAt: Date, issuedBy?: string|null, note?: string|null}} p
+ * @returns {Promise<string>} rawToken
+ */
+async function issueTrialLogin({ tenantId, expiresAt, issuedBy = null, note = null }) {
+  const rawToken = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  await query(
+    `INSERT INTO tenant_trial_logins (tenant_id, token_hash, issued_by, issued_note, expires_at)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [tenantId, tokenHash, issuedBy, note, expiresAt]
+  );
+  return rawToken;
+}
+
+/**
+ * Reusable-until-expiry (IKKE engangsbrug) — en kommune under trial skal
+ * kunne logge ind flere gange over hele trial-perioden med samme link, ikke
+ * kun én gang. Tilbagekaldes eksplicit (revoked_at) eller udløber (expires_at).
+ * @param {string} rawToken
+ * @returns {Promise<{tenantId: string, tenantName: string, tenantStatus: string, countryCode: string}|null>}
+ */
+async function consumeTrialLogin(rawToken) {
+  if (!rawToken || typeof rawToken !== 'string') return null;
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const { rows } = await query(
+    `SELECT ttl.tenant_id, ttl.expires_at, ttl.revoked_at, t.name, t.status, t.country_code
+     FROM tenant_trial_logins ttl
+     JOIN tenants t ON t.id = ttl.tenant_id
+     WHERE ttl.token_hash = $1`,
+    [tokenHash]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  if (row.revoked_at) return null;
+  if (new Date(row.expires_at).getTime() < Date.now()) return null;
+  return { tenantId: row.tenant_id, tenantName: row.name, tenantStatus: row.status, countryCode: row.country_code };
+}
+
+// ── Iframe-indlejrings-tokens (Overløb-fanen, bruger-ønske 2026-08-19) ──────
+// Se tenant_embed_tokens's egen filhoveds-kommentar for hvorfor dette er en
+// EGEN tabel/token-type, ikke en genbrug af trial-logins eller en stateless
+// signeret token. Samme ét-vejs-hash-princip som issueTrialLogin/
+// consumeTrialLogin ovenfor.
+
+/**
+ * @param {{tenantId: string}} p
+ * @returns {Promise<string>} rawToken — KUN returneret her, aldrig persisteret i klartekst
+ */
+async function issueEmbedToken({ tenantId }) {
+  const rawToken = crypto.randomBytes(32).toString('base64url');
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  await query(
+    `INSERT INTO tenant_embed_tokens (tenant_id, token_hash) VALUES ($1, $2)`,
+    [tenantId, tokenHash]
+  );
+  return rawToken;
+}
+
+/**
+ * @param {string} rawToken
+ * @returns {Promise<{tenantId: string, tenantName: string}|null>}
+ */
+async function verifyEmbedToken(rawToken) {
+  if (!rawToken || typeof rawToken !== 'string') return null;
+  const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+  const { rows } = await query(
+    `SELECT tet.tenant_id, tet.revoked_at, t.name
+     FROM tenant_embed_tokens tet
+     JOIN tenants t ON t.id = tet.tenant_id
+     WHERE tet.token_hash = $1`,
+    [tokenHash]
+  );
+  const row = rows[0];
+  if (!row || row.revoked_at) return null;
+  return { tenantId: row.tenant_id, tenantName: row.name };
+}
+
+/**
+ * "Lav nyt link"-arbejdsgangen — spærrer SAMTLIGE aktive indlejrings-
+ * tokens for en tenant på én gang, bevidst uden en pr.-token-administrations-
+ * UI (se planens afgrænsning: enkel sikkerhedsventil, ikke fin-granuleret
+ * styring). @param {string} tenantId
+ */
+async function revokeEmbedTokensForTenant(tenantId) {
+  await query(
+    `UPDATE tenant_embed_tokens SET revoked_at = now() WHERE tenant_id = $1 AND revoked_at IS NULL`,
+    [tenantId]
+  );
+}
+
+/** @param {string} tenantId */
+async function getTenant(tenantId) {
+  const { rows } = await query(
+    `SELECT id, name, status, trial_started_at, trial_expires_at, agreement_signed_at, created_at, logo_url, country_code, login_email
+     FROM tenants WHERE id = $1`,
+    [tenantId]
+  );
+  return rows[0] || null;
+}
+
+// NYT (bruger-ønske — salgsteamets adgang til EKSISTERENDE kommuner, se
+// server.js's GET /internal/api/tenants): den eneste plads i denne fil, der
+// nogensinde har haft brug for at se ALLE tenants på én gang — getTenant()
+// ovenfor kræver allerede et id, hvilket er præcis det, en sales-medarbejder
+// IKKE har for en kommune de ikke selv oprettede. Ingen status-filter — en
+// suspenderet/udløbet kommune skal stadig kunne findes og gives et nyt
+// login-link til, blot tydeligt markeret som sådan i UI'en (se kaldestedet).
+//
+// NYT (single auth-løsning på tværs af dkvand/ukwater/frwater): valgfrit
+// countryCode-filter — en country-tier staff-bruger må kun se sit eget lands
+// tenants (se server.js's requireStaffSession), en system-tier bruger ser
+// alle (kalder uden filter).
+// @param {{countryCode?: string|null}} [p]
+async function listTenants({ countryCode = null } = {}) {
+  const { rows } = countryCode
+    ? await query(
+        `SELECT id, name, status, trial_expires_at, created_at, country_code
+         FROM tenants WHERE country_code = $1 ORDER BY name`,
+        [countryCode]
+      )
+    : await query(
+        `SELECT id, name, status, trial_expires_at, created_at, country_code
+         FROM tenants ORDER BY country_code, name`
+      );
+  return rows;
+}
+
+// ── OAuth-konfiguration (Kommunepakke, modul 2) ─────────────────────────────
+// Selvbetjent flow: en ALLEREDE logget ind tenant (i dag udelukkende via
+// trial, se filhovedet) gemmer selv deres permanente OAuth/OIDC-udbyder-
+// konfiguration. Bruges endnu ikke til at logge ind noget sted — det er
+// modul 3's dynamiske OAuth-login-middleware.
+
+// SSRF-beskyttelse for et bruger-angivet Discovery URL-felt — se planen
+// (Kommunepakke modul 2)'s "Ny sikkerhedsrisiko"-afsnit for den fulde
+// begrundelse. Fire lag:
+//   1. Kun https:// tilladt.
+//   2. DNS-opslag FØR forbindelse — ALLE resolvede adresser tjekkes mod
+//      oauth-config-validation.js's isPrivateOrDisallowedIp() (en
+//      hostname kan resolve til flere adresser; kun ÉN skal være privat
+//      for at hele forespørgslen afvises — fail closed).
+//   3. Selve forbindelsen PINNES til netop den adresse, der blev valideret
+//      i trin 2 (https.get's `lookup`-option) — Node genresolver ALDRIG
+//      hostname'et selv bagefter. Dette lukker den DNS-rebinding-TOCTOU-
+//      begrænsning en naiv "slå op, så fetch(url)" ellers ville have (to
+//      separate opslag, med et vindue hvor DNS-svaret kunne skifte
+//      mellem dem) — servername/Host-header forbliver STADIG det rigtige
+//      hostname (kun selve TCP-forbindelsens IP-mål er fastlåst), så TLS-
+//      certifikatvalidering og vhost-routing hos udbyderen virker uændret.
+//   4. Kort timeout (5s) + loft på svarstørrelse (100 KB — et ægte OIDC
+//      discovery-dokument er typisk et par KB).
+// Kaster ALDRIG for et forventeligt "kunne ikke bekræfte"-udfald (forkert
+// URL, DNS-fejl, timeout, ugyldigt indhold) — kun {ok:false, reason}, som
+// kaldestedet (server.js's POST-handler) viser direkte til brugeren.
+const DISCOVERY_FETCH_TIMEOUT_MS = 5000;
+const DISCOVERY_MAX_BYTES = 100 * 1024;
+const REQUIRED_DISCOVERY_FIELDS = ['issuer', 'authorization_endpoint', 'token_endpoint', 'jwks_uri'];
+
+/**
+ * SSRF-sikker hentning af en vilkårlig bruger-angivet URL, forventet at
+ * indeholde et OIDC/OAuth2 discovery-JSON-dokument — se filhovedets
+ * begrundelse. UDTRUKKET som selvstændig funktion (RETTET, Kommunepakke
+ * modul 3): oprindeligt indlejret direkte i validateDiscoveryUrl(), men
+ * oauth-login.js har brug for PRÆCIS samme SSRF-beskyttelse, når det
+ * (ved hvert login-forsøg, se filhovedet) skal genhente samme dokument
+ * for reelt at kunne konstruere en openid-client Configuration — at lade
+ * to steder i koden hver hånd-rulle deres egen udgave af SSRF-tjekket
+ * ville være at duplikere præcis den slags sikkerhedskritiske kode, denne
+ * fil ellers konsekvent undgår at duplikere.
+ * @param {string} rawUrl
+ * @returns {Promise<{ok: true, doc: object}|{ok: false, reason: string}>}
+ */
+async function fetchDiscoveryDocument(rawUrl) {
+  let parsed;
+  try { parsed = new URL(rawUrl); }
+  catch (e) { return { ok: false, reason: 'Ugyldig URL.' }; }
+  if (parsed.protocol !== 'https:') {
+    return { ok: false, reason: 'Discovery-URL skal starte med https://.' };
+  }
+
+  let addresses;
+  try {
+    addresses = await dns.promises.lookup(parsed.hostname, { all: true });
+  } catch (e) {
+    return { ok: false, reason: `Kunne ikke slå hostnavnet op: ${e.message}` };
+  }
+  if (!addresses || addresses.length === 0) {
+    return { ok: false, reason: 'Hostnavnet resolverede til ingen adresser.' };
+  }
+  for (const { address } of addresses) {
+    if (oauthValidation.isPrivateOrDisallowedIp(address)) {
+      return { ok: false, reason: "Discovery-URL'en peger på en ikke-tilladt (privat/intern) adresse." };
+    }
+  }
+  // RETTET: pin'er til en IPv4-adresse, hvis en findes, frem for blot
+  // addresses[0] (som ofte er IPv6 først på en dual-stack-resolver) — IPv6-
+  // udgangsforbindelse er langt fra universel på tværs af hostingmiljøer
+  // (bekræftet konkret her: en IPv6-pinnet forbindelse hang pålideligt til
+  // timeout i denne sandbox, specifikt EFTER et forudgående dns.lookup()
+  // af 'localhost' i samme proces — sandsynligvis en libuv/c-ares-særhed,
+  // men uafhængigt af rodårsagen er IPv4 det markant mere pålidelige valg
+  // for et engangs-server-til-server-kald som dette).
+  const ipv4Address = addresses.find(a => a.family === 4);
+  const chosen = ipv4Address || addresses[0];
+  const pinnedAddress = chosen.address;
+  const pinnedFamily = chosen.family;
+
+  return new Promise(resolve => {
+    let settled = false;
+    const settle = (result) => { if (!settled) { settled = true; resolve(result); } };
+
+    const req = https.get(parsed, {
+      timeout: DISCOVERY_FETCH_TIMEOUT_MS,
+      // RETTET: Node's interne agent kalder somme tider lookup() med
+      // opts.all===true (set under afvikling — bekræftet ved direkte test)
+      // og forventer da cb(err, [{address,family}]) — en ARRAY — ikke
+      // enkelt-formen cb(err,address,family). Uden dette gren fejlede
+      // ALLE rigtige HTTPS-kald med den kryptiske "Invalid IP address:
+      // undefined", uafhængigt af om selve pin'ingen/DNS-opslaget var
+      // korrekt — kun opdaget ved at teste mod en ægte offentlig URL,
+      // ikke kun de afviste (privat-IP/forkert protokol) testtilfælde.
+      lookup: (_hostname, opts, cb) => {
+        if (opts && opts.all) return cb(null, [{ address: pinnedAddress, family: pinnedFamily }]);
+        cb(null, pinnedAddress, pinnedFamily);
+      },
+    }, res => {
+      if (res.statusCode !== 200) {
+        res.resume();
+        return settle({ ok: false, reason: `Discovery-URL'en svarede HTTP ${res.statusCode}.` });
+      }
+      let body = '';
+      let bytes = 0;
+      res.on('data', chunk => {
+        bytes += chunk.length;
+        if (bytes > DISCOVERY_MAX_BYTES) {
+          settle({ ok: false, reason: 'Discovery-dokumentet er uventet stort.' });
+          req.destroy();
+          return;
+        }
+        body += chunk;
+      });
+      res.on('end', () => {
+        if (settled) return;
+        let doc;
+        try { doc = JSON.parse(body); }
+        catch (e) { return settle({ ok: false, reason: "Discovery-URL'en returnerede ikke gyldig JSON." }); }
+        settle({ ok: true, doc });
+      });
+      res.on('error', e => settle({ ok: false, reason: `Fejl ved læsning af svar: ${e.message}` }));
+    });
+    req.on('timeout', () => { req.destroy(); settle({ ok: false, reason: "Discovery-URL'en svarede ikke inden for tidsgrænsen." }); });
+    req.on('error', e => settle({ ok: false, reason: `Kunne ikke kontakte discovery-URL'en: ${e.message}` }));
+  });
+}
+
+/**
+ * @param {string} rawUrl
+ * @returns {Promise<{ok: true}|{ok: false, reason: string}>}
+ */
+async function validateDiscoveryUrl(rawUrl) {
+  const result = await fetchDiscoveryDocument(rawUrl);
+  if (!result.ok) return result;
+  const missing = REQUIRED_DISCOVERY_FIELDS.filter(f => typeof result.doc[f] !== 'string' || !result.doc[f]);
+  if (missing.length > 0) {
+    return { ok: false, reason: `Discovery-dokumentet mangler felt(er): ${missing.join(', ')}.` };
+  }
+  return { ok: true };
+}
+
+/**
+ * Étrække-pr.-tenant (tenant_id er PRIMARY KEY, se skemaet) — en gemning
+ * overskriver en evt. eksisterende konfiguration MED DET SAMME, ingen
+ * versionering/staging. client_secret krypteres HER (aldrig gemt/logget i
+ * klartekst noget sted).
+ *
+ * `clientSecret` er valgfrit ved OPDATERING (tomt = "behold det allerede
+ * gemte secret uændret" — brugeren skal ikke tvinges til at genindtaste
+ * det, hver gang de blot retter et andet felt, fx et domæne). Håndteres
+ * HER, ikke i server.js's route-handler — den ser ALDRIG det eksisterende
+ * krypterede secret (getOauthConfig() eksponerer det bevidst aldrig, se
+ * dens filhoved), så "bevar-uændret"-stien skal nødvendigvis ligge
+ * server-DB-siden af det skel.
+ * @param {{tenantId: string, providerType: string, clientId: string, clientSecret: string, discoveryUrl: string, allowedEmailDomains: string[], verified: boolean}} p
+ * @throws {Error} med .code === 'SECRET_REQUIRED' hvis clientSecret er tomt OG der ikke findes en eksisterende konfiguration at bevare secret'et fra
+ */
+async function upsertOauthConfig({ tenantId, providerType, clientId, clientSecret, discoveryUrl, allowedEmailDomains, verified }) {
+  const verifiedAt = verified ? new Date() : null;
+
+  if (clientSecret) {
+    const { ciphertext, iv, authTag } = tenantSession.encryptClientSecret(clientSecret);
+    await query(
+      `INSERT INTO tenant_oauth_configs
+         (tenant_id, provider_type, client_id, client_secret_ciphertext, client_secret_iv, client_secret_auth_tag, discovery_url, allowed_email_domains, verified_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+       ON CONFLICT (tenant_id) DO UPDATE SET
+         provider_type = EXCLUDED.provider_type,
+         client_id = EXCLUDED.client_id,
+         client_secret_ciphertext = EXCLUDED.client_secret_ciphertext,
+         client_secret_iv = EXCLUDED.client_secret_iv,
+         client_secret_auth_tag = EXCLUDED.client_secret_auth_tag,
+         discovery_url = EXCLUDED.discovery_url,
+         allowed_email_domains = EXCLUDED.allowed_email_domains,
+         verified_at = EXCLUDED.verified_at,
+         updated_at = now()`,
+      [tenantId, providerType, clientId, ciphertext, iv, authTag, discoveryUrl, allowedEmailDomains, verifiedAt]
+    );
+    return;
+  }
+
+  // Intet nyt secret angivet — kun gyldigt som en OPDATERING af en
+  // allerede eksisterende konfiguration (secret-kolonnerne røres slet
+  // ikke). rowCount===0 betyder ingen eksisterende række at opdatere —
+  // dvs. dette var reelt et FØRSTE-gangs-forsøg uden secret, som er en
+  // brugerfejl, ikke en gyldig "bevar uændret".
+  const { rowCount } = await query(
+    `UPDATE tenant_oauth_configs SET
+       provider_type = $2, client_id = $3, discovery_url = $4,
+       allowed_email_domains = $5, verified_at = $6, updated_at = now()
+     WHERE tenant_id = $1`,
+    [tenantId, providerType, clientId, discoveryUrl, allowedEmailDomains, verifiedAt]
+  );
+  if (rowCount === 0) {
+    const err = new Error('Der er intet gemt Client Secret at bevare — angiv ét ved første opsætning.');
+    err.code = 'SECRET_REQUIRED';
+    throw err;
+  }
+}
+
+/**
+ * SELECT ALDRIG client_secret_*-kolonnerne — secret'et vises ALDRIG tilbage
+ * til klienten, hverken krypteret eller i klartekst. `hasSecret` er blot
+ * "findes der en gemt konfiguration" (en gemt konfiguration har pr.
+ * definition altid et secret, se upsertOauthConfig()).
+ * @param {string} tenantId
+ */
+async function getOauthConfig(tenantId) {
+  const { rows } = await query(
+    `SELECT provider_type, client_id, discovery_url, allowed_email_domains, verified_at, created_at, updated_at
+     FROM tenant_oauth_configs WHERE tenant_id = $1`,
+    [tenantId]
+  );
+  if (!rows[0]) return null;
+  return { ...rows[0], hasSecret: true };
+}
+
+// ── OAuth-login (Kommunepakke, modul 3) ─────────────────────────────────────
+
+/**
+ * Finder en VERIFICERET OAuth-konfiguration for det domæne, en bruger
+ * indtastede på /admin/login. Kun verified_at IS NOT NULL kan bruges til
+ * et reelt login-forsøg (se modul 2: en ubekræftet konfiguration kan
+ * skyldes en fejlkonfigureret discovery-URL — skal ikke kunne forsøges).
+ * Flere matches burde ikke forekomme (domæner er unikke pr. kommune i
+ * praksis) — logges som advarsel, første match bruges, ingen hård fejl
+ * (en driftsforstyrrelse for ÉN kommune skal ikke kunne blokere login for
+ * andre).
+ * @param {string} emailDomain — allerede udtrukket/normaliseret domæne, se emailMatchesAllowedDomains()
+ * @returns {Promise<{tenantId: string, providerType: string, clientId: string, discoveryUrl: string, allowedEmailDomains: string[]}|null>}
+ */
+async function findTenantOauthConfigByEmailDomain(emailDomain) {
+  const { rows } = await query(
+    `SELECT tenant_id, provider_type, client_id, discovery_url, allowed_email_domains
+     FROM tenant_oauth_configs
+     WHERE verified_at IS NOT NULL AND $1 = ANY(allowed_email_domains)`,
+    [emailDomain]
+  );
+  if (rows.length === 0) return null;
+  if (rows.length > 1) {
+    console.warn(`findTenantOauthConfigByEmailDomain: ${rows.length} tenants deler domænet "${emailDomain}" — bruger første match (tenant_id=${rows[0].tenant_id})`);
+  }
+  const row = rows[0];
+  return {
+    tenantId: row.tenant_id,
+    providerType: row.provider_type,
+    clientId: row.client_id,
+    discoveryUrl: row.discovery_url,
+    allowedEmailDomains: row.allowed_email_domains,
+  };
+}
+
+/**
+ * INTERN udgave af getOauthConfig() — DEKRYPTERER client_secret. Kaldes
+ * UDELUKKENDE af oauth-login.js, som reelt skal tale med udbyderen for at
+ * udveksle en autorisationskode. ALDRIG brugt af noget der sender data
+ * videre til en klient — modsat getOauthConfig() ovenfor (den offentlige,
+ * sikre udgave bag modul 2's indstillingsside), bevidst navngivet tydeligt
+ * forskelligt for at gøre det umuligt ved en fejl at forveksle de to.
+ * @param {string} tenantId
+ */
+async function getOauthConfigForLogin(tenantId) {
+  const { rows } = await query(
+    `SELECT provider_type, client_id, client_secret_ciphertext, client_secret_iv, client_secret_auth_tag,
+            discovery_url, allowed_email_domains, verified_at
+     FROM tenant_oauth_configs WHERE tenant_id = $1`,
+    [tenantId]
+  );
+  const row = rows[0];
+  if (!row) return null;
+  const clientSecret = tenantSession.decryptClientSecret({
+    ciphertext: row.client_secret_ciphertext,
+    iv: row.client_secret_iv,
+    authTag: row.client_secret_auth_tag,
+  });
+  return {
+    providerType: row.provider_type,
+    clientId: row.client_id,
+    clientSecret,
+    discoveryUrl: row.discovery_url,
+    allowedEmailDomains: row.allowed_email_domains,
+    verifiedAt: row.verified_at,
+  };
+}
+
+module.exports = {
+  ready,
+  // re-eksporteret fra tenant-session.js — se filhovedets "Filopdeling"
+  ...tenantSession,
+  // re-eksporteret fra oauth-config-validation.js — samme "ét require pr.
+  // feature-modul i server.js"-princip, denne fil requirer den allerede
+  // til intern brug i validateDiscoveryUrl() ovenfor.
+  ...oauthValidation,
+  // tenant/trial CRUD
+  createTenant,
+  setTenantPassword,
+  verifyTenantPassword,
+  issueTrialLogin,
+  consumeTrialLogin,
+  issueEmbedToken,
+  verifyEmbedToken,
+  revokeEmbedTokensForTenant,
+  getTenant,
+  listTenants,
+  // OAuth-konfiguration (modul 2)
+  fetchDiscoveryDocument,
+  validateDiscoveryUrl,
+  upsertOauthConfig,
+  getOauthConfig,
+  // OAuth-login (modul 3)
+  findTenantOauthConfigByEmailDomain,
+  getOauthConfigForLogin,
+};
