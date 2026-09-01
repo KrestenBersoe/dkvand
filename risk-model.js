@@ -71,7 +71,7 @@ function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 // HOLD I SYNC MED KLIENTEN: dansk-overloeb-kort.html's identiske
 // computeIntensityFactor()-kopi SKAL opdateres samtidig med denne.
 function computeIntensityFactor(precipMM, thresholdMm) {
-  const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : 25;
+  const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : DEFAULT_THRESHOLD_MM;
   const scale      = threshold / 5;
   // RETTET (bruger-rapporteret 2026-08-18 — "blå/ingen data" for mange
   // badesteder trods fuldt tilstedeværende vejrdata): thresholdMm===0 er en
@@ -257,15 +257,30 @@ function derivePulsFields(row) {
 // server.js) for HVERT tidspunkt i den 7-dages historik, appen allerede
 // henter (hourlyWeek — én værdi pr. time, kronologisk, ældste først).
 // Finder derefter det SENESTE tidspunkt, hvor denne rekonstruerede
-// akkumulering nåede samme tærskel (5 mm), som computeRisk()'s sigmoid
-// selv bruger som "sandsynligt udløsningspunkt" for et overløb — og
-// returnerer antal dage siden dét tidspunkt.
+// akkumulering nåede UDLØBETS EGEN tærskel (thresholdMm, samme værdi som
+// computeIntensityFactor() bruger) — og returnerer antal dage siden dét
+// tidspunkt.
+//
+// RETTET (2026-09-01 — bruger-rapporteret: risikoscore på 64-86% for et
+// udløb hvor nedbøren (10,6mm) reelt lå klart under UDLØBETS EGEN tærskel
+// (16mm) og "Nedbør vs. overløbstærskel"-panelet derfor korrekt viste
+// "intet aktivt overløb"): denne funktion brugte hidtil en FAST 5mm-tærskel
+// (LAST_EVENT_TRIGGER_MM) for alle 21.563 udløb, uafhængigt af det enkelte
+// udløbs egen, empirisk kalibrerede tærskel (der spænder fra 0 til 50+mm).
+// Enhver udløb med tærskel over 5mm fik derfor ALTID en kunstigt "nylig
+// hændelse"-boost (residual-leddet i computeRisk()/computeViralRisk())
+// hver gang nedbøren blot passerede 5mm — selvom udløbet, ifølge sin egen
+// model, slet ikke var i nærheden af at løbe over. Efter brugerens
+// eksplicitte krav ("triggers whenever the individual outlet threshold is
+// breached, not borrowing anything from anyone") er dette nu ét og samme
+// princip alle steder: krydsningsdetektionen bruger PRÆCIS samme tærskel
+// som selve overløbssandsynligheden.
 //
 // Dette er stadig en AFLEDT tilnærmelse, ikke en bekræftet, målt
 // overløbshændelse (PULS leverer kun årlige gennemsnitstal, ingen
 // tidsstemplede enkelthændelser) — men det er nu baseret på faktisk
 // observeret nedbør, ikke tilfældige tal.
-const LAST_EVENT_TRIGGER_MM = 5;    // samme tærskel som computeRisk()'s intensityFactor-sigmoid er centreret om
+const DEFAULT_THRESHOLD_MM   = 25;  // fallback når intet udløbs-specifikt datagrundlag findes, se computeIntensityFactor()
 const HOURLY_DECAY_TAU_DAYS = 3.0;  // skal matche TAU i server.js' computeMetrics()
 
 // ── accumulateDecayed — DEN ene, fælles henfaldsakkumulering ────────────────
@@ -295,8 +310,9 @@ function accumulateDecayed(hourlyMm, tauDays) {
   return series;
 }
 
-function estimateLastEventAge(hourlyWeek) {
+function estimateLastEventAge(hourlyWeek, thresholdMm) {
   if (!Array.isArray(hourlyWeek) || hourlyWeek.length === 0) return null;
+  const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : DEFAULT_THRESHOLD_MM;
 
   const series = accumulateDecayed(hourlyWeek, HOURLY_DECAY_TAU_DAYS);
 
@@ -311,7 +327,7 @@ function estimateLastEventAge(hourlyWeek) {
   let wasBelowThreshold = true;
   let lastTriggerIndex = -1;
   for (let i = 0; i < series.length; i++) {
-    const isAboveThreshold = series[i] >= LAST_EVENT_TRIGGER_MM;
+    const isAboveThreshold = series[i] >= threshold;
     if (isAboveThreshold && wasBelowThreshold) lastTriggerIndex = i; // opadgående krydsning
     wasBelowThreshold = !isAboveThreshold;
   }
@@ -353,7 +369,7 @@ module.exports = {
   computeViralRisk, computeForecastViralRisk, derivePulsFields, estimateLastEventAge,
   accumulateDecayed, computeIntensityFactor, riskBucket, shouldLogTransition,
   GRID_DEG, TAU_BASE_DAYS, Q10, SEDIMENT_REBOUND, DK_RAINY_DAYS_YEAR, DK_WATER_TEMP, DK_DAYLIGHT_HRS,
-  LAST_EVENT_TRIGGER_MM, HOURLY_DECAY_TAU_DAYS, TAU_VIRAL_BASE, Q10_VIRAL,
+  DEFAULT_THRESHOLD_MM, HOURLY_DECAY_TAU_DAYS, TAU_VIRAL_BASE, Q10_VIRAL,
 };
 
 // NYT: server-side port af computeFreshwaterTemp()/computeAlgaeRisk() fra

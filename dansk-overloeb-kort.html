@@ -3334,22 +3334,34 @@ function seasonalTauViral() {
 // tilfældig placeholder. NU: rekonstruerer den henfaldsvægtede
 // nedbørsakkumulering (samme τ=3 dage som antecedentMM, se computeMetrics()
 // i server.js) for hver time i den 7-dages historik (hourlyWeek), og finder
-// den SENESTE OPADGÅENDE krydsning af samme 5mm-tærskel, computeRisk()'s
-// egen sigmoid er centreret om — det markerer hvornår en ny, betydende
-// regnhændelse rent faktisk startede (IKKE blot hvornår det henfaldne
-// niveau sidst var forhøjet, hvilket ved τ=3 dages langsomt henfald kan
-// vare ved i op til et helt døgn efter selve bygen).
-const LAST_EVENT_TRIGGER_MM = 5;
+// den SENESTE OPADGÅENDE krydsning af UDLØBETS EGEN tærskel (thresholdMm,
+// samme værdi som computeIntensityFactor() bruger) — det markerer hvornår
+// en ny, betydende regnhændelse rent faktisk startede (IKKE blot hvornår
+// det henfaldne niveau sidst var forhøjet, hvilket ved τ=3 dages langsomt
+// henfald kan vare ved i op til et helt døgn efter selve bygen).
+//
+// RETTET (2026-09-01 — bruger-rapporteret: 64-86% risiko for et udløb hvor
+// "Nedbør vs. overløbstærskel"-panelet korrekt viste "intet aktivt
+// overløb", fordi nedbøren (10,6mm) lå under UDLØBETS EGEN tærskel
+// (16mm)): brugte hidtil en FAST 5mm-tærskel (LAST_EVENT_TRIGGER_MM) for
+// alle udløb, uafhængigt af hvert udløbs egen kalibrerede tærskel — ethvert
+// udløb med tærskel >5mm fik derfor altid en kunstig "nylig hændelse"-boost
+// (residual-leddet i computeRisk()/computeViralRisk()) så snart nedbøren
+// blot passerede 5mm, selvom udløbet ifølge sin egen model slet ikke var
+// tæt på at løbe over. Samme rettelse foretaget parallelt i server-modules/
+// risk-model.js (HOLD DISSE TO I SYNC, se filhovedets kommentar ovenfor).
+const DEFAULT_THRESHOLD_MM  = 25; // fallback, se computeIntensityFactor()
 const HOURLY_DECAY_TAU_DAYS = 3.0;
-function estimateLastEventAge(hourlyWeek) {
+function estimateLastEventAge(hourlyWeek, thresholdMm) {
   if (!Array.isArray(hourlyWeek) || hourlyWeek.length === 0) return null;
+  const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : DEFAULT_THRESHOLD_MM;
   const hourlyDecayFactor = Math.exp(-1 / (24 * HOURLY_DECAY_TAU_DAYS));
   let decayed = 0;
   let wasBelowThreshold = true;
   let lastTriggerIndex = -1;
   for (let i = 0; i < hourlyWeek.length; i++) {
     decayed = decayed * hourlyDecayFactor + (hourlyWeek[i] || 0);
-    const isAboveThreshold = decayed >= LAST_EVENT_TRIGGER_MM;
+    const isAboveThreshold = decayed >= threshold;
     if (isAboveThreshold && wasBelowThreshold) lastTriggerIndex = i;
     wasBelowThreshold = !isAboveThreshold;
   }
@@ -3370,7 +3382,7 @@ function estimateLastEventAge(hourlyWeek) {
 // afsluttet) startede/stoppede.
 function computeThresholdCrossing(hourlyWeek, thresholdMm) {
   if (!Array.isArray(hourlyWeek) || hourlyWeek.length === 0) return null;
-  const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : 25;
+  const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : DEFAULT_THRESHOLD_MM;
   const decayFactor = Math.exp(-1 / (24 * HOURLY_DECAY_TAU_DAYS));
   let decayed = 0;
   let wasAbove = false;
@@ -4639,7 +4651,7 @@ function sigmoid(x) { return 1 / (1 + Math.exp(-x)); }
 // 2026-07-30.json). Multiplikatoren (×3 nedenfor) er BEVIDST uændret —
 // ikke uafhængigt identificerbar fra det tilgængelige facit, se samme rapport.
 function computeIntensityFactor(precipMM, thresholdMm) {
-  const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : 25;
+  const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : DEFAULT_THRESHOLD_MM;
   const scale      = threshold / 5;
   // RETTET (bruger-rapporteret 2026-08-18 — se risk-model.js's identiske
   // rettelse, SKAL holdes i sync med denne, per filhovedets krav): scale
@@ -5445,7 +5457,7 @@ async function loadAll() {
       // estimateLastEventAge() for fuld begrundelse — samme funktion findes
       // (bevidst, med samme sync-krav som computeRisk) i server-modules/risk-model.js.
       pt.hourlyWeek   = w ? w.hourlyWeek : null;
-      pt.lastEventAge = estimateLastEventAge(pt.hourlyWeek);
+      pt.lastEventAge = estimateLastEventAge(pt.hourlyWeek, pt.thresholdMm);
     });
 
     // Gem i lokal IDB-cache
