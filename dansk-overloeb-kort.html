@@ -108,6 +108,21 @@
     50%      { opacity: .2; }
   }
 
+  /* Aktiv/høj-risiko RBU-ring — "radar-ping" udvidende-og-udtonende ring om
+     RBU-punkter med høj overløbsrisiko (se colorRbuByRisk()). Samme mønster
+     som ukwater's activeOutletRingLayer. Rigtige SVG-circleMarkers (ikke
+     canvas), da canvas-figurer ikke kan CSS-animeres. */
+  @keyframes outlet-ring-pulse {
+    0%   { transform: scale(1); opacity: .85; }
+    100% { transform: scale(2.4); opacity: 0; }
+  }
+  .outlet-active-ring {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: outlet-ring-pulse 1.8s ease-out infinite;
+    pointer-events: none;
+  }
+
   /* ── Map ─────────────────────────────────────────────────────────────────── */
   #map {
     flex: 1 1 auto;
@@ -360,6 +375,28 @@
   }
   .bv-btn.primary { background: #1a6b8a; color: #fff; }
   .bv-btn:hover { opacity: .85; }
+
+  /* ── Kommuner-login (tab-kommuner) ──────────────────────────────────────── */
+  .kommune-login-card {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    box-shadow: var(--shadow);
+    max-width: 380px;
+    margin: 1.5rem 0 2rem;
+    padding: 1.3rem 1.4rem;
+  }
+  .kommune-login-card h2 { font-size: 1rem; margin-bottom: .3rem; }
+  .kommune-login-sub { font-size: .78rem; color: var(--ink-soft); line-height: 1.5; margin-bottom: 1rem; }
+  .kommune-login-card form { display: flex; flex-direction: column; gap: .3rem; }
+  .kommune-login-card label { font-size: .72rem; color: var(--ink-soft); margin-top: .5rem; }
+  .kommune-login-card input {
+    font-family: var(--sans); font-size: .85rem; padding: .5rem .6rem;
+    border: 1px solid var(--line); border-radius: 6px; background: var(--paper); color: var(--ink);
+  }
+  .kommune-login-card button { margin-top: 1rem; }
+  .kommune-login-error { color: var(--warn); font-size: .8rem; margin-top: .8rem; }
+  .kommune-login-error.hidden { display: none; }
 
  (erstatter #right-col controls) ──────────── */
   /* Kortlagsvælger — præcis samme mønster som #legend */
@@ -1160,6 +1197,7 @@
     🔔 Varsler <span class="tab-badge zero" id="varsler-badge">0</span>
   </button>
   <button class="tab-btn"        id="tab-btn-doc"      onclick="switchTab('doc')">📖 Dokumentation</button>
+  <button class="tab-btn"        id="tab-btn-kommuner" onclick="switchTab('kommuner')">🏛 Kommuner</button>
 </div>
 
 <!-- Tab panels -->
@@ -1472,6 +1510,31 @@
     </div>
   </div><!-- /tab-doc -->
 
+  <div class="tab-panel" id="tab-kommuner">
+    <div class="doc-wrap">
+
+      <div id="kommune-login-card" class="kommune-login-card">
+        <h2>Log ind</h2>
+        <p class="kommune-login-sub">For kommuner og systemadministratorer. Ét login på tværs af Danmark, Storbritannien og Frankrig.</p>
+        <form id="kommune-login-form" method="POST" action="/login">
+          <input type="hidden" name="redirect" value="https://www.ditbadevand.dk/internal/choose-country">
+          <label for="kommune-login-email">E-mail</label>
+          <input type="email" id="kommune-login-email" name="email" required autocomplete="username">
+          <label for="kommune-login-password">Adgangskode</label>
+          <input type="password" id="kommune-login-password" name="password" required autocomplete="current-password">
+          <button type="submit" class="bv-btn primary">Log ind</button>
+        </form>
+        <p id="kommune-login-error" class="kommune-login-error hidden"></p>
+      </div>
+
+      <div class="doc-hero">
+        <div class="doc-eyebrow">Kommuner</div>
+        <h1>Overløbsrisiko for kommuner</h1>
+        <p class="doc-lead">Log ind for at se jeres egne udløbspunkter, statistik og varslingshistorik — samme login giver adgang til den nationale kommunedashboard uanset om jeres kommune administreres fra den danske, britiske eller franske side.</p>
+      </div>
+
+    </div>
+  </div><!-- /tab-kommuner -->
 
 </div><!-- /tab-panels -->
 
@@ -2213,6 +2276,7 @@ function renderMap() {
   updateStatusTime();
   saveWarnPoints(warnPoints);  // persist for varsel-side.html
   colorKystvandByRisk();       // farv VP3 kystvand-polygoner + badevandspunkter efter max-risiko
+  colorRbuByRisk();            // opdatér puls-ring for aktive/høj-risiko RBU-punkter
 
   // Håndhæv synlighed for points- og forecast-lag
   if (showPoints) { if (!map.hasLayer(pointsLayer)) pointsLayer.addTo(map); }
@@ -2232,6 +2296,10 @@ function renderMap() {
   if (vp3RbuLayer) {
     if (showVP3Rbu)   addVP3Layer(vp3RbuLayer);
     else              removeVP3Layer(vp3RbuLayer);
+  }
+  if (vp3RbuActiveRingLayer) {
+    if (showVP3Rbu && !map.hasLayer(vp3RbuActiveRingLayer)) vp3RbuActiveRingLayer.addTo(map);
+    if (!showVP3Rbu && map.hasLayer(vp3RbuActiveRingLayer)) map.removeLayer(vp3RbuActiveRingLayer);
   }
 
   // Ingen auto-render af Hjem-panel — Hjem er erstattet af dette kort
@@ -2972,6 +3040,7 @@ function scheduleCurrentsRebuild() {
   });
 }
 map.on('moveend zoomend', scheduleCurrentsRebuild);
+map.on('zoomend', syncRbuRingRadius);
 
 function toggleCurrents() {
   showCurrents = !showCurrents;
@@ -3204,6 +3273,65 @@ function colorBadevandByRisk() {
       `<span style="font-size:.65rem;opacity:.7">EU badevandsovervågning · VP3</span>`,
       { sticky: true }
     );
+  });
+}
+
+// ── RBU-punkter (VP3): animeret "puls-ring" for aktive/høj-risiko overløb —
+// samme visuelle mønster (radar-ping, se .outlet-active-ring/@keyframes
+// outlet-ring-pulse) som ukwater's activeOutletRingLayer. RBU-punkter har
+// ingen egen nedbørsdrevet risikomodel, så risikoen lånes fra nærmeste
+// PULS-udløb inden for 15 km — samme opslag som colorBadevandByRisk() og
+// openRbuUdlobPanel() bruger. Ringen udløses ved samme "høj" tærskel (≥60%)
+// som riskStyle()/riskTooltipText() allerede definerer andre steder.
+let vp3RbuActiveRingLayer = null;
+
+function rbuRingRadiusForZoom() {
+  const zoom = map.getZoom();
+  return Math.max(2.5, Math.min(9, (zoom - 5) * 1.3));
+}
+
+function syncRbuRingRadius() {
+  if (!vp3RbuActiveRingLayer) return;
+  const r = rbuRingRadiusForZoom();
+  vp3RbuActiveRingLayer.eachLayer(m => m.setRadius(r));
+}
+
+function colorRbuByRisk() {
+  if (!vp3RbuLayer || !overflowPoints || overflowPoints.length === 0) return;
+
+  const MAX_DEG = 0.135;  // ~15 km — samme radius som colorBadevandByRisk()
+  if (_pulsSpatialIndexRef !== overflowPoints) {
+    _pulsSpatialIndex    = buildPulsSpatialIndex(overflowPoints, MAX_DEG);
+    _pulsSpatialIndexRef = overflowPoints;
+  }
+
+  if (!vp3RbuActiveRingLayer) vp3RbuActiveRingLayer = L.layerGroup();
+  vp3RbuActiveRingLayer.clearLayers();
+  const ringRadius = rbuRingRadiusForZoom();
+
+  vp3RbuLayer.eachLayer(layer => {
+    let ll;
+    try { ll = layer.getLatLng(); } catch(e) { return; }
+
+    let risk = null;
+    const nearby = getNearbyPulsPoints(_pulsSpatialIndex, MAX_DEG, ll.lat, ll.lng);
+    for (const pt of nearby) {
+      if (Math.abs(pt.lat - ll.lat) > MAX_DEG || Math.abs(pt.lng - ll.lng) > MAX_DEG) continue;
+      const w = upstreamWeight(pt.lat, pt.lng, ll.lat, ll.lng);
+      const adjustedRisk = pt.riskScore * w;
+      if (risk === null || adjustedRisk > risk) risk = adjustedRisk;
+    }
+    if (risk === null || risk < 0.6) return;
+
+    vp3RbuActiveRingLayer.addLayer(L.circleMarker(ll, {
+      radius: ringRadius,
+      color: '#c84b1f',
+      weight: 2.5,
+      fillOpacity: 0,
+      className: 'outlet-active-ring',
+      interactive: false,
+      pane: 'pointsPane',
+    }));
   });
 }
 
@@ -4862,6 +4990,22 @@ function computeRisk(pt) {
   return { pOverflow, severity, risk, tau: seasonalTau(), noData: false };
 }
 
+
+// Kommune-login: hvis serveren sender brugeren tilbage hertil efter et
+// mislykket loginforsøg (?loginError=<besked>), skift til Kommuner-fanen
+// og vis fejlen i stedet for at lade den forsvinde stille i URL'en.
+(function showKommuneLoginErrorIfAny() {
+  const params = new URLSearchParams(location.search);
+  const err = params.get('loginError');
+  if (!err) return;
+  switchTab('kommuner');
+  const el = document.getElementById('kommune-login-error');
+  el.textContent = err;
+  el.classList.remove('hidden');
+  params.delete('loginError');
+  const qs = params.toString();
+  history.replaceState(null, '', location.pathname + (qs ? '?' + qs : '') + location.hash);
+})();
 
 // Auto-refresh every 30 min
 setInterval(loadAll, 30 * 60 * 1000);
