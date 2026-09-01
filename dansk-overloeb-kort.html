@@ -10848,7 +10848,18 @@ async function showUdlobPanel(pt) {
   } else if (pt._estimated) {
     noteEl.textContent = `Estimeret ud fra nærmeste PULS-udløb (${pt._estimatedDist.toFixed(1)} km væk) — dette RBU-punkt har ingen selvstændig nedbørsmodel`;
   } else {
-    noteEl.textContent = `Dette RBU-punkt er samme fysiske udløb som et registreret PULS-udløb — data er ikke et estimat`;
+    // RETTET (bruger-rapporteret — "RUKAG01: risiko siger data er ikke et
+    // estimat, men Datakvalitet siger Estimeret"): teksten refererede
+    // hidtil upræcist til BEGGE dele med samme ord "estimat" — det ene er
+    // om RBU-punktet er PRÆCIS samme fysiske udløb som en PULS-post (match-
+    // kvalitet, det denne note faktisk handler om), det andet er om PULS
+    // SELV har målt eller model-estimeret udløbets egen hændelsesfrekvens
+    // (Datakvalitet-feltet i Oplysninger nedenfor, en helt uafhængig
+    // vurdering af PULS' eget datagrundlag for netop dette udløb). Et
+    // eksakt match (som her) betyder ikke at PULS' underliggende tal
+    // nødvendigvis er direkte målte — begge kan være sande samtidig, uden
+    // at det er en modsigelse.
+    noteEl.textContent = `Dette RBU-punkt er samme fysiske udløb som et registreret PULS-udløb — risikoen herover er hentet direkte derfra, ikke lånt fra et andet, nærliggende udløb (se Datakvalitet i Oplysninger nedenfor for PULS' egen vurdering af datagrundlaget for dette specifikke udløb)`;
   }
 
   // ── Stamdata ───────────────────────────────────────────────────────────────
