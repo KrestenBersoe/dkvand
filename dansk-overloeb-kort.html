@@ -857,17 +857,23 @@
     font-size: .72rem;
   }
 
+  /* Samme design som ukwater/frwater's #legend-btn — hvid, kant-afgrænset
+     firkant med et almindeligt "i" i mono, i stedet for en udfyldt cirkel
+     med et cirkel-i-symbol (ℹ). Kun selve knappens udseende ændret — se
+     bruger-krav "the (i) icon has to change to the same as in ukwater". */
   #legend-toggle {
-    width: 44px; height: 44px;
-    border-radius: 50%;
-    background: var(--accent);
-    border: 2px solid var(--paper);
-    color: #fff;
-    font-weight: 700;
-    font-size: 1.3rem;
-    cursor: pointer;
-    box-shadow: var(--shadow-lg);
     display: none;   /* shown only when collapsed */
+    align-items: center; justify-content: center;
+    width: 38px; height: 38px;
+    border-radius: 8px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: .85rem;
+    cursor: pointer;
+    box-shadow: var(--shadow);
   }
 
   #legend-body {
@@ -879,7 +885,7 @@
     min-width: 160px;
   }
 
-  #legend.collapsed #legend-toggle { display: block; }
+  #legend.collapsed #legend-toggle { display: flex; }
   #legend.collapsed #legend-body   { display: none; }
 
 
@@ -2043,7 +2049,7 @@
 
 <!-- Legend bottom-left -->
 <div id="legend" class="collapsed">
-  <button id="legend-toggle" onclick="toggleLegend()" title="Signaturforklaring">ℹ</button>
+  <button id="legend-toggle" onclick="toggleLegend()" title="Signaturforklaring" aria-label="Signaturforklaring">i</button>
   <div id="legend-body" onclick="toggleLegend()" style="cursor:pointer" title="Klik for at minimere">
     <h4>Risikoniveau</h4>
     <div class="leg-row"><div class="leg-swatch" style="background:#2d7d4f"></div> Lav (&lt;20%)</div>
