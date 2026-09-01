@@ -200,11 +200,22 @@
   /* Login-knap på Kommuner-fanen (se #tab-kommuner) — flyttet hertil fra
      hovedmenuen. Samme link/side (/login) betjener BÅDE municipality
      (kommune/council/mairie) og system-/country-staff, se login.html/
-     server.js's POST /login. */
+     server.js's POST /login. RETTET (bruger-rapporteret — "way too
+     dominating"): brugte oprindeligt .bv-btn.primary, en fuldt udfyldt
+     CTA-stil beregnet til handlinger som "Vis på kort"/"QR-skilt" — for
+     tung til en simpel indgang øverst på en ellers rolig informationsside.
+     Nu et lille, diskret badge/link i stedet for en stor knap. */
   .kommune-login-link {
     display: inline-block;
-    margin-bottom: 1.4rem;
+    font-size: .8rem; font-weight: 600;
+    color: var(--accent-dk); text-decoration: none;
+    background: var(--accent-bg);
+    border: 1px solid var(--accent);
+    border-radius: 6px;
+    padding: .35rem .75rem;
+    margin-bottom: 1.2rem;
   }
+  .kommune-login-link:hover { background: var(--accent); color: #fff; }
 
   @keyframes pulse {
     0%,100% { opacity: 1; }
@@ -469,10 +480,12 @@
   }
   #map-hint.fade { opacity: 0; }
 
-  /* Engangs-hint der peger på kortlag-/forklaringsknapperne (bottom-left) —
-     vises kun ved allerførste besøg nogensinde, styret af localStorage-flag
-     (se initMapIconHint()). Positioneret relativt til #tab-kort, samme
-     forælder som #legend/#lag, så den følger dem uden ekstra JS-udregning. */
+  /* Engangs-hint der peger på signaturforklarings-knappen (bottom-left, lige
+     under denne boks) og nævner kortlag-ikonet (nu top-højre, se #lag) i
+     teksten — vises kun ved allerførste besøg nogensinde, styret af
+     localStorage-flag (se initMapIconHint()). Positioneret relativt til
+     #tab-kort, samme forælder som #legend, så den følger den uden ekstra
+     JS-udregning. */
   #map-icon-hint {
     position: absolute;
     bottom: 138px; left: 14px;
@@ -2089,7 +2102,7 @@
 
 <!-- Engangs-tooltip der peger på kortlag-/forklaringsikonerne, kun vist ved
      allerførste besøg — se initMapIconHint() i JS. -->
-<div id="map-icon-hint" class="hidden">👆 Kortlag og signaturforklaring er her</div>
+<div id="map-icon-hint" class="hidden">👆 Signaturforklaring er her — Kortlag er ikonet øverst til højre</div>
 
   </div><!-- /tab-kort -->
 
@@ -2664,7 +2677,7 @@
   <!-- Kommuner tab panel -->
   <div class="tab-panel" id="tab-kommuner">
     <div class="doc-wrap">
-      <a class="bv-btn primary kommune-login-link" href="/login" title="Log ind — kommune-/council-/mairie-adgang eller internt personale">🔒 Log ind</a>
+      <a class="kommune-login-link" href="/login" title="Log ind — kommune-/council-/mairie-adgang eller internt personale">🔒 Log ind</a>
       <div class="doc-hero">
         <div class="doc-eyebrow">Kommuner</div>
         <h1>Et tilbud til kommuner</h1>
@@ -7056,9 +7069,26 @@ function colorBadevandByRisk() {
 let _rbuOutfallIndex    = null;
 let _rbuOutfallIndexRef = null;   // overflowPoints-referencen indekset er bygget fra
 
+// RETTET (produktionsregression — se map.createPane('pointsPane')'s filhoved,
+// regel 1+3): ringene blev oprindeligt tilføjet UDEN eksplicit renderer.
+// Kortets globale preferCanvas:true betyder Leaflet så selv oprettede en NY,
+// anden Canvas-renderer til pointsPane — regel 1 siger PRÆCIS hvad det
+// medfører: to overlappende Canvas-renderere i samme areal gør at ÉN
+// opfanger ALLE klik, den anden INGEN, uafhængigt af pane/z-index. Det var
+// årsagen til at hverken badevands- eller udløbsklik virkede efter denne
+// funktion først kørte. Ringene er interactive:false (regel 3: SVG er kun
+// et problem for lag der SKAL modtage pålidelige iOS-tryk) og skal desuden
+// kunne CSS-animeres (umuligt med Canvas) — en dedikeret, delt SVG-renderer
+// er derfor både den rigtige og den eneste sikre løsning. Ligesom
+// sharedInteractiveRenderer er dette ÉN delt instans (ikke én pr. ring) —
+// men modsat den kræver SVG ikke en frisk instans pr. genindlæsning (regel
+// 2 er en dokumenteret Canvas-specifik fejl, ikke en generel Leaflet-regel).
+let sharedRingRenderer = null;
+
 function colorRbuByOwnRisk() {
   if (!vp3RbuRegnLayer || !vp3RbuKloakLayer || !vp3RbuRegnRingLayer || !vp3RbuKloakRingLayer) return;
   if (!overflowPoints || overflowPoints.length === 0) return;
+  if (!sharedRingRenderer) sharedRingRenderer = L.svg({ pane: 'pointsPane' });
 
   if (_rbuOutfallIndexRef !== overflowPoints) {
     _rbuOutfallIndex = new Map();
@@ -7083,6 +7113,7 @@ function colorRbuByOwnRisk() {
         className: 'outlet-active-ring',
         interactive: false,
         pane: 'pointsPane',
+        renderer: sharedRingRenderer,
       });
       ring._sourceMarker = marker;   // se syncRbuRingRadii() — O(1) opslag ved zoom, ikke en lat/lng-søgning
       ringLayer.addLayer(ring);
