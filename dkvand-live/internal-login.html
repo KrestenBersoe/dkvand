@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log ind — Internt værktøj</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  /* Samme farvepalet/tema som admin-login.html — se dens filhoved. */
+  :root {
+    --paper: #12202a; --card: #16283355; --ink: #f0ede6; --ink-soft: #9fb0bb;
+    --accent: #4fb8d6; --border: rgba(255,255,255,.08);
+    --ok: #3fa96a; --warn: #d4a020; --bad: #d1584a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    background: linear-gradient(180deg, #0d1720, #12202a 40%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 420px; margin: 4rem auto 0; }
+  h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
+  .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
+  .card {
+    background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.3rem 1.4rem;
+  }
+  label { display: block; font-size: .82rem; color: var(--ink-soft); margin: 0 0 .4rem; }
+  input {
+    width: 100%; background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .6rem .7rem; border-radius: 8px; font-size: .95rem; font-family: inherit;
+    margin-bottom: 1rem;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  button {
+    width: 100%; background: var(--accent); border: none; color: #0d1720;
+    padding: .65rem 1.2rem; border-radius: 8px; font-size: .9rem; font-weight: 700; cursor: pointer;
+  }
+  .err-msg {
+    background: rgba(209,88,74,.12); color: var(--bad); font-size: .85rem;
+    padding: .7rem .9rem; border-radius: 8px; margin-bottom: 1rem; display: none;
+  }
+  .err-msg.show { display: block; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔒 Internt login</h1>
+  <div class="sub">System-/country-adgang til tenant-administration på tværs af dkvand, ukwater og frwater.</div>
+
+  <div class="card">
+    <div class="err-msg" id="err-msg"></div>
+    <form method="POST" action="/internal/login">
+      <label for="f-email">E-mail</label>
+      <input id="f-email" name="email" type="email" required autocomplete="username" autofocus>
+      <label for="f-password">Adgangskode</label>
+      <input id="f-password" name="password" type="password" required autocomplete="current-password">
+      <button type="submit">Log ind</button>
+    </form>
+  </div>
+</div>
+
+<script>
+// Samme mønster som admin-login.html — almindelig formular-POST, fejl vist
+// via ?error= efter en 302 tilbage hertil.
+const params = new URLSearchParams(location.search);
+const error = params.get('error');
+if (error) {
+  const el = document.getElementById('err-msg');
+  el.textContent = error;
+  el.classList.add('show');
+}
+</script>
+</body>
+</html>
