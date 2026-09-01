@@ -480,19 +480,22 @@
   }
   #map-hint.fade { opacity: 0; }
 
-  /* Engangs-hint der peger på signaturforklarings-knappen, lige under denne
-     boks — vises kun ved allerførste besøg nogensinde, styret af
-     localStorage-flag (se initMapIconHint()). Positioneret relativt til
-     #tab-kort, samme forælder som #legend, så den følger den uden ekstra
-     JS-udregning. RETTET (bruger-rapport: "tooltip peger forkert") — denne
-     boks nævnte tidligere OGSÅ kortlag-ikonet (top-højre) i teksten, selvom
-     dens eneste pil pegede ned mod signaturforklarings-knappen (bottom-
-     venstre) — de to ikoner blev derfor beskrevet i én boks med kun én,
-     fysisk forkert pil. Nu to uafhængige hints, hver med sin egen pil mod
-     sit eget ikon — se #lag-icon-hint. */
+  /* Engangs-hint der peger på ikonparret top-højre (#lag + #legend) — vises
+     kun ved allerførste besøg nogensinde, styret af localStorage-flag (se
+     initMapIconHint()). RETTET (bruger-rapport, to runder):
+     1) havde oprindeligt ÉT hint, bottom-left, der i TEKST nævnte begge
+        ikoner selvom kun ét (signaturforklaringen) faktisk sad der — én
+        fysisk forkert pil for det andet ikon.
+     2) blev derefter splittet i to uafhængige hints, ét pr. ikon — korrekt
+        dengang, fordi ikonerne sad i hvert sit hjørne af kortet.
+     3) nu hvor #legend er RETTET til at sidde lige under #lag (bruger-
+        krav: "(i)-ikonet skal være tæt på kortlagsvælgeren"), er de to
+        hints overflødige igen — begge ikoner kan pege-forklares med ÉT
+        hint, med pilen rettet mod ikonparret som helhed, uden at nogen af
+        dem risikerer at overlappe det andet ikon. */
   #map-icon-hint {
     position: absolute;
-    bottom: 138px; left: 14px;
+    top: 106px; right: 12px;
     z-index: 950;
     max-width: 190px;
     background: rgba(26,39,51,.92);
@@ -509,44 +512,13 @@
   #map-icon-hint::after {
     content: '';
     position: absolute;
-    bottom: -6px; left: 20px;
+    top: -6px; right: 20px;
     width: 12px; height: 12px;
     background: inherit;
     transform: rotate(45deg);
   }
   #map-icon-hint.hidden { display: none; }
   #map-icon-hint.fade { opacity: 0; }
-
-  /* Søster-hint til #map-icon-hint, der specifikt peger på kortlag-ikonet
-     (#lag-btn, top-højre) — se RETTET-noten ovenfor. Samme visuelle stil,
-     men positioneret under #lag-btn med pilen pegende OP mod ikonet,
-     modsat #map-icon-hint's ned-pegende pil. */
-  #lag-icon-hint {
-    position: absolute;
-    top: 54px; right: 12px;
-    z-index: 950;
-    max-width: 190px;
-    background: rgba(26,39,51,.92);
-    color: rgba(240,237,230,.95);
-    font-size: .74rem;
-    line-height: 1.4;
-    padding: .6rem .9rem;
-    border-radius: 10px;
-    box-shadow: var(--shadow-lg);
-    opacity: 1;
-    transition: opacity .5s;
-    pointer-events: none;
-  }
-  #lag-icon-hint::after {
-    content: '';
-    position: absolute;
-    top: -6px; right: 20px;
-    width: 12px; height: 12px;
-    background: inherit;
-    transform: rotate(45deg);
-  }
-  #lag-icon-hint.hidden { display: none; }
-  #lag-icon-hint.fade { opacity: 0; }
   #badevand-panel {
     position: fixed;
     inset: 0;
@@ -885,9 +857,15 @@
                  animation: pulse 1.2s infinite; }
 
   /* ── Legend ──────────────────────────────────────────────────────────────── */
+  /* RETTET (bruger-rapporteret: "(i)-ikonet er forkert placeret, skal være
+     tæt på kortlagsvælgeren"): flyttet fra bottom-left til lige under #lag
+     (top-right) — samme kant-afstand (right:12px), stablet 58px under #lag
+     (10px top + 38px knap + 10px luft) i stedet for i et helt andet hjørne
+     af kortet. Se #map-icon-hint for den tilhørende engangs-tooltip, som er
+     flyttet/omskrevet til at pege på PRÆCIS dette ikonpar. */
   #legend {
     position: absolute;
-    bottom: 30px; left: 14px;
+    top: 58px; right: 12px;
     z-index: 900;
     font-size: .72rem;
   }
@@ -927,8 +905,10 @@
   /* ═══ #lag — kortlagsvælger, samme design som ukwater/frwater's #lag:
      top-højre med en hvid, kant-afgrænset firkantet ikon-knap, i stedet for
      en udfyldt cirkel nede til venstre. Kolliderer ikke med noget — hverken
-     Leaflets zoomkontrol eller lokations-knappen ligger bottomright, og
-     #legend/#warnings/#map-icon-hint ligger alle til venstre. ═══ */
+     Leaflets zoomkontrol eller lokations-knappen ligger topright, og
+     #warnings ligger til venstre. #legend er RETTET til at sidde lige under
+     dette ikon (se #legend's egen kommentar) — de to hører visuelt sammen
+     nu, i stedet for at ligge i hvert sit hjørne af kortet. ═══ */
   #lag {
     position: absolute;
     top: 10px;
@@ -1892,8 +1872,9 @@
     .popup-name { font-size: .95rem; }
     .popup-key  { font-size: .78rem; }
 
-    /* Legende: altid collapsible på mobil */
-    #legend { bottom: auto; top: 60px; left: 8px; font-size: .78rem; }
+    /* Legende: altid collapsible på mobil — position følger nu desktop-
+       reglen (top-right, lige under #lag), intet separat hjørne på mobil. */
+    #legend { font-size: .78rem; }
     #legend-body { max-width: calc(100vw - 32px); }
 
     #warnings { display: none; }
@@ -2170,10 +2151,9 @@
   </div>
 </div>
 
-<!-- Engangs-tooltips der peger på hhv. forklarings- og kortlag-ikonerne,
+<!-- Engangs-tooltip der peger på ikonparret (kortlag + signaturforklaring),
      kun vist ved allerførste besøg — se initMapIconHint() i JS. -->
-<div id="map-icon-hint" class="hidden">👆 Signaturforklaring er her</div>
-<div id="lag-icon-hint" class="hidden">👆 Kortlag er her</div>
+<div id="map-icon-hint" class="hidden">👆 Kortlag og signaturforklaring er her</div>
 
   </div><!-- /tab-kort -->
 
@@ -8706,11 +8686,10 @@ document.addEventListener('click', function(e) {
   window.location.href = a.href;
 });
 
-// Viser to engangs-tooltips, hver med sin egen pil mod sit eget ikon:
-// #map-icon-hint (forklaringsikonet, bottom-left) og #lag-icon-hint
-// (kortlag-ikonet, top-right) — brugere overser dem ofte, da de kun er små
-// ikoner uden tekst. Gates på et rent localStorage-flag (ikke visitCount)
-// så de vises præcis én gang, uanset enhed/session.
+// Viser én engangs-tooltip der peger på ikonparret top-højre (#lag +
+// #legend, nu sat lige ved siden af hinanden) — brugere overser dem ofte,
+// da de kun er små ikoner uden tekst. Gates på et rent localStorage-flag
+// (ikke visitCount) så den vises præcis én gang, uanset enhed/session.
 function initMapIconHint() {
   let alreadyShown;
   try {
@@ -8719,15 +8698,13 @@ function initMapIconHint() {
   } catch(e) { return; } // uden localStorage kan vi ikke undgå at genvise — spring over
   if (alreadyShown) return;
 
-  ['map-icon-hint', 'lag-icon-hint'].forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.classList.remove('hidden');
-    setTimeout(() => {
-      el.classList.add('fade');
-      setTimeout(() => el.remove(), 500);
-    }, 6000);
-  });
+  const el = document.getElementById('map-icon-hint');
+  if (!el) return;
+  el.classList.remove('hidden');
+  setTimeout(() => {
+    el.classList.add('fade');
+    setTimeout(() => el.remove(), 500);
+  }, 6000);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
