@@ -463,43 +463,33 @@
   #legend.collapsed #legend-body   { display: none; }
 
 
-  /* ═══ #lag — kortlagsvælger, samme mønster som #legend ═══ */
-  /* RETTET: lå tidligere bottom-right, som er nøjagtig samme hjørne som
-     Leaflets zoomkontrol (L.control.zoom({position:'bottomright'})) — de
-     kolliderede visuelt. Flyttet til bottom-left og stablet sammen med
-     #legend, som brugeren bad om ("samlet sammen med Risikoniveau-ikonet"). */
+  /* ═══ #lag — kortlagsvælger, samme design som ukwater/frwater: top-højre
+     med et lag-ikon i stedet for bottom-venstre stablet med legenden. ═══ */
   #lag {
     position: absolute;
-    bottom: 74px;
-    left: 14px;
+    top: 10px;
+    right: 12px;
     z-index: 900;
     font-size: .72rem;
   }
   #lag-btn {
-    width: 32px; height: 32px;
-    border-radius: 50%;
+    display: none; align-items: center; justify-content: center;
+    width: 38px; height: 38px;
+    border-radius: 8px;
     background: var(--paper);
     border: 1px solid var(--line);
     color: var(--accent);
-    font-weight: 700;
-    font-size: .85rem;
     cursor: pointer;
     box-shadow: var(--shadow);
-    display: none;
   }
   #lag-body {
     background: var(--paper);
     border: 1px solid var(--line);
     border-radius: 8px;
-    padding: .75rem 1rem;
+    padding: .75rem;
     box-shadow: var(--shadow);
-    min-width: 170px;
-    /* RETTET: brugte tidligere 100vh, som også talte header/faner med —
-       panelet kunne derfor stikke ud over eller under selve kort-området.
-       #tab-kort (positioneret forælder) har en reel, flex-beregnet højde,
-       så % refererer nu korrekt til DET tilgængelige kort-område, ikke
-       hele skærmen. 100px trækkes fra for luft foroven/nedenfor. */
-    max-height: calc(100% - 100px);
+    width: 230px;
+    max-height: calc(100% - 60px);
     overflow-y: auto;
   }
   #lag-body h4 {
@@ -529,7 +519,7 @@
   .lag-group + .lag-group {
     margin-top: .7rem;
     padding-top: .6rem;
-    border-top: 1px solid rgba(26,107,138,.12);
+    border-top: 1px solid var(--line-soft);
   }
   .lag-group-title {
     font-family: var(--mono);
@@ -541,7 +531,7 @@
   }
   .lag-group .ctrl-btn { display: block; width: 100%; margin-bottom: .3rem; }
   .lag-group .ctrl-btn:last-child { margin-bottom: 0; }
-  #lag.collapsed #lag-btn  { display: block; }
+  #lag.collapsed #lag-btn  { display: flex; }
   #lag.collapsed #lag-body { display: none; }
 
   /* ═══ Strømpile (punkt 11 + opfølgning) ═══ */
@@ -623,12 +613,12 @@
     border: 1px solid var(--line);
     border-radius: 6px;
     color: var(--ink);
-    font-size: .72rem;
-    font-family: var(--mono);
+    font-size: .74rem;
+    font-family: var(--sans);
+    font-weight: 500;
     padding: .45rem .8rem;
     cursor: pointer;
     text-align: left;
-    box-shadow: var(--shadow);
     transition: border-color .2s, background .2s;
   }
 
@@ -1213,7 +1203,11 @@
 <!-- Kortlag-vælger og lokations-knap bottom-right (inde i kort-panelet,
      ligesom legend bottom-left) -->
 <div id="lag" class="collapsed">
-  <button id="lag-btn" onclick="toggleLag()" title="Kortlag">⊞</button>
+  <button id="lag-btn" onclick="toggleLag()" title="Kortlag" aria-label="Kortlag">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M6 15L12 18L18 15M6 12L12 15L18 12M12 6L6 9L12 12L18 9L12 6Z"/>
+    </svg>
+  </button>
   <div id="lag-body">
     <div class="lag-header">
       <h4>Kortlag</h4>
@@ -1228,7 +1222,6 @@
     </div>
     <div class="lag-group">
       <div class="lag-group-title">Risikolag</div>
-      <button class="ctrl-btn" id="btn-pts"   onclick="togglePoints()">📍 Udløbspunkter</button>
       <button class="ctrl-btn" id="btn-heat"  onclick="toggleHeat()">🌡 Bakterielt kort</button>
       <button class="ctrl-btn" id="btn-viral" onclick="toggleViral()">🧬 Viralt kort</button>
       <button class="ctrl-btn" id="btn-algae" onclick="toggleAlgae()">🌿 Algerisiko</button>
@@ -1703,25 +1696,10 @@ map.getPane('pointsPane').style.zIndex = 620;   // overlayPane er 400, markerPan
 
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-// Light basemap — MapTiler (kræver gratis API-nøgle, sæt herunder).
-// Skiftet fra CARTO, hvis gratis rå tile-CDN nu OGSÅ er blevet indskrænket
-// (deres nyeste dokumentation nævner eksplicit at gratis brug kun gælder
-// "CARTO grantees" — kommerciel/produktionsbrug kræver Enterprise-licens).
-// Før det skiftede vi fra rå tile.openstreetmap.org af samme årsag (skærpet
-// Tile Usage Policy). Mønstret er klart: uautentificerede "gratis" tile-CDN'er
-// strammes ind uden varsel. En gratis API-nøgle er beskyttet af en reel
-// aftale/kvote i stedet, og er derfor markant mere stabil på sigt.
-//
-// OPSÆTNING (gøres kun én gang, på serveren — IKKE i denne fil):
-//   1. Opret gratis konto på https://www.maptiler.com/ (ingen kreditkort nødvendigt)
-//   2. Kopiér din API-nøgle fra kontrolpanelet
-//   3. Sæt den som Fly secret: fly secrets set MAPTILER_KEY=din-nøgle -a dkvand
-//   (server.js injicerer nøglen her ved serverering — se getHtmlWithKey())
-// Gratis niveau: 100.000 tile-visninger/måned — rigeligt til denne app.
-const MAPTILER_KEY = '__MAPTILER_KEY__';
-
-L.tileLayer(`https://api.maptiler.com/maps/basic-v2/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`, {
-  attribution: '© <a href="https://www.maptiler.com/copyright/">MapTiler</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+// Baggrundskort — samme rå OpenStreetMap-tiles som ukwater/frwater, for
+// visuel konsistens på tværs af de tre produkter.
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '&copy; OpenStreetMap contributors',
   maxZoom: 19
 }).addTo(map);
 
@@ -1739,8 +1717,8 @@ function initHjemMap() {
     zoom: 6,
     zoomControl: true,
   });
-  L.tileLayer(`https://api.maptiler.com/maps/basic-v2/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`, {
-    attribution: '© <a href="https://www.maptiler.com/copyright/">MapTiler</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '&copy; OpenStreetMap contributors',
     maxZoom: 19
   }).addTo(hjemMap);
   hjemNearestLayer = L.layerGroup().addTo(hjemMap);
@@ -1753,13 +1731,11 @@ function initHjemMap() {
 // Det eliminerer det grundlæggende problem: L.heatLayer's canvas-element
 // kan overleve removeLayer() og efterlade et forældet lag i DOM'en.
 
-// RETTET: blev tidligere tilføjet kortet med det samme via .addTo(map),
-// uafhængigt af showPoints-tilstanden. Nu hvor showPoints er false som
-// standard, skal laget IKKE være tilknyttet kortet ved opstart — kun når
-// brugeren slår "Udløbspunkter" til (se togglePoints()). De 21.556
-// markører bliver stadig beregnet ved hver renderMap()-kørsel (nødvendigt
-// for badevand/RBU-risikoberegning), men den tunge visuelle rendering sker
-// først når laget rent faktisk tilføjes kortet.
+// "Udløbspunkter"-knappen (den enkeltvise punktvisning) er fjernet fra UI'en
+// — showPoints forbliver derfor altid false, og laget tilføjes aldrig
+// kortet. De 21.556 markører beregnes stadig ved hver renderMap()-kørsel
+// (nødvendigt for badevand/RBU-risikoberegning), men den tunge visuelle
+// rendering sker aldrig.
 const pointsLayer    = L.layerGroup();
 const forecastLayer  = L.layerGroup();
 
@@ -2693,15 +2669,6 @@ function toggleAlgae() {
       algaeHeatLayer.ref._canvas.style.display = showAlgae ? '' : 'none';
     }
     if (showAlgae) renderMap();
-  });
-}
-
-function togglePoints() {
-  showPoints = !showPoints;
-  document.getElementById('btn-pts').classList.toggle('active', showPoints);
-  requestAnimationFrame(() => {
-    if (showPoints) map.addLayer(pointsLayer);
-    else map.removeLayer(pointsLayer);
   });
 }
 
