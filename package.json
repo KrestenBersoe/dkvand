@@ -9,8 +9,16 @@
     "dev": "node --watch server.js"
   },
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "compression": "^1.7.4",
     "express": "^4.21.0",
+    "multer": "^2.2.0",
+    "openid-client": "^6.8.5",
+    "pdfkit": "^0.19.1",
+    "pg": "^8.22.0",
+    "proj4": "^2.20.9",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.3",
     "web-push": "^3.6.7"
   },
   "engines": {
