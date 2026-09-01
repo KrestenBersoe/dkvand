@@ -16,23 +16,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt ./
 RUN pip install --break-system-packages --no-cache-dir -r requirements.txt
 
-# Install Node-afhængigheder (layer cache)
-COPY package.json ./
-RUN npm install --omit=dev
+# Install Node-afhængigheder (layer cache) — npm ci (ikke install) for et
+# reproducerbart build, der nøjagtigt matcher package-lock.json.
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
-# Copy application files
-COPY server.js ./
-COPY fetch_currents.py ./
-COPY dansk-overloeb-kort.html ./
-COPY puls-data.json ./
-COPY overloeb-sw.js ./
-
-# VP3 geodata (kystvande, badevandsområder, RBU-punkter)
-COPY vp3_kystvande_simplified.geojson ./
-COPY vp3_badevand.geojson ./
-COPY vp3_rbu_slim.geojson ./
-COPY vp3_soeer.geojson ./
-COPY vp3_vandlob.geojson ./
+# RETTET: denne fil-for-fil COPY-liste var netop den slags der forårsagede
+# en produktionsudfald — server.js kræver et dusin+ lokale moduler
+# (tenant-admin.js, sso-handoff.js, db.js, risk-model.js, osv.), og enhver
+# ny fil, der glemmes her, crasher containeren øjeblikkeligt ved opstart
+# (require() af en fil der ikke findes i imaget). "COPY . ." kopierer HELE
+# build-konteksten (styret af .dockerignore) i stedet, så en ny fil i
+# repoet automatisk følger med i næste build — ingen liste at vedligeholde
+# eller glemme.
+COPY . .
 
 EXPOSE 8080
 

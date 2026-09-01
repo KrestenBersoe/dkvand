@@ -1,0 +1,23 @@
+User-agent: *
+Allow: /
+
+# Kildekode og afhaengigheder er blokeret paa HTTP-niveau (svarer 404, se
+# server.js's PUBLIC_STATIC_EXTENSIONS-allowliste) - linjerne nedenfor er
+# dokumentation/defense-in-depth for velopdragne crawlere, ikke det der
+# reelt haandhaever adgangsbegraensningen.
+Disallow: /*.js$
+Disallow: /*.py$
+Disallow: /*.sh$
+Disallow: /*.md$
+Disallow: /node_modules/
+Disallow: /package.json
+Disallow: /package-lock.json
+Disallow: /requirements.txt
+
+# /udloeb/ (Tier 3) er BEVIDST IKKE disallowet her, selvom siderne er
+# noindex - noindex,follow opnaas udelukkende via robots-metaen paa selve
+# siden (se server.js's injectRobotsOnly()). En samtidig Disallow ville
+# forhindre Google i overhovedet at crawle siderne og dermed aldrig se
+# noindex-taggen - se planen (URL-arkitektur/SEO) for den fulde begrundelse.
+
+Sitemap: https://www.ditbadevand.dk/sitemap.xml

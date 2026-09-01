@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Opret trial — internt</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  /* Samme farvepalet som stats.html/admin-dashboard.html — se dem for begrundelsen. */
+  :root {
+    --paper: #12202a; --card: #16283355; --ink: #f0ede6; --ink-soft: #9fb0bb;
+    --accent: #4fb8d6; --border: rgba(255,255,255,.08);
+    --ok: #3fa96a; --bad: #d1584a;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    background: linear-gradient(180deg, #0d1720, #12202a 40%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 480px; margin: 0 auto; }
+  h1 { font-size: 1.3rem; margin: 0 0 .3rem; }
+  .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
+  .card {
+    background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.1rem 1.3rem; margin-bottom: 1rem;
+  }
+  .field { margin-bottom: .9rem; }
+  .field label { display: block; font-size: .8rem; color: var(--ink-soft); margin-bottom: .3rem; }
+  .field input, .field select {
+    background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .5rem .6rem; border-radius: 6px; font-size: .9rem; font-family: inherit; width: 100%;
+  }
+  .field select { color-scheme: dark; }
+  /* RETTET (bruger-rapporteret 2026-08-18, samme fejl fundet på internal-
+     sales.html — hvid baggrund i dropdown): samme fix som admin-
+     dashboard.html allerede bruger — :root's color-scheme:dark alene
+     respekteres IKKE af alle Chromium-udgaver for selve popup-listen, kun
+     for elementets egen lukkede tilstand. Kræver eksplicit background/
+     color på selve <option>-elementerne. */
+  .field select option { background: var(--paper); color: var(--ink); }
+  h2 { font-size: 1rem; margin: 0 0 .3rem; }
+  .field-note { font-size: .74rem; color: var(--ink-soft); margin-top: .25rem; }
+  button {
+    background: transparent; border: 1px solid var(--accent); color: var(--ink);
+    padding: .6rem 1.1rem; border-radius: 8px; font-size: .9rem; font-weight: 600; cursor: pointer; width: 100%;
+  }
+  button:hover { background: rgba(79,184,214,.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .result {
+    margin-top: 1rem; padding: .9rem 1rem; border-radius: 8px; font-size: .85rem;
+    background: rgba(63,169,106,.08); border: 1px solid rgba(63,169,106,.3);
+  }
+  .result-url {
+    display: block; margin-top: .5rem; padding: .5rem .6rem; background: rgba(0,0,0,.25);
+    border-radius: 6px; font-size: .82rem; word-break: break-all; user-select: all;
+  }
+  .err {
+    margin-top: 1rem; padding: .9rem 1rem; border-radius: 8px; font-size: .85rem; color: var(--bad);
+    background: rgba(209,88,74,.08); border: 1px solid rgba(209,88,74,.3);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🏛 Opret kommune-trial</h1>
+  <div class="sub">Internt værktøj — genererer et trial-login til Kommunal Dashboard.</div>
+
+  <div class="card">
+    <h2>Opret ny trial</h2>
+    <form id="form" onsubmit="return submitForm(event)">
+      <div class="field">
+        <label for="f-name">Kommune</label>
+        <select id="f-name" required>
+          <option value="" disabled selected>Indlæser kommuner…</option>
+        </select>
+        <div class="field-note">Listen kommer direkte fra badevandsdataen, så det valgte navn altid matcher og finder kommunens badesteder.</div>
+      </div>
+      <div class="field">
+        <label for="f-days">Trial-længde (dage)</label>
+        <input type="number" id="f-days" required min="1" step="1" value="30">
+      </div>
+      <div class="field">
+        <label for="f-issued-by">Dit navn</label>
+        <input type="text" id="f-issued-by" required placeholder="Fx: Kresten">
+      </div>
+      <div class="field">
+        <label for="f-note">Note (valgfri, kun til internt brug)</label>
+        <input type="text" id="f-note" placeholder="Fx: sendt til jens@furesoe.dk">
+      </div>
+      <div class="field">
+        <label for="f-logo-url">Logo-URL (valgfri — vises i kommunens overstyrings-banner)</label>
+        <input type="url" id="f-logo-url" placeholder="https://...">
+      </div>
+      <button type="submit" id="submit-btn">Opret trial</button>
+    </form>
+    <div id="result"></div>
+  </div>
+
+  <div class="card">
+    <h2>Log ind på en eksisterende kommune</h2>
+    <div class="sub" style="margin-bottom:.9rem">Genererer et nyt, tidsbegrænset login-link til en kommune der allerede findes — fx til en demo, support, eller fordi det oprindelige link er udløbet. Rører IKKE kommunens egne data eller status.</div>
+    <form id="tform" onsubmit="return submitTenantForm(event)">
+      <div class="field">
+        <label for="t-tenant">Kommune</label>
+        <select id="t-tenant" required>
+          <option value="" disabled selected>Indlæser kommuner…</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="t-days">Linket er gyldigt i (dage)</label>
+        <input type="number" id="t-days" required min="1" step="1" value="7">
+      </div>
+      <div class="field">
+        <label for="t-issued-by">Dit navn</label>
+        <input type="text" id="t-issued-by" required placeholder="Fx: Kresten">
+      </div>
+      <div class="field">
+        <label for="t-note">Note (valgfri, kun til internt brug)</label>
+        <input type="text" id="t-note" placeholder="Fx: demo til salgsmøde">
+      </div>
+      <button type="submit" id="tsubmit-btn">Generér login-link</button>
+    </form>
+    <div id="tresult"></div>
+  </div>
+</div>
+
+<script>
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+// NYT (bruger-ønske — kommune-vælger i stedet for fri tekst): henter den
+// samme kanoniske liste som server.js's GET /internal/api/kommuner bygger
+// fra kommuneKeyToBadesteder (se dens filhoved for hvorfor DENNE kilde,
+// ikke den rå PULS-liste, er valgt). Basic Auth er allerede givet af
+// browseren for denne side (samme oprindelse/sti-realm), så dette fetch-
+// kald genbruger den automatisk, ligesom det eksisterende POST til
+// /internal/api/create-trial nedenfor allerede gjorde.
+async function loadKommuneOptions() {
+  const sel = document.getElementById('f-name');
+  try {
+    const resp = await fetch('/internal/api/kommuner');
+    const list = await resp.json();
+    if (!resp.ok || !Array.isArray(list) || list.length === 0) {
+      sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+      return;
+    }
+    sel.innerHTML = list.map(k => `<option value="${escHtml(k.name)}">${escHtml(k.name)} (${k.badestedCount} badested${k.badestedCount === 1 ? '' : 'er'})</option>`).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+  }
+}
+
+// NYT (bruger-ønske — salgsteamets adgang til eksisterende kommuner): samme
+// mønster som loadKommuneOptions() ovenfor, men fra GET /internal/api/
+// tenants (tenantAdmin.listTenants(), se dens filhoved) — INGEN status-
+// filter server-side, status vises derfor her i selve valgmuligheden, så
+// en suspenderet/udløbet kommune stadig kan vælges bevidst, ikke ved et
+// uheld.
+function tenantStatusLabel(t) {
+  if (t.status === 'active') return 'aktiv';
+  if (t.status === 'suspended') return 'suspenderet';
+  const expires = t.trial_expires_at ? new Date(t.trial_expires_at).toLocaleDateString('da-DK') : '?';
+  return `trial, udløber ${expires}`;
+}
+async function loadTenantOptions() {
+  const sel = document.getElementById('t-tenant');
+  try {
+    const resp = await fetch('/internal/api/tenants');
+    const list = await resp.json();
+    if (!resp.ok || !Array.isArray(list) || list.length === 0) {
+      sel.innerHTML = '<option value="" disabled selected>Ingen kommuner fundet</option>';
+      return;
+    }
+    sel.innerHTML = list.map(t => `<option value="${escHtml(t.id)}">${escHtml(t.name)} — ${escHtml(tenantStatusLabel(t))}</option>`).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+  }
+}
+loadKommuneOptions();
+loadTenantOptions();
+
+// NYT (bruger-ønske — salgsteamets adgang til eksisterende kommuner): et
+// almindeligt confirm() FØR selve kaldet — Basic Auth er den reelle
+// adgangskontrol her (se requireInternalAuth i server.js), dette er
+// udelukkende en UX-sikkerhedsnet mod at fejlvælge kommune i en dropdown,
+// givet at linket giver adgang til en LEVENDE kundes dashboard.
+async function submitTenantForm(e) {
+  e.preventDefault();
+  const sel = document.getElementById('t-tenant');
+  const selectedName = sel.options[sel.selectedIndex]?.textContent || '';
+  if (!confirm(`Generér et nyt login-link til "${selectedName}"?`)) return false;
+
+  const btn = document.getElementById('tsubmit-btn');
+  const resultEl = document.getElementById('tresult');
+  const tenantId = sel.value;
+  const days = Number(document.getElementById('t-days').value);
+  const issuedBy = document.getElementById('t-issued-by').value.trim();
+  const note = document.getElementById('t-note').value.trim();
+
+  btn.disabled = true;
+  btn.textContent = 'Genererer…';
+  resultEl.innerHTML = '';
+  try {
+    const resp = await fetch(`/internal/api/tenants/${encodeURIComponent(tenantId)}/login-link`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ days, issuedBy, note: note || null }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke generere login-link.')}</div>`;
+      return;
+    }
+    resultEl.innerHTML = `
+      <div class="result">
+        ✓ Nyt login-link til <strong>${escHtml(data.tenant.name)}</strong> — gyldigt til ${new Date(data.tenant.trialExpiresAt).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' })}.
+        <span class="result-url">${escHtml(data.loginUrl)}</span>
+      </div>
+    `;
+    document.getElementById('t-issued-by').value = '';
+    document.getElementById('t-note').value = '';
+  } catch (e) {
+    resultEl.innerHTML = '<div class="err">Kunne ikke generere login-link — tjek din forbindelse.</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generér login-link';
+  }
+  return false;
+}
+
+async function submitForm(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submit-btn');
+  const resultEl = document.getElementById('result');
+  const name = document.getElementById('f-name').value.trim();
+  const days = Number(document.getElementById('f-days').value);
+  const issuedBy = document.getElementById('f-issued-by').value.trim();
+  const note = document.getElementById('f-note').value.trim();
+  const logoUrl = document.getElementById('f-logo-url').value.trim();
+
+  btn.disabled = true;
+  btn.textContent = 'Opretter…';
+  resultEl.innerHTML = '';
+  try {
+    const resp = await fetch('/internal/api/create-trial', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name, days, issuedBy,
+        note: note || null,
+        logoUrl: logoUrl || null,
+        // Denne formular matcher UDELUKKENDE mod dansk PULS-badevandsdata
+        // (se loadKommuneOptions()) — altid en dansk kommune. En 'country'-
+        // konto for et andet land ville alligevel få dette overstyret
+        // server-side (se server.js's POST /internal/api/create-trial).
+        countryCode: 'DK',
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke oprette trial.')}</div>`;
+      return;
+    }
+    resultEl.innerHTML = `
+      <div class="result">
+        ✓ Trial oprettet for <strong>${escHtml(data.tenant.name)}</strong> — udløber ${new Date(data.tenant.trialExpiresAt).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' })}.
+        <br>Send login-linket herunder til kommunens kontakt (vises kun denne ene gang):
+        <span class="result-url">${escHtml(data.loginUrl)}</span>
+      </div>
+    `;
+    document.getElementById('form').reset();
+    document.getElementById('f-days').value = '30';
+  } catch (e) {
+    resultEl.innerHTML = '<div class="err">Kunne ikke oprette trial — tjek din forbindelse.</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Opret trial';
+  }
+  return false;
+}
+</script>
+</body>
+</html>

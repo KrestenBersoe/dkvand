@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Badevand — live skilt</title>
+<meta name="robots" content="noindex, nofollow">
+<!-- NYT (bruger-ønske 2026-08-19) — live digitalt skilt, tiltænkt en
+     skærm monteret ved selve badestedet, ikke en telefon: store,
+     vh/vw-skalerede skrifttyper, høj kontrast, ingen scroll. Samme visuelle
+     familie (mørk blå-grøn gradient) som det eksisterende printbare
+     "QR-skilt" (dansk-overloeb-kort.html's generateQrSign()), for
+     genkendelighed.
+     UDVIDET (samme bruger-ønske): viste tidligere KUN samlet risiko + QR.
+     Viser nu opdelt risiko (bakterier/virus/alger), 24h-prognose,
+     vand-/lufttemperatur, vind/strøm og selve 7-dages nedbørsgrafen —
+     PRÆCIS samme datafelter og kilder som badested-detaljepanelets
+     showBadevandPanel() (dansk-overloeb-kort.html), genberegnet server-side
+     via de samme offentlige endpoints (GET /api/badevand-risk, GET
+     /api/weather/weekly, GET /api/current-at) i stedet for at duplikere
+     selve beregningerne. QR-koden er UÆNDRET i mål (badestedets egen
+     /badested/:slug-side, hvor borgeren allerede kan indberette status). -->
+<style>
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: linear-gradient(160deg, #0b3a4d 0%, #124f68 55%, #1a6b8a 100%);
+    color: #fff;
+  }
+
+  /* NYT (bruger-ønske — layout-rettelse): fem LIGE høje rækker (1fr hver),
+     ingen række må dominere. Header/QR-bjælken er nu lige så høj som hver
+     panelrække — matcher eksplicit brugerkravet "header samme højde som de
+     højeste paneler" og "QR i sin egen bjælke i bunden, samme højde som
+     headeren". Nedbørsgrafen fik TIDLIGERE sin egen `1fr`-række ved siden af
+     en fuldhøjde QR-kolonne, og strakte sig derfor til at fylde næsten al
+     resterende lodret plads (~80% af skiltet, bruger-rapporteret) — den er
+     nu en helt almindelig 1fr-række, samme højde som resten, og spænder kun
+     over 2 af de 3 kolonner (ikke hele bredden), matcher "maks. 2-3 paneler
+     bred".  */
+  #wrap {
+    height: 100vh; width: 100vw; padding: 1.6vh 1.6vw;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    /* RETTET (bruger-ønske — den samlede risiko er det vigtigste på
+       skiltet): headeren får nu en større andel af den lodrette plads end
+       de øvrige rækker (2.2fr mod 1fr — var 1.5fr, hævet igen for at give
+       den nu FORDOBLEDE risikostatus-skrift, se #banner .label nedenfor,
+       plads uden at klemmes).
+       RETTET (bruger-ønske — nedbørselementet skal være i fuld bredde):
+       nedbørsrækken fik samtidig lidt mere højde (1.6fr) — ved fuld bredde
+       (se grid-template-areas nedenfor) ville en 1fr-række ellers efterlade
+       tomme margener i siderne, da grafens faste højde/bredde-forhold
+       (bevidst bevaret, se buildWeeklyChart()) ikke ville nå at fylde den
+       nu meget bredere kolonne. */
+    grid-template-rows: 2.2fr 1fr 1fr 1.6fr 1fr;
+    grid-template-areas:
+      "banner banner banner"
+      "bact   viral  algae"
+      "fore   temp   wind"
+      "precip precip precip"
+      "qr     qr     qr";
+    gap: 1.1vh 1vw;
+  }
+
+  /* RETTET (bruger-ønske — risikostatus øverst): brand/lokation får et
+     eksplicit `order` (se #banner .label/.pct for de to første pladser),
+     så rækkefølgen er robust uafhængig af deres faktiske DOM-rækkefølge. */
+  .brand {
+    font-family: 'Courier New', monospace; font-size: .9vw; letter-spacing: .13em;
+    text-transform: uppercase; color: #cdeaf2; font-weight: 700; order: 1;
+  }
+  .location { font-size: 1.5vw; font-weight: 700; line-height: 1.1; margin-top: .2vh; opacity: .92; order: 0; }
+
+  /* ── Samlet risiko-banner ─────────────────────────────────────────────── */
+  /* RETTET (bruger-ønske — headertekst centreret, risikostatus øverst og
+     væsentligt større end lokation/brand): centreret, lodret stak —
+     risikostatus (klart dominerende, se .label nedenfor, ØVERST) →
+     procent → lokation → brand (mindst, nederst). Rækkefølgen er bevidst
+     vendt om ift. den forrige udgave (brand→lokation→status→pct) efter
+     eksplicit bruger-ønske om at have selve risikovurderingen øverst. */
+  #banner {
+    grid-area: banner;
+    position: relative;
+    border-radius: 1.4vh; padding: .8vh 2vw;
+    background-color: #1a6faf; transition: background-color .6s;
+    box-shadow: 0 .5vh 1.6vh rgba(0,0,0,.18);
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; gap: .3vh;
+    min-height: 0;
+  }
+  /* NYT (bruger-krav 2026-08-20 — kommunelogo på live-skiltet): absolut
+     positioneret i hjørnet, UDENFOR selve flex-flowet (order:-2/-1
+     ovenfor styrer allerede risikostatus/lokation) — påvirker derfor
+     intet af den eksisterende, finjusterede auto-skalering. Hvid
+     baggrundsplade (samme princip som skilte.js's PDF-logo, som ligger på
+     hvid baggrund) sikrer læsbarhed for ethvert logo, uanset dets egne
+     farver, mod #banner's mørkeblå-grønne farveflade. display:none som
+     standard — vist kun via JS, hvis SKILT.logoUrl findes (kun badesteder
+     hvor kommunen har uploadet et logo har noget at vise). */
+  #banner-logo {
+    display: none;
+    position: absolute;
+    top: .8vh; right: 1vw;
+    max-height: 6vh;
+    max-width: 24%;
+    background: #fff;
+    border-radius: .6vh;
+    padding: .4vh .6vw;
+    box-shadow: 0 .2vh .6vh rgba(0,0,0,.2);
+    object-fit: contain;
+  }
+  /* RETTET (bruger-ønske — "risikovurderingen dobbelt op i størrelse"):
+     label FORDOBLET (4.4vw→8.8vw) — se #wrap's grid-template-rows for den
+     tilsvarende udvidede rækkehøjde, der giver den plads uden at klemmes. */
+  #banner .label { font-size: 8.8vw; font-weight: 800; line-height: 1; order: -2; }
+  #banner .pct { font-size: 1.4vw; opacity: .85; order: -1; }
+
+  /* ── Datakort (fælles) ────────────────────────────────────────────────── */
+  .card {
+    background: rgba(255,255,255,.96); color: #1a2733;
+    border-radius: 1.2vh; padding: 1.1vh 1.1vw;
+    box-shadow: 0 .5vh 1.6vh rgba(0,0,0,.18);
+    display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  }
+  .card-title {
+    font-size: .95vw; font-weight: 700; color: #3a4b57;
+    display: flex; align-items: center; gap: .4vw; margin-bottom: .6vh;
+  }
+  .bar-track {
+    height: 1.5vh; background: #e6ecef; border-radius: 1vh; overflow: hidden; margin-top: .5vh;
+  }
+  .bar-fill { height: 100%; width: 0%; background: #ccc; transition: width .5s, background-color .5s; }
+  .bar-pct { font-size: 1.5vw; font-weight: 800; }
+
+  #card-bact   { grid-area: bact; }
+  #card-viral  { grid-area: viral; }
+  #card-algae  { grid-area: algae; }
+  #card-fore   { grid-area: fore; }
+  #card-temp   { grid-area: temp; }
+  #card-wind   { grid-area: wind; }
+  #card-precip { grid-area: precip; }
+
+  .stat-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    font-size: 1.05vw; padding: .3vh 0; border-top: 1px solid #eef2f4;
+  }
+  .stat-row:first-of-type { border-top: none; }
+  .stat-row .val { font-weight: 800; font-size: 1.25vw; }
+  .card-note { font-size: .68vw; color: #7a8892; margin-top: auto; padding-top: .5vh; }
+
+  #card-precip svg { width: 100%; height: 100%; display: block; }
+  #card-precip .card-title { margin-bottom: 0; }
+  #precip-body { flex: 1; min-height: 0; margin-top: 1.2vh; }
+
+  /* ── QR-bjælke (bund, fuld bredde, samme højde som header) ───────────────
+     RETTET (bruger-ønske — layoutrettelse): QR-koden sad tidligere i sin
+     egen, fuldhøje kolonne til højre (hele skiltets højde) — det tvang
+     nedbørsrækken til at strække sig for at matche, se #wrap's filhoved. Nu
+     en almindelig, vandret 1fr-række i bunden, PRÆCIS samme højde som alle
+     andre rækker (inkl. headeren). */
+  #qr-bar {
+    grid-area: qr;
+    background: rgba(255,255,255,.96); color: #1a2733;
+    border-radius: 1.4vh; padding: .8vh 1.6vw;
+    box-shadow: 0 .5vh 1.6vh rgba(0,0,0,.18);
+    display: flex; align-items: center; justify-content: space-between; gap: 1.6vw;
+    min-height: 0;
+  }
+  #qr-bar .qr-left { display: flex; align-items: center; gap: 1.2vw; min-width: 0; height: 100%; }
+  /* RETTET (bruger-ønske — selve QR-koden er fin i størrelsen, kun
+     TEKSTEN skal være tydeligere): img uændret (height:100%), kun
+     qr-title/qr-caption/updated/err hævet (1.05vw→1.6vw osv.). */
+  #qr-bar img { height: 100%; max-height: 100%; width: auto; aspect-ratio: 1 / 1; background: #fff; border-radius: .6vh; display: block; flex-shrink: 0; }
+  #qr-bar .qr-text { text-align: left; min-width: 0; }
+  #qr-bar .qr-title { font-size: 1.6vw; font-weight: 800; color: #124f68; line-height: 1.3; }
+  #qr-bar .qr-caption { font-size: 1.15vw; color: #5a6b78; margin-top: .4vh; }
+  #qr-bar .qr-right { text-align: right; flex-shrink: 0; }
+  #qr-bar #updated { font-size: 1.15vw; color: #5a6b78; }
+  #qr-bar #err { font-size: 1.15vw; color: #c84b1f; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="banner">
+    <img id="banner-logo" alt="">
+    <div class="brand">🐬 National Badevandsvarsel</div>
+    <div class="location" id="skilt-navn"></div>
+    <div class="label" id="banner-label">Indlæser…</div>
+    <div class="pct" id="banner-pct"></div>
+  </div>
+
+  <div class="card" id="card-bact">
+    <div class="card-title">🦠 Bakterier</div>
+    <div class="bar-pct" id="bv-bact-pct">—</div>
+    <div class="bar-track"><div class="bar-fill" id="bv-bact-bar"></div></div>
+  </div>
+  <div class="card" id="card-viral">
+    <div class="card-title">🧬 Virus</div>
+    <div class="bar-pct" id="bv-viral-pct">—</div>
+    <div class="bar-track"><div class="bar-fill" id="bv-viral-bar"></div></div>
+  </div>
+  <div class="card" id="card-algae">
+    <div class="card-title">🌿 Alger</div>
+    <div class="bar-pct" id="bv-algae-pct">—</div>
+    <div class="bar-track"><div class="bar-fill" id="bv-algae-bar"></div></div>
+  </div>
+
+  <div class="card" id="card-fore">
+    <div class="card-title">⚡ 24h prognose</div>
+    <div class="bar-pct" id="bv-forecast-pct">—</div>
+    <div class="bar-track"><div class="bar-fill" id="bv-forecast-bar"></div></div>
+  </div>
+  <div class="card" id="card-temp">
+    <div class="card-title">🌡 Temperatur</div>
+    <div class="stat-row"><span>💧 Vand</span><span class="val" id="bv-water-temp">—</span></div>
+    <div class="stat-row"><span>☀️ Luft</span><span class="val" id="bv-air-temp">—</span></div>
+    <div class="card-note" id="bv-temp-note"></div>
+  </div>
+  <div class="card" id="card-wind">
+    <div class="card-title">🌬 Vind og strøm</div>
+    <div class="stat-row"><span>💨 Vind</span><span class="val" id="bv-wind">—</span></div>
+    <div class="stat-row"><span>🌊 Strøm</span><span class="val" id="bv-current">—</span></div>
+    <div class="card-note" id="bv-wind-current-note"></div>
+  </div>
+
+  <div class="card" id="card-precip">
+    <div class="card-title">🌧 Nedbør — 7 dage + 24h prognose</div>
+    <div id="precip-body"></div>
+  </div>
+
+  <div id="qr-bar">
+    <div class="qr-left">
+      <img id="corner-qr" alt="QR-kode til denne side">
+      <div class="qr-text">
+        <div class="qr-title">Scan for at tjekke fra din egen telefon eller indberette status</div>
+        <div class="qr-caption" id="qr-caption"></div>
+      </div>
+    </div>
+    <div class="qr-right">
+      <div id="updated"></div>
+      <div id="err"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// NYT (bruger-ønske 2026-08-19) — pladsholderen erstattes SERVER-SIDE af
+// GET /skilt/:slug (server.js), ÉN gang, KUN på linjen nedenfor — se
+// admin-dashboard.html's tilsvarende %%TENANT_JSON%%-kommentar for hvorfor
+// pladsholderen aldrig må optræde i klartekst andre steder i denne fil.
+const SKILT = %%SKILT_JSON%%;
+
+document.getElementById('skilt-navn').textContent = SKILT.navn;
+document.title = `${SKILT.navn} — badevand live`;
+
+// NYT (bruger-krav 2026-08-20) — SKILT.logoUrl er KUN sat af server.js,
+// når linket blev åbnet med ?kommunelogo=1 (se GET /skilt/:slug's
+// filhoved) — dvs. udelukkende via admin-dashboardets "Kopiér iframe"-
+// link. Det almindelige, offentlige /skilt/:slug-link (uden parameteret)
+// får ALDRIG et logoUrl-felt, og denne blok gør derfor ingenting for det.
+// onerror skjuler billedet igen ved et ugyldigt/utilgængeligt logo_url —
+// samme "vis skiltet alligevel"-filosofi som PDF-genereringens
+// try/catch om doc.image() (skilte.js).
+if (SKILT.logoUrl) {
+  const logoEl = document.getElementById('banner-logo');
+  logoEl.src = SKILT.logoUrl;
+  logoEl.style.display = 'block';
+  logoEl.onerror = () => { logoEl.style.display = 'none'; };
+}
+
+const skiltUrl = `${location.origin}/badested/${SKILT.slug}`;
+// Samme gratis, nøglefri QR-genereringstjeneste som det eksisterende
+// klient-side print-skilt bruger (dansk-overloeb-kort.html) — ingen lokal
+// QR-bibliotek-afhængighed nødvendig for dette sekundære element.
+document.getElementById('corner-qr').src =
+  `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=4&data=${encodeURIComponent(skiltUrl)}`;
+document.getElementById('qr-caption').textContent = skiltUrl.replace(/^https?:\/\//, '');
+
+// Samme tærskler/farver som seo-pages.js's riskInfo() (server) og
+// dansk-overloeb-kort.html's riskStyle()/riskLabel() (klient) — REQUIRED-
+// SYNCED duplikat, se skilte-relaterede kommentarer i server.js.
+function riskInfo(risk) {
+  if (risk === null || risk === undefined) return { label: 'Ingen data', color: '#1a6faf', pct: null };
+  if (risk >= 0.6) return { label: 'Høj risiko',     color: '#c84b1f', pct: Math.round(risk * 100) };
+  if (risk >= 0.2) return { label: 'Moderat risiko', color: '#d4a020', pct: Math.round(risk * 100) };
+  return              { label: 'Lav risiko',       color: '#2d7d4f', pct: Math.round(risk * 100) };
+}
+
+// REQUIRED-SYNCED klient-port af seo-pages.js's describeBadestedRisk()
+// (samme fem grene, se dens filhoved for begrundelsen pr. gren), UDVIDET
+// med overrideInfo øverst — en aktiv kommunalt varsel skal vises FØRST,
+// samme forrang som badested-panelets egen override-banner.
+function classifyBadestedSign(entry) {
+  if (!entry) return { label: 'Ingen data', color: '#1a6faf', pct: null };
+  if (entry.overrideInfo) {
+    const bucketColor = { groen: '#2d7d4f', gul: '#d4a020', roed: '#c84b1f', lukket: '#3a3a3a' };
+    return { label: entry.overrideInfo.message || 'Kommunalt varsel', color: bucketColor[entry.overrideInfo.bucket] || '#1a6faf', pct: null };
+  }
+  if (entry.source === 'server-utilgaengelig') return { label: 'Data utilgængelig', color: '#1a6faf', pct: null };
+  if (entry.source === 'ingen-bekraeftet')     return { label: 'Lav risiko', color: '#2d7d4f', pct: null };
+  if (entry.source === 'nedstroms-bekraeftet') return { label: 'Lav risiko', color: '#2d7d4f', pct: null };
+  if (entry.source === 'ingen' && !entry.noDataMatch) return { label: 'Lav risiko', color: '#2d7d4f', pct: null };
+  if (entry.source === 'ingen') return { label: 'Ingen data', color: '#1a6faf', pct: null };
+  const active = [entry.bact, entry.viral].filter(v => v !== null && v !== undefined);
+  const risk = active.length ? Math.max(...active) : null;
+  return riskInfo(risk);
+}
+
+// NYT — opdelt risiko (bakterier/virus/alger/24h-prognose): PRÆCIS samme
+// hasMatch-afgrænsning som showBadevandPanel()'s setBar() (dansk-overloeb-
+// kort.html), så et badested uden bekræftet udløbskobling viser "ingen
+// data" i stedet for en fejlagtig, bekræftet 0%.
+function setBar(barId, pctId, hasMatch, risk) {
+  const barEl = document.getElementById(barId);
+  const pctEl = document.getElementById(pctId);
+  if (!hasMatch) {
+    if (barEl) { barEl.style.width = '0%'; barEl.style.background = '#ccc'; }
+    if (pctEl) { pctEl.textContent = 'ingen data'; pctEl.style.color = '#7a8892'; }
+    return;
+  }
+  const pct = Math.round(risk * 100);
+  const color = risk >= 0.6 ? '#c84b1f' : risk >= 0.2 ? '#d4a020' : '#2d7d4f';
+  if (barEl) { barEl.style.width = `${pct}%`; barEl.style.background = color; }
+  if (pctEl) { pctEl.textContent = `${pct}%`; pctEl.style.color = color; }
+}
+
+// NYT — automatisk skrifttilpasning af risikostatussen: label-teksten er
+// enten en kort, fast streng ('Moderat risiko' m.fl., se riskInfo()) ELLER
+// en FRIT REDIGERBAR kommunal varselsbesked (entry.overrideInfo.message,
+// se classifyBadestedSign() og badested-overrides.js) — ubegrænset i
+// længde. Den faste 8.8vw-størrelse (se #banner .label) er tunet til de
+// korte standardstrenge; en lang kommunal besked ('Kommunalt varsel:
+// badning frarådet på grund af høj E. coli-koncentration efter kraftig
+// regn' e.l.) ville ellers ombrydes til flere linjer og vælte ud af
+// headerens faste rækkehøjde, ind over panelrækken nedenfor. Formindsker
+// derfor label-skriften trinvist, indtil hele banneret (inkl. label, pct,
+// lokation, brand) rent faktisk kan være i sin tildelte plads — ned til et
+// gulv (2vw), så teksten aldrig bliver ulæselig lille ved en ekstremt lang
+// besked.
+function fitBannerLabel() {
+  const el = document.getElementById('banner-label');
+  const banner = document.getElementById('banner');
+  if (!el || !banner) return;
+  const MAX_VW = 8.8, MIN_VW = 2, STEP = 0.94;
+  let vw = MAX_VW;
+  el.style.fontSize = vw + 'vw';
+  let guard = 0;
+  while (banner.scrollHeight > banner.clientHeight && vw > MIN_VW && guard++ < 40) {
+    vw *= STEP;
+    el.style.fontSize = vw + 'vw';
+  }
+}
+
+async function loadRisk() {
+  try {
+    const resp = await fetch('/api/badevand-risk', { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) { document.getElementById('err').textContent = 'Kunne ikke hente risikodata.'; return; }
+    const entry = (data.badevand || []).find(b => String(b.id) === String(SKILT.badestedId));
+    const info = classifyBadestedSign(entry);
+    document.getElementById('banner').style.backgroundColor = info.color;
+    document.getElementById('banner-label').textContent = info.label;
+    document.getElementById('banner-pct').textContent = info.pct != null ? `${info.pct}%` : '';
+    fitBannerLabel();
+
+    // Samme hasMatch-regel som showBadevandPanel(): 'ingen'/'server-
+    // utilgaengelig' er reelt datamangel, alle andre kilder (inkl.
+    // 'ingen-bekraeftet'/'nedstroms-bekraeftet', hvor bact/viral er en
+    // bekræftet nul-måling) tæller som et gyldigt datapunkt.
+    const hasMatch = !!entry && entry.source !== 'ingen' && entry.source !== 'server-utilgaengelig';
+    setBar('bv-bact-bar',     'bv-bact-pct',     hasMatch, entry?.bact     ?? 0);
+    setBar('bv-viral-bar',    'bv-viral-pct',    hasMatch, entry?.viral    ?? 0);
+    setBar('bv-algae-bar',    'bv-algae-pct',    hasMatch, entry?.algae    ?? 0);
+    setBar('bv-forecast-bar', 'bv-forecast-pct', hasMatch, entry?.forecast ?? 0);
+
+    document.getElementById('updated').textContent =
+      `Sidst opdateret: ${new Date().toLocaleTimeString('da-DK', { hour: '2-digit', minute: '2-digit' })}`;
+    document.getElementById('err').textContent = '';
+  } catch (e) {
+    document.getElementById('err').textContent = 'Kunne ikke hente data — tjek forbindelsen.';
+  }
+}
+
+// Samme Mohseni-Stefan-estimat som klientens/serverens computeFreshwaterTemp()
+// (dansk-overloeb-kort.html / risk-model.js) — bruges kun som fallback, når
+// GET /api/current-at ikke finder et CMEMS-punkt tæt nok på (ferskvandssøer).
+function computeFreshwaterTemp(airTempAvg) {
+  if (airTempAvg === null || airTempAvg === undefined) return null;
+  const mu = 1, alpha = 24, beta = 9, gamma = 0.2;
+  return mu + (alpha - mu) / (1 + Math.exp(gamma * (beta - airTempAvg)));
+}
+
+// Samme 16-punkts danske kompas-konvertering som klientens degToCompass()
+// (dansk-overloeb-kort.html).
+function degToCompass(deg) {
+  const dirs = ['N','NNØ','NØ','ØNØ','Ø','ØSØ','SØ','SSØ','S','SSV','SV','VSV','V','VNV','NV','NNV'];
+  const idx = Math.round(((deg % 360) / 22.5)) % 16;
+  return dirs[idx];
+}
+
+// 1:1 port af dansk-overloeb-kort.html's buildWeeklyChart() — samme rene,
+// afhængighedsfri SVG-generator, uændret farve-/skalalogik, så grafen ser
+// identisk ud med den, badegæsten allerede kender fra appens eget panel.
+function buildWeeklyChart(weekObs, fore, totalMM) {
+  const obs    = (weekObs || []).slice(-168);
+  const fore24 = (fore    || []).slice(0, 24);
+  const all    = [...obs, ...fore24];
+  const maxMM  = Math.max(...all, 0.5);
+  // RETTET (bruger-ønske — nedbørselementet skal fylde fuld bredde): W øget
+  // til 480 (var 320) — kortet spænder nu hele skiltets bredde (se #wrap's
+  // grid-template-areas), et bredt/kort formatforhold, hvor det oprindelige
+  // 320:84-forhold ellers ville efterlade store tomme margener i siderne
+  // (SVG'ens preserveAspectRatio, meet, skalerer proportionalt og ville
+  // ellers blive højde-begrænset længe før bredden var udnyttet). H
+  // uændret (70) — alle skrifttyper/streger er dimensioneret relativt
+  // hertil, se resten af funktionen.
+  const W = 480, H = 70;
+  const total = Math.max(obs.length + fore24.length, 1);
+  const barW  = W / total;
+  const nowX  = (obs.length / total) * W;
+  const days  = ['Søn','Man','Tir','Ons','Tor','Fre','Lør'];
+  let dayLines = '', dayLabels = '';
+  for (let d = 1; d < 7; d++) {
+    const x    = (d * 24 / total) * W;
+    const date = new Date(Date.now() - (obs.length - d * 24) * 3600000);
+    dayLines  += `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="${H}" stroke="rgba(26,39,51,.07)" stroke-width="1"/>`;
+    dayLabels += `<text x="${x.toFixed(1)}" y="${H+11}" text-anchor="middle" font-size="7.5" fill="#9aaab5">${days[date.getDay()]}</text>`;
+  }
+  let bars = '';
+  obs.forEach((mm, i) => {
+    if (mm <= 0) return;
+    const h = Math.max((mm / maxMM) * H, 2);
+    bars += `<rect x="${(i*barW).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${Math.max(barW-.5,.3).toFixed(1)}" height="${h.toFixed(1)}" fill="${mm>=5?'#2979a0':'rgba(90,120,140,.55)'}"/>`;
+  });
+  fore24.forEach((mm, i) => {
+    if (mm <= 0) return;
+    const h = Math.max((mm / maxMM) * H, 2);
+    bars += `<rect x="${((obs.length+i)*barW).toFixed(1)}" y="${(H-h).toFixed(1)}" width="${Math.max(barW-.5,.3).toFixed(1)}" height="${h.toFixed(1)}" fill="${mm>=5?'#c84b1f':'rgba(13,110,140,.7)'}"/>`;
+  });
+
+  function niceStep(max) {
+    const steps = [1, 2, 5, 10, 20, 50, 100];
+    for (const s of steps) if (max / s <= 4) return s;
+    return 100;
+  }
+  const step = niceStep(maxMM);
+  let mmGrid = '', mmLabels = '';
+  for (let v = step; v < maxMM; v += step) {
+    const y = H - (v / maxMM) * H;
+    mmGrid   += `<line x1="0" y1="${y.toFixed(1)}" x2="${W}" y2="${y.toFixed(1)}" stroke="rgba(26,39,51,.1)" stroke-width="1" stroke-dasharray="2,2"/>`;
+    mmLabels += `<text x="3" y="${(y-2).toFixed(1)}" font-size="7" fill="#9aaab5">${v} mm</text>`;
+  }
+
+  return `<svg viewBox="0 0 ${W} ${H+14}" style="display:block;overflow:visible;margin:0 auto">
+    <rect width="${W}" height="${H}" fill="#f4f7f9" rx="3"/>${dayLines}${mmGrid}${bars}
+    <line x1="${nowX.toFixed(1)}" y1="0" x2="${nowX.toFixed(1)}" y2="${H}" stroke="#1a6b8a" stroke-width="1.5" stroke-dasharray="3,2"/>
+    <text x="2" y="${H+11}" font-size="7.5" fill="#9aaab5">-7 dage</text>
+    <text x="${nowX.toFixed(1)}" y="${H+11}" text-anchor="middle" font-size="7.5" fill="#1a6b8a" font-weight="bold">NU</text>
+    <text x="${W-2}" y="${H+11}" text-anchor="end" font-size="7.5" fill="#1a6b8a">+24h</text>
+    ${dayLabels}
+    ${mmLabels}
+    ${totalMM!=null?`<text x="${W-2}" y="9" text-anchor="end" font-size="7" fill="#5a6b78">${totalMM.toFixed(1)} mm/7d</text>`:''}
+  </svg>`;
+}
+
+// NYT — vejr (temperatur/vind/nedbør) + strøm for badestedets EGEN
+// koordinat. Samme 0,25°-gitternøgle som showBadevandPanel() bruger til GET
+// /api/weather/weekly (dansk-overloeb-kort.html), og en tynd GET
+// /api/current-at (server.js) i stedet for at hente den fulde CMEMS-strøm-
+// grid klient-side — et skilt, der kører ubevogtet i dagevis, skal ikke
+// laste den ned igen og igen.
+async function loadWeatherAndCurrent() {
+  if (SKILT.lat == null || SKILT.lng == null) return;
+  const G = 0.25;
+  const clat = Math.round((Math.floor(SKILT.lat / G) * G + G / 2) * 10000) / 10000;
+  const clng = Math.round((Math.floor(SKILT.lng / G) * G + G / 2) * 10000) / 10000;
+  const key  = `${clat.toFixed(4)}:${clng.toFixed(4)}`;
+
+  try {
+    const [wResp, cResp] = await Promise.all([
+      fetch(`/api/weather/weekly?key=${encodeURIComponent(key)}`, { cache: 'no-store' }),
+      fetch(`/api/current-at?lat=${SKILT.lat}&lng=${SKILT.lng}`, { cache: 'no-store' }),
+    ]);
+    if (!wResp.ok) throw new Error(`vejr ${wResp.status}`);
+    const w = await wResp.json();
+    const c = cResp.ok ? await cResp.json() : null;
+
+    // ── Nedbørsgraf ─────────────────────────────────────────────────────
+    const week = (w.hourlyWeek && w.hourlyWeek.length > 0) ? w.hourlyWeek
+               : (w.hourlyObs  && w.hourlyObs.length  > 0) ? w.hourlyObs
+               : [];
+    const fore = w.hourlyFore || [];
+    const precipBody = document.getElementById('precip-body');
+    precipBody.innerHTML = (week.length > 0 || fore.length > 0)
+      ? buildWeeklyChart(week, fore, w.totalRain7d)
+      : '<div style="color:#7a8892;font-size:.85vw;padding:.5vh 0">Ingen nedbørsdata tilgængeligt</div>';
+
+    // ── Temperatur — samme kilde-prioritet som klientens getWaterTemp():
+    // CMEMS-målt hvis strøm-opslaget fandt et punkt tæt nok på, ellers
+    // estimeret ud fra 72-timers lufttemperaturgennemsnittet.
+    const waterTemp = (c && c.temp != null) ? c.temp
+                     : (w.recentAirTempAvg != null ? computeFreshwaterTemp(w.recentAirTempAvg) : null);
+    const waterSource = (c && c.temp != null) ? 'cmems' : (w.recentAirTempAvg != null ? 'estimated' : null);
+    document.getElementById('bv-water-temp').textContent = waterTemp != null ? `${waterTemp.toFixed(1)}°C` : '—';
+    document.getElementById('bv-air-temp').textContent   = w.todayMaxAirTemp != null ? `${w.todayMaxAirTemp.toFixed(1)}°C` : '—';
+    document.getElementById('bv-temp-note').textContent =
+      (waterSource === 'cmems' ? 'Vandtemperatur målt (CMEMS Østersø-model)'
+        : waterSource === 'estimated' ? 'Vandtemperatur estimeret ud fra lufttemperatur' : '')
+      + (w.todayMaxAirTemp != null ? ' · Lufttemperatur: dagens højeste' : '');
+
+    // ── Vind og strøm ────────────────────────────────────────────────────
+    document.getElementById('bv-wind').textContent = w.currentWindSpeed != null
+      ? `${w.currentWindSpeed.toFixed(1)} m/s${w.currentWindDir != null ? ' ' + degToCompass(w.currentWindDir) : ''}`
+      : '—';
+    document.getElementById('bv-current').textContent = (c && c.speed != null)
+      ? `${c.speed.toFixed(2)} m/s${c.dir != null ? ' ' + degToCompass(c.dir) : ''}`
+      : '—';
+    document.getElementById('bv-wind-current-note').textContent =
+      c ? 'Strøm: CMEMS Østersø-model' : 'Ingen strømdata for dette område';
+  } catch (e) {
+    document.getElementById('precip-body').innerHTML =
+      `<div style="color:#c84b1f;font-size:.85vw;padding:.5vh 0">Vejrdata utilgængelig</div>`;
+  }
+}
+
+function loadSkilt() {
+  loadRisk();
+  loadWeatherAndCurrent();
+}
+
+// NYT (bruger-krav: "en live socket forbindelse til serveren hvor
+// badevandsinformationen opdateres hvert 15. minut") — samme content-frie
+// SSE-ping-mønster som Overløb-fanens embed (se server.js's
+// broadcastBadevandSignUpdate()), men offentlig, ingen token. Genopretter
+// selv forbindelsen ved fejl/afbrydelse (native EventSource-adfærd).
+const es = new EventSource('/api/badevand-risk-stream');
+es.addEventListener('badevand-updated', () => loadSkilt());
+
+loadSkilt();
+// NYT: sikkerhedsnet — genindlæs alligevel hvert 20. minut, selv hvis SSE
+// mod forventning skulle tabe forbindelsen. Skærmen kører ubevogtet i
+// dagevis; et billigt, regelmæssigt "hent alligevel" er robust uden at
+// afhænge 100% af at ingen mellemled nogensinde afbryder streamen.
+setInterval(loadSkilt, 20 * 60 * 1000);
+</script>
+</body>
+</html>

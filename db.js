@@ -1,0 +1,80 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// db.js — delt Postgres-forbindelse (Fly Managed Postgres)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Erstatter de tidligere per-modul SQLite-filer (better-sqlite3) på den
+// lokale /data-volume — SQLite-filerne levede kun på ÉN maskines eget,
+// ikke-delte volume, så to Fly-maskiner endte med to helt adskilte
+// datasæt (bekræftet direkte ved at inspicere begge — se
+// app-metrics.js/badested-observations.js's historik for den fulde
+// begrundelse). Postgres er netværkstilgængeligt fra ALLE maskiner, så
+// dette problem forsvinder strukturelt, uanset hvor mange maskiner appen
+// kører på.
+//
+// Ingen ORM — rå SQL via `pg`, samme "ingen abstraktion oveni"-stil som
+// better-sqlite3-brugen havde. `query()` er en tynd bekvemmeligheds-
+// wrapper; moduler der har brug for en TRANSAKTION (fx badested-
+// observations.js's rate limit-tjek) låner selv en klient via
+// `pool.connect()` direkte — se getClient().
+// ═══════════════════════════════════════════════════════════════════════════
+
+'use strict';
+const { Pool } = require('pg');
+
+if (!process.env.DATABASE_URL) {
+  console.warn('DATABASE_URL ikke sat — Postgres-afhængige funktioner vil fejle ved første kald.');
+}
+
+// NYT: max hævet fra pg's default (10) — flushPushQueue() gør nu et par
+// samtidige batch-forespørgsler pr. kørsel (send-jobs, notifiedState-
+// opdateringer), og med op til få hundrede abonnenter er der plads til at
+// undgå at queue'e forespørgsler internt i klienten. Stadig langt under
+// hvad Fly Managed Postgres' Basic-plan tillader af samtidige forbindelser.
+//
+// NYT (2026-08-20, produktionshændelse — gentagne "Connection terminated
+// unexpectedly"): pg's egne standardværdier er idleTimeoutMillis=10000 (10
+// sek.) og connectionTimeoutMillis=0 (ALDRIG timeout ved forsøg på at åbne
+// en ny forbindelse — et hængende forsøg venter derfor uendeligt i stedet
+// for at fejle hurtigt og tydeligt). Sat eksplicit her:
+//  - idleTimeoutMillis: 30000 — poolen lukker selv en ledig forbindelse
+//    efter 30 sek., FØR den risikerer at blive ramt af Fly Managed
+//    Postgres' egen proxy/forbindelses-oprydning i baggrunden. Den præcise
+//    grænse på Fly-siden er ikke dokumenteret her i koden og BØR
+//    verificeres/justeres ud fra faktisk observeret adfærd efter denne
+//    ændring (se punkt 5 i den tilhørende fejlrettelse) — 30 sek. er en
+//    forsigtig, konservativ start, ikke en bekræftet nøjagtig værdi.
+//  - connectionTimeoutMillis: 5000 — et forsøg på at hente en forbindelse
+//    fejler nu hurtigt (5 sek.) i stedet for evigt, hvis Postgres/proxyen
+//    er utilgængelig — fejlen rammer da den almindelige try/catch om det
+//    pågældende kald i stedet for at lade requesten hænge på ubestemt tid.
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 5000,
+});
+
+pool.on('error', (err) => {
+  // NYT: ubehandlede fejl på en IDLE pool-forbindelse (fx databasen lukker
+  // forbindelsen efter inaktivitet) crasher ellers HELE Node-processen —
+  // samme klasse fejl som ville have ramt en uventet SQLite-fejl før i
+  // tiden, blot at pg's pool har sin egen 'error'-event for netop dette.
+  console.error('Uventet fejl på idle Postgres-forbindelse:', err.message);
+});
+
+/** @param {string} text @param {any[]} [params] */
+async function query(text, params) {
+  return pool.query(text, params);
+}
+
+/**
+ * Låner en dedikeret klient til transaktioner (BEGIN/COMMIT/ROLLBACK) —
+ * SKAL altid parres med et `finally { client.release() }`, ellers lækker
+ * poolen forbindelser. Se badested-observations.js for brugsmønsteret
+ * (rate limit-tjek + insert i samme transaktion, med et advisory lock).
+ */
+async function getClient() {
+  return pool.connect();
+}
+
+module.exports = { pool, query, getClient };

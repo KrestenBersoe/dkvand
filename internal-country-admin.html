@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Administration</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  /* Samme farvepalet som internal-create-trial.html/admin-dashboard.html/stats.html — se dem for begrundelsen. */
+  :root {
+    --paper: #12202a; --card: #16283355; --ink: #f0ede6; --ink-soft: #9fb0bb;
+    --accent: #4fb8d6; --border: rgba(255,255,255,.08);
+    --ok: #3fa96a; --bad: #d1584a;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    background: linear-gradient(180deg, #0d1720, #12202a 40%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.3rem; margin: 0 0 .3rem; }
+  h2 { font-size: 1rem; margin: 0 0 .3rem; }
+  h3 { font-size: .82rem; font-weight: 700; margin: 1rem 0 .2rem; color: var(--ink); }
+  .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
+  .top-bar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-bottom: .3rem; }
+  .country-switcher { display: flex; gap: .4rem; }
+  .country-switcher a {
+    font-size: .78rem; color: var(--ink-soft); text-decoration: none; padding: .3rem .6rem;
+    border-radius: 6px; border: 1px solid var(--border);
+  }
+  .country-switcher a.active { color: var(--ink); border-color: var(--accent); background: rgba(79,184,214,.1); }
+  .country-switcher a:hover:not(.active) { color: var(--ink); background: rgba(255,255,255,.06); }
+  .card {
+    background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.1rem 1.3rem; margin-bottom: 1rem;
+  }
+  .field { margin-bottom: .9rem; }
+  .field label { display: block; font-size: .8rem; color: var(--ink-soft); margin-bottom: .3rem; }
+  .field input, .field select {
+    background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .5rem .6rem; border-radius: 6px; font-size: .9rem; font-family: inherit; width: 100%;
+  }
+  .field select { color-scheme: dark; }
+  /* RETTET (bruger-rapporteret 2026-08-18 — hvid baggrund i dropdown):
+     samme fix som admin-dashboard.html allerede bruger — :root's
+     color-scheme:dark alene respekteres IKKE af alle Chromium-udgaver for
+     selve popup-listen, kun for elementets egen lukkede tilstand. Kræver
+     eksplicit background/color på selve <option>-elementerne. */
+  .field select option, .stat-controls select option {
+    background: var(--paper); color: var(--ink);
+  }
+  .field-note { font-size: .74rem; color: var(--ink-soft); margin-top: .25rem; }
+  button {
+    background: transparent; border: 1px solid var(--accent); color: var(--ink);
+    padding: .6rem 1.1rem; border-radius: 8px; font-size: .9rem; font-weight: 600; cursor: pointer; width: 100%;
+  }
+  button:hover { background: rgba(79,184,214,.1); }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .result {
+    margin-top: 1rem; padding: .9rem 1rem; border-radius: 8px; font-size: .85rem;
+    background: rgba(63,169,106,.08); border: 1px solid rgba(63,169,106,.3);
+  }
+  .result-url {
+    display: block; margin-top: .5rem; padding: .5rem .6rem; background: rgba(0,0,0,.25);
+    border-radius: 6px; font-size: .82rem; word-break: break-all; user-select: all;
+  }
+  .err {
+    margin-top: 1rem; padding: .9rem 1rem; border-radius: 8px; font-size: .85rem; color: var(--bad);
+    background: rgba(209,88,74,.08); border: 1px solid rgba(209,88,74,.3);
+  }
+  .hist-warning {
+    margin-top: .5rem; padding: .7rem .9rem; border-radius: 8px; font-size: .82rem;
+    background: rgba(212,160,32,.08); border: 1px solid rgba(212,160,32,.3); color: #e0b84a;
+  }
+  .stat-controls { display: flex; flex-wrap: wrap; gap: .6rem; align-items: center; margin-bottom: .8rem; }
+  .stat-controls select, .stat-controls input {
+    width: auto; background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .35rem .5rem; border-radius: 6px; font-size: .85rem; font-family: inherit; color-scheme: dark;
+  }
+  table.kstat-table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-top: .3rem; }
+  table.kstat-table td { padding: .3rem 0; }
+  table.kstat-table td.n { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; padding-left: .9rem; }
+  table.kstat-table tr + tr td { border-top: 1px solid var(--border); }
+  .kb-unit-note { font-size: .72rem; color: var(--ink-soft); margin-bottom: .3rem; }
+
+  /* ── Cross-market dashboard (bruger-krav 2026-08-27) — SAMME CSS som
+     internal-choose-country.html's kopi (se dens kommentar for hvorfor
+     dupliceret her fremfor delt) og stats.html, den offentlige side dette
+     erstatter. ─────────────────────────────────────────────────────────── */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .trend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+  .trend-card h2 { display: flex; align-items: baseline; justify-content: space-between; gap: .6rem; }
+  .trend-chart-wrap { position: relative; }
+  .trend-chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .trend-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .trend-grad-stop-1 { stop-color: var(--accent); stop-opacity: .16; }
+  .trend-grad-stop-2 { stop-color: var(--accent); stop-opacity: 0; }
+  .trend-grid-line { stroke: rgba(255,255,255,.08); stroke-width: 1; shape-rendering: crispEdges; }
+  .trend-axis-label { fill: var(--ink-soft); font-size: 9px; font-family: inherit; }
+  .trend-end-dot { fill: var(--accent); stroke: var(--paper); stroke-width: 2; }
+  .trend-end-label { fill: var(--ink); font-size: 10px; font-weight: 700; font-family: inherit; }
+  .trend-crosshair { stroke: var(--ink-soft); stroke-width: 1; stroke-dasharray: 2 2; pointer-events: none; opacity: 0; }
+  .trend-hover-dot { fill: var(--accent); stroke: var(--paper); stroke-width: 2; pointer-events: none; opacity: 0; }
+  .trend-hit-layer { fill: transparent; cursor: crosshair; }
+  .trend-tooltip {
+    position: absolute; top: 0; left: 0; pointer-events: none; opacity: 0;
+    background: #0d1720; border: 1px solid var(--border); border-radius: 6px;
+    padding: .35rem .55rem; font-size: .72rem; white-space: nowrap; transform: translate(-50%, -115%);
+    transition: opacity .1s;
+  }
+  .trend-tooltip .tt-date { color: var(--ink-soft); }
+  .trend-tooltip .tt-value { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; margin-left: .4rem; }
+  .trend-empty { color: var(--ink-soft); font-size: .8rem; padding: 1.5rem 0; text-align: center; }
+  .loading { color: var(--ink-soft); font-size: .9rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top-bar">
+    <h1 id="page-title">🏛 Administration</h1>
+    <div class="country-switcher" id="country-switcher"></div>
+  </div>
+  <div class="sub" id="page-sub"></div>
+  <div class="sub" id="staff-identity" style="margin-top:-1rem"></div>
+
+  <div id="admin-dashboard-root"></div>
+
+  <div class="card" id="benchmark-card" style="display:none">
+    <h2>Kommune-benchmark — alle danske kommuner</h2>
+    <div class="sub" style="margin-bottom:.9rem">Samme rapporter som en kommune selv ser i deres eget dashboard, blot for alle kommuner samlet ét sted. Kun tilgængelig for Danmark — dette benchmark er beregnet over dansk PULS-badevandsdata, som de øvrige lande ikke har en tilsvarende kilde for.</div>
+    <div class="stat-controls">
+      <label for="kb-report">Rapport</label>
+      <select id="kb-report" onchange="onKbReportChange()">
+        <option value="samlet">Samlet placering</option>
+        <option value="varsler">Varsler</option>
+        <option value="lukkedage">Lukkedage</option>
+        <option value="vurderinger">Badestedsvurderinger</option>
+        <option value="datakvalitet">Datakvalitet</option>
+      </select>
+      <span id="kb-period-controls">
+        <label for="kb-period">Periode</label>
+        <select id="kb-period" onchange="onKbPeriodChange()">
+          <option value="today">I dag</option>
+          <option value="7d">Sidste 7 dage</option>
+          <option value="month">Måned</option>
+          <option value="quarter" selected>Sidste kvartal</option>
+          <option value="year">Sidste år</option>
+          <option value="custom">Brugerdefineret</option>
+        </select>
+        <input type="month" id="kb-month" style="display:none">
+        <span id="kb-custom-range" style="display:none">
+          <input type="date" id="kb-from">
+          <input type="date" id="kb-to">
+        </span>
+      </span>
+    </div>
+    <div id="kb-content">Indlæser…</div>
+  </div>
+
+  <div class="card">
+    <h2 id="create-card-title">Opret ny</h2>
+    <div class="sub" id="create-card-sub" style="margin-bottom:.9rem"></div>
+    <form id="form" onsubmit="return submitForm(event)">
+      <div class="field">
+        <label for="f-name" id="f-name-label">Navn</label>
+        <select id="f-name" required disabled>
+          <option value="" disabled selected>Indlæser…</option>
+        </select>
+        <div class="field-note" id="f-name-note"></div>
+      </div>
+      <div class="field">
+        <label for="f-days">Trial-længde (dage)</label>
+        <input type="number" id="f-days" required min="1" step="1" value="30">
+      </div>
+      <div class="field">
+        <label for="f-issued-by">Dit navn</label>
+        <input type="text" id="f-issued-by" required placeholder="Fx: Kresten">
+      </div>
+      <div class="field">
+        <label for="f-note">Note (valgfri, kun til internt brug)</label>
+        <input type="text" id="f-note" placeholder="Fx: sendt til jens@furesoe.dk">
+      </div>
+      <div class="field" id="f-logo-url-field">
+        <label for="f-logo-url">Logo-URL (valgfri — vises i overstyrings-banneret)</label>
+        <input type="url" id="f-logo-url" placeholder="https://...">
+      </div>
+      <!-- NYT (single login): valgfrit — giver adgang til, ved siden af
+           trial-linket, at logge ind direkte på /login med e-mail +
+           adgangskode. Begge felter skal enten udfyldes sammen eller begge
+           stå tomme (se tenant-admin.js's createTenant()). -->
+      <div class="field">
+        <label for="f-login-email">Login-e-mail (valgfri — gør adgangskode-login muligt på /login)</label>
+        <input type="email" id="f-login-email" placeholder="fx kontakt@eksempel.dk">
+      </div>
+      <div class="field">
+        <label for="f-password">Adgangskode (valgfri, kræver login-e-mail ovenfor)</label>
+        <input type="password" id="f-password" placeholder="Aftal med kontakten — gemmes kun hashet">
+        <div class="field-note">Sæt selv en midlertidig adgangskode og aftal den mundtligt/skriftligt med kontakten, eller lad stå tom og brug kun trial-linket.</div>
+      </div>
+      <button type="submit" id="submit-btn">Opret</button>
+    </form>
+    <div id="result"></div>
+    <div class="field-note" id="second-step-note" style="margin-top:.8rem;display:none"></div>
+  </div>
+
+  <div class="card">
+    <h2 id="existing-card-title">Log ind på en eksisterende</h2>
+    <div class="sub" id="existing-card-sub" style="margin-bottom:.9rem"></div>
+    <form id="tform" onsubmit="return submitTenantForm(event)">
+      <div class="field">
+        <label for="t-tenant" id="t-tenant-label">Vælg</label>
+        <select id="t-tenant" required>
+          <option value="" disabled selected>Indlæser…</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="t-days">Linket er gyldigt i (dage)</label>
+        <input type="number" id="t-days" required min="1" step="1" value="7">
+      </div>
+      <div class="field">
+        <label for="t-issued-by">Dit navn</label>
+        <input type="text" id="t-issued-by" required placeholder="Fx: Kresten">
+      </div>
+      <div class="field">
+        <label for="t-note">Note (valgfri, kun til internt brug)</label>
+        <input type="text" id="t-note" placeholder="Fx: demo til salgsmøde">
+      </div>
+      <button type="button" id="tlogin-btn" onclick="loginNowAsTenant()">🔑 Log ind nu</button>
+      <div style="height:.5rem"></div>
+      <button type="submit" id="tsubmit-btn" style="opacity:.8">Generér login-link (uden selv at logge ind)</button>
+    </form>
+    <div id="tresult"></div>
+  </div>
+</div>
+
+<script src="/admin-dashboard.js"></script>
+<script>
+// NYT (bruger-krav 2026-08-27 — "3 markeder blandes sammen, ikke
+// brugervenligt"): denne side viser ALTID ét og kun ét lands data —
+// countryCode er fast, injiceret server-side (server.js's GET /internal/
+// admin/:countryCode), ALDRIG klient-valgt her. En 'system'-bruger skifter
+// land via country-switcheren (til en anden URL, ikke en klient-side
+// tilstand) eller /internal/choose-country; en 'country'-bruger ser slet
+// ikke switcheren (kan kun se sit eget land, håndhævet server-side i alle
+// /internal/api/*-ruter nedenfor uanset hvad denne side viser).
+window.__COUNTRY_ADMIN__ = %%COUNTRY_ADMIN_JSON%%;
+const ctx = window.__COUNTRY_ADMIN__;
+initAdminDashboard({ containerId: 'admin-dashboard-root', country: ctx.countryCode });
+
+const COUNTRY_NAMES = { DK: 'Danmark', UK: 'United Kingdom', FR: 'France' };
+// "kommune" (DK) / "council" (UK) / "mairie" (FR) — samme term appen selv
+// bruger for den pågældende municipality-type, se fx councilAdmin.js/
+// mairieAdmin.js's egne navne.
+const ENTITY_LABEL = { DK: 'kommune', UK: 'council', FR: 'mairie' };
+const entityLabel = ENTITY_LABEL[ctx.countryCode] || 'municipality';
+
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+document.title = `${COUNTRY_NAMES[ctx.countryCode] || ctx.countryCode} — Administration`;
+document.getElementById('page-title').textContent = `🏛 ${COUNTRY_NAMES[ctx.countryCode] || ctx.countryCode}`;
+document.getElementById('page-sub').textContent = `Administration af ${entityLabel}-konti, trials og login-links for ${COUNTRY_NAMES[ctx.countryCode] || ctx.countryCode}.`;
+document.getElementById('create-card-title').textContent = `Opret ny ${entityLabel}`;
+document.getElementById('existing-card-title').textContent = `Log ind på en eksisterende ${entityLabel}`;
+document.getElementById('existing-card-sub').textContent = `Genererer et nyt, tidsbegrænset login-link til en ${entityLabel} der allerede findes — fx til en demo, support, eller fordi det oprindelige link er udløbet. Rører IKKE dens egne data eller status.`;
+document.getElementById('t-tenant-label').textContent = entityLabel.charAt(0).toUpperCase() + entityLabel.slice(1);
+
+// NYT (single login): kun 'system'-brugere kan se/skifte til andre lande —
+// en 'country'-bruger er allerede landet direkte på sit eget land (se
+// server.js's GET /internal/admin/:countryCode) og har intet at skifte til.
+if (ctx.staffRole === 'system') {
+  document.getElementById('country-switcher').innerHTML = Object.keys(COUNTRY_NAMES).map(code =>
+    `<a href="/internal/admin/${code}" class="${code === ctx.countryCode ? 'active' : ''}">${COUNTRY_NAMES[code]}</a>`
+  ).join('');
+}
+
+if (ctx.countryCode === 'DK') {
+  document.getElementById('benchmark-card').style.display = '';
+} else {
+  // NYT: logo_url virker teknisk set for ethvert land (tenantAdmin.
+  // createTenant() er ikke DK-specifik), men er kun nogensinde blevet
+  // brugt af dkvands overstyrings-banner (badested-overrides.js) — skjult
+  // for UK/FR, hvor ingen tilsvarende visning eksisterer endnu, for ikke at
+  // love en funktion der reelt ikke gør noget synligt der.
+  document.getElementById('f-logo-url-field').style.display = 'none';
+}
+
+// ── Kommune-benchmark — kun Danmark ─────────────────────────────────────────
+// Samme rapport-/periode-logik som admin-dashboard.html's Kommune-benchmark-
+// kort (se dens loadKommuneBenchmark()/kbRankTable()) — genimplementeret her
+// fremfor delt, da denne side IKKE har et tenant-scope at fremhæve "egen
+// kommune" med (window.__TENANT__ findes slet ikke her), og henter fra
+// /internal/api/kommune-benchmark (staff-session) i stedet for /admin/api/
+// kommune-benchmark (tenant-session).
+function onKbPeriodChange() {
+  const period = document.getElementById('kb-period').value;
+  document.getElementById('kb-month').style.display = period === 'month' ? '' : 'none';
+  document.getElementById('kb-custom-range').style.display = period === 'custom' ? '' : 'none';
+  if (period !== 'custom') loadKommuneBenchmark();
+}
+function onKbReportChange() {
+  const report = document.getElementById('kb-report').value;
+  document.getElementById('kb-period-controls').style.display = report === 'datakvalitet' ? 'none' : '';
+  loadKommuneBenchmark();
+}
+
+function kbRankTable(unitNote, list, key, rangKey) {
+  const sorted = [...list].sort((a, b) => a[rangKey] - b[rangKey]);
+  const rowsHtml = sorted.map(r => `
+    <tr><td>#${r[rangKey]}</td><td>${escHtml(r.kommuneNavn)}</td><td class="n">${r[key].toFixed(2)}</td></tr>`).join('');
+  return `
+    <div class="kb-unit-note">${escHtml(unitNote)}</div>
+    <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
+      <td>#</td><td>Kommune</td><td class="n">Indekseret</td>
+    </tr></thead><tbody>${rowsHtml}</tbody></table>`;
+}
+
+let kbLavNHtml = '';
+async function loadKommuneBenchmark() {
+  const el = document.getElementById('kb-content');
+  if (!el) return;
+  el.textContent = 'Indlæser…';
+
+  const report = document.getElementById('kb-report').value;
+  const qs = new URLSearchParams();
+  if (report !== 'datakvalitet') {
+    const period = document.getElementById('kb-period').value;
+    if (period === 'custom') {
+      const from = document.getElementById('kb-from').value;
+      const to   = document.getElementById('kb-to').value;
+      if (!from || !to) {
+        el.innerHTML = '<div class="hist-warning">Vælg både fra- og til-dato for en brugerdefineret periode.</div>';
+        return;
+      }
+      qs.set('from', from);
+      qs.set('to', to);
+    } else {
+      qs.set('period', period);
+      if (period === 'month') qs.set('month', document.getElementById('kb-month').value);
+    }
+  } else {
+    qs.set('period', 'quarter'); // ligegyldigt for datakvalitet
+  }
+
+  try {
+    const resp = await fetch(`/internal/api/kommune-benchmark?${qs.toString()}`, { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      el.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke hente kommune-benchmark.')}</div>`;
+      return;
+    }
+
+    kbLavNHtml = data.lavN.length
+      ? `<h3>For få badesteder til sammenligning (under 3)</h3><div style="font-size:.82rem;color:var(--ink-soft)">${data.lavN.map(r => `${escHtml(r.kommuneNavn)} (${r.badestedCount})`).join(' · ')}</div>`
+      : '';
+
+    if (report === 'datakvalitet') {
+      const dqRows = data.datakvalitet.map(d => `
+        <tr><td>${escHtml(d.kommuneNavn)}</td><td class="n">${Math.round(d.andel * 100)}%</td><td class="n">${d.reeltMaalt} / ${d.udloebPunkter}</td></tr>`).join('');
+      el.innerHTML = `
+        <div class="kb-unit-note">Andel af kommunens PULS-udløbspunkter med reelt målt data (ikke estimeret/ingen data). Vises SEPARAT fra de øvrige rapporter, indgår ikke i samlet placering.</div>
+        <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
+          <td>Kommune</td><td class="n">Andel</td><td class="n">Målt / i alt</td>
+        </tr></thead><tbody>${dqRows}</tbody></table>`;
+      return;
+    }
+
+    if (report === 'samlet') {
+      const N = data.hovedranking.length;
+      const sorted = [...data.hovedranking].sort((a, b) => a.samletRang - b.samletRang);
+      const rowsHtml = sorted.map(r => `
+        <tr><td>#${Math.round(r.samletRang * 10) / 10}</td><td>${escHtml(r.kommuneNavn)}</td>
+          <td class="n">#${r.rangVarsler}</td><td class="n">#${r.rangLukkedage}</td><td class="n">#${r.rangVurderinger}</td></tr>`).join('');
+      el.innerHTML = `<div class="kb-unit-note">${N} kommuner i hovedrangeringen. Ligevægtet gennemsnit af rangene i de tre rapporter til højre — lavest samlet tal er bedst.</div>
+        <table class="kstat-table"><thead><tr style="color:var(--ink-soft);font-size:.7rem;text-transform:uppercase;letter-spacing:.05em">
+          <td>Samlet</td><td>Kommune</td><td class="n">Varsler</td><td class="n">Lukkedage</td><td class="n">Vurderinger</td>
+        </tr></thead><tbody>${rowsHtml}</tbody></table>` + kbLavNHtml;
+      return;
+    }
+
+    const REPORTS = {
+      varsler:      ['Risikovarsler pr. badested i perioden — færrest indekseret = bedst placering.', 'varslerIndekseret', 'rangVarsler'],
+      lukkedage:    ['Dage med mindst ét lukket/varslet badested, pr. badested i perioden — færrest indekseret = bedst placering.', 'lukkedageIndekseret', 'rangLukkedage'],
+      vurderinger:  ['Indsendte borger-vurderinger pr. badested i perioden — flest indekseret = bedst placering (modsat retning af Varsler/Lukkedage).', 'vurderingerIndekseret', 'rangVurderinger'],
+    };
+    const [unitNote, key, rangKey] = REPORTS[report];
+    el.innerHTML = kbRankTable(unitNote, data.hovedranking, key, rangKey) + kbLavNHtml;
+  } catch (e) {
+    el.innerHTML = '<div class="err">Kunne ikke hente kommune-benchmark — tjek din forbindelse.</div>';
+  }
+}
+if (ctx.countryCode === 'DK') loadKommuneBenchmark();
+
+// ── Navne-vælger til "Opret ny"-formularen ──────────────────────────────────
+// DK: badested-matchet kommuneliste (se server.js's GET /internal/api/
+// kommuner for hvorfor DENNE kilde, ikke fri tekst). UK/FR: samme princip,
+// men hentet CROSS-ORIGIN fra det pågældende produkts EGEN reference-data
+// (GET /api/local-authorities dér — ny, dedikeret, CORS-scoped til lige
+// netop dette site, se den rutes eget filhoved for begrundelsen) i stedet
+// for duplikeret/vedligeholdt her i dkvand.
+const LOCAL_AUTHORITY_SOURCE_BASE_URL = { UK: 'https://ukwater.fly.dev', FR: 'https://frwater.fly.dev' };
+
+async function loadNameOptions() {
+  const sel = document.getElementById('f-name');
+  if (ctx.countryCode === 'DK') {
+    document.getElementById('f-name-label').textContent = 'Kommune';
+    document.getElementById('f-name-note').textContent = 'Listen kommer direkte fra badevandsdataen, så det valgte navn altid matcher og finder kommunens badesteder.';
+    try {
+      const resp = await fetch('/internal/api/kommuner');
+      const list = await resp.json();
+      if (!resp.ok || !Array.isArray(list) || list.length === 0) {
+        sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+        return;
+      }
+      sel.innerHTML = '<option value="" disabled selected>Vælg…</option>' +
+        list.map(k => `<option value="${escHtml(k.name)}">${escHtml(k.name)} (${k.badestedCount} badested${k.badestedCount === 1 ? '' : 'er'})</option>`).join('');
+      sel.disabled = false;
+    } catch (e) {
+      sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente kommuneliste</option>';
+    }
+    return;
+  }
+
+  document.getElementById('f-name-label').textContent = 'Navn';
+  document.getElementById('f-name-note').textContent = 'Kræver et EFTERFØLGENDE trin i det pågældende produkts eget repo (fx scripts/create-council-account.js --id=<id>) for at koble lokal områdedækning på — dette opretter kun selve kontoen/login-linket.';
+  document.getElementById('second-step-note').style.display = '';
+  document.getElementById('second-step-note').innerHTML = `Efter oprettelse: kør produktets egen scripts/create-${entityLabel}-account.js (eller tilsvarende) med <code>--id=&lt;id&gt;</code> for at koble lokal områdedækning på.`;
+
+  const baseUrl = LOCAL_AUTHORITY_SOURCE_BASE_URL[ctx.countryCode];
+  if (!baseUrl) { sel.innerHTML = '<option value="" disabled selected>Ukendt land</option>'; return; }
+  try {
+    const resp = await fetch(`${baseUrl}/api/local-authorities`);
+    const list = await resp.json();
+    if (!resp.ok || !Array.isArray(list) || list.length === 0) {
+      sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente listen — prøv igen</option>';
+      return;
+    }
+    sel.innerHTML = '<option value="" disabled selected>Vælg…</option>' +
+      list.map(a => `<option value="${escHtml(a.name)}">${escHtml(a.name)} (${a.bathingSiteCount} badested${a.bathingSiteCount === 1 ? '' : 'er'})</option>`).join('');
+    sel.disabled = false;
+  } catch (e) {
+    sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente listen — prøv igen</option>';
+  }
+}
+
+function tenantStatusLabel(t) {
+  if (t.status === 'active') return 'aktiv';
+  if (t.status === 'suspended') return 'suspenderet';
+  const expires = t.trial_expires_at ? new Date(t.trial_expires_at).toLocaleDateString('da-DK') : '?';
+  return `trial, udløber ${expires}`;
+}
+async function loadTenantOptions() {
+  const sel = document.getElementById('t-tenant');
+  try {
+    // NYT (bruger-krav — ét lands data ad gangen): scoped til DENNE sides
+    // land — se server.js's GET /internal/api/tenants, som for en
+    // 'country'-bruger alligevel altid tvinger deres eget land uanset denne
+    // parameter.
+    const resp = await fetch(`/internal/api/tenants?country=${encodeURIComponent(ctx.countryCode)}`);
+    const list = await resp.json();
+    if (!resp.ok || !Array.isArray(list) || list.length === 0) {
+      sel.innerHTML = '<option value="" disabled selected>Ingen fundet</option>';
+      return;
+    }
+    sel.innerHTML = '<option value="" disabled selected>Vælg…</option>' +
+      list.map(t => `<option value="${escHtml(t.id)}">${escHtml(t.name)} — ${escHtml(tenantStatusLabel(t))}</option>`).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="" disabled selected>Kunne ikke hente listen</option>';
+  }
+}
+
+loadNameOptions();
+loadTenantOptions();
+
+// NYT (single auth-løsning): viser hvem der er logget ind + en log ud-knap.
+async function loadStaffIdentity() {
+  const el = document.getElementById('staff-identity');
+  try {
+    const resp = await fetch('/internal/api/me');
+    if (!resp.ok) return;
+    const staff = await resp.json();
+    const scope = staff.role === 'system' ? 'system (alle lande)' : `country (${escHtml(staff.countryCode)})`;
+    el.innerHTML = `Logget ind som ${escHtml(staff.email)} — ${scope} · <a href="#" onclick="logout(); return false;" style="color:var(--accent)">Log ud</a>`;
+  } catch (e) { /* stille fejl — kun en visuel bekvemmelighed */ }
+}
+async function logout() {
+  await fetch('/internal/logout', { method: 'POST' });
+  location.href = '/internal/login';
+}
+loadStaffIdentity();
+
+// NYT (bruger-ønske 2026-08-18 — direkte login uden at skulle kopiere/åbne
+// et link separat): udtrukket fælles kald, genbrugt af BÅDE
+// submitTenantForm() (viser linket som tekst — til at SENDE videre) og
+// loginNowAsTenant() (navigerer selv til det med det samme — til at LOGGE
+// IND HER OG NU). Begge bruger PRÆCIS samme underliggende /internal/api/
+// tenants/:id/login-link — kun hvad der sker med det returnerede loginUrl
+// adskiller de to.
+async function fetchTenantLoginLink({ tenantId, days, issuedBy, note }) {
+  const resp = await fetch(`/internal/api/tenants/${encodeURIComponent(tenantId)}/login-link`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ days, issuedBy, note: note || null }),
+  });
+  const data = await resp.json();
+  return { ok: resp.ok, data };
+}
+
+function readTenantFormFields() {
+  const sel = document.getElementById('t-tenant');
+  return {
+    sel,
+    selectedName: sel.options[sel.selectedIndex]?.textContent || '',
+    tenantId: sel.value,
+    days: Number(document.getElementById('t-days').value),
+    issuedBy: document.getElementById('t-issued-by').value.trim(),
+    note: document.getElementById('t-note').value.trim(),
+  };
+}
+
+async function submitTenantForm(e) {
+  e.preventDefault();
+  const { selectedName, tenantId, days, issuedBy, note } = readTenantFormFields();
+  if (!confirm(`Generér et nyt login-link til "${selectedName}"?`)) return false;
+
+  const btn = document.getElementById('tsubmit-btn');
+  const resultEl = document.getElementById('tresult');
+  btn.disabled = true;
+  btn.textContent = 'Genererer…';
+  resultEl.innerHTML = '';
+  try {
+    const { ok, data } = await fetchTenantLoginLink({ tenantId, days, issuedBy, note });
+    if (!ok) {
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke generere login-link.')}</div>`;
+      return;
+    }
+    resultEl.innerHTML = `
+      <div class="result">
+        ✓ Nyt login-link til <strong>${escHtml(data.tenant.name)}</strong> — gyldigt til ${new Date(data.tenant.trialExpiresAt).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' })}.
+        <span class="result-url">${escHtml(data.loginUrl)}</span>
+      </div>
+    `;
+    document.getElementById('t-issued-by').value = '';
+    document.getElementById('t-note').value = '';
+  } catch (e) {
+    resultEl.innerHTML = '<div class="err">Kunne ikke generere login-link — tjek din forbindelse.</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Generér login-link (uden selv at logge ind)';
+  }
+  return false;
+}
+
+// NYT (bruger-ønske 2026-08-18): type="button", IKKE en form-submit — kalder
+// derfor selv form.reportValidity() for at genbruge SAMME native HTML5-
+// validering (required-felter osv.) som "Generér login-link" ellers ville
+// have fået gratis via <form onsubmit>. På succes navigeres BROWSEREN selv
+// direkte til loginUrl'et — /admin/trial/:token forbruger tokenet og
+// redirecter til enten /admin/dashboard (DK) eller en SSO-håndsrækning til
+// det rigtige produkt (UK/FR, se sso-handoff.js) — samme mekanisme uanset
+// hvilket land denne side viser.
+async function loginNowAsTenant() {
+  const form = document.getElementById('tform');
+  if (!form.reportValidity()) return;
+  const { selectedName, tenantId, days, issuedBy, note } = readTenantFormFields();
+  if (!confirm(`Log ind nu som "${selectedName}"? Du forlader administrationssiden.`)) return;
+
+  const btn = document.getElementById('tlogin-btn');
+  const resultEl = document.getElementById('tresult');
+  btn.disabled = true;
+  btn.textContent = 'Logger ind…';
+  resultEl.innerHTML = '';
+  try {
+    const { ok, data } = await fetchTenantLoginLink({ tenantId, days, issuedBy, note });
+    if (!ok) {
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke logge ind.')}</div>`;
+      btn.disabled = false;
+      btn.textContent = '🔑 Log ind nu';
+      return;
+    }
+    window.location.href = data.loginUrl;
+  } catch (e) {
+    resultEl.innerHTML = '<div class="err">Kunne ikke logge ind — tjek din forbindelse.</div>';
+    btn.disabled = false;
+    btn.textContent = '🔑 Log ind nu';
+  }
+}
+
+async function submitForm(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submit-btn');
+  const resultEl = document.getElementById('result');
+  const name = document.getElementById('f-name').value.trim();
+  const days = Number(document.getElementById('f-days').value);
+  const issuedBy = document.getElementById('f-issued-by').value.trim();
+  const note = document.getElementById('f-note').value.trim();
+  const logoUrl = document.getElementById('f-logo-url').value.trim();
+  const loginEmail = document.getElementById('f-login-email').value.trim();
+  const password = document.getElementById('f-password').value;
+
+  if ((loginEmail && !password) || (password && !loginEmail)) {
+    resultEl.innerHTML = '<div class="err">Login-e-mail og adgangskode skal enten begge udfyldes, eller begge stå tomme.</div>';
+    return false;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Opretter…';
+  resultEl.innerHTML = '';
+  try {
+    const resp = await fetch('/internal/api/create-trial', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name, days, issuedBy,
+        note: note || null,
+        logoUrl: logoUrl || null,
+        loginEmail: loginEmail || null,
+        password: password || null,
+        // NYT: siden viser ét fast land — samme land sendes altid, uanset
+        // hvad en 'system'-bruger måtte kunne finde på at pille ved i devtools;
+        // server.js's POST /internal/api/create-trial håndhæver desuden en
+        // 'country'-brugers eget land uafhængigt af dette felt.
+        countryCode: ctx.countryCode,
+      }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      resultEl.innerHTML = `<div class="err">${escHtml(data.error || 'Kunne ikke oprette.')}</div>`;
+      return;
+    }
+    resultEl.innerHTML = `
+      <div class="result">
+        ✓ Oprettet: <strong>${escHtml(data.tenant.name)}</strong> — udløber ${new Date(data.tenant.trialExpiresAt).toLocaleDateString('da-DK', { year: 'numeric', month: 'long', day: 'numeric' })}.
+        <br>Send login-linket herunder til kontakten (vises kun denne ene gang):
+        <span class="result-url">${escHtml(data.loginUrl)}</span>
+      </div>
+    `;
+    document.getElementById('form').reset();
+    document.getElementById('f-days').value = '30';
+    loadTenantOptions();
+  } catch (e) {
+    resultEl.innerHTML = '<div class="err">Kunne ikke oprette — tjek din forbindelse.</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Opret';
+  }
+  return false;
+}
+</script>
+</body>
+</html>

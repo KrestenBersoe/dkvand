@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overløb — live kort</title>
+<meta name="robots" content="noindex, nofollow">
+<!-- NYT (bruger-ønske 2026-08-19) — bevidst en SEPARAT, chrome-løs fil, ikke
+     en "?embed=1"-parameter på admin-dashboard.html: skal kunne indlejres i
+     en <iframe> på en ekstern (kommunens egen) hjemmeside, uden dashboardets
+     faner/kort/øvrige indhold. Samme Leaflet-version (CDN) som resten af
+     appen. -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<style>
+  :root {
+    --paper: #12202a; --ink: #f0ede6; --ink-soft: #9fb0bb; --border: rgba(255,255,255,.08);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--paper); color: var(--ink); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #wrap { display: flex; flex-direction: column; height: 100%; }
+  #header { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .5rem .8rem; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  #header h1 { font-size: .88rem; margin: 0; font-weight: 600; }
+  #totals { display: flex; gap: .7rem; font-size: .78rem; }
+  #totals span { display: flex; align-items: center; gap: .3rem; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+  #ovl-map { flex: 1; min-height: 0; }
+  #err { padding: .8rem; color: #e2694f; font-size: .85rem; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="header">
+    <h1 id="ovl-embed-title">🏛 Overløb</h1>
+    <div id="totals">
+      <span><span class="dot" style="background:#c84b1f"></span><span id="ovl-t-roed">–</span> røde</span>
+      <span><span class="dot" style="background:#d4a020"></span><span id="ovl-t-gul">–</span> gule</span>
+      <span><span class="dot" style="background:#2d7d4f"></span><span id="ovl-t-groen">–</span> grønne</span>
+    </div>
+  </div>
+  <div id="err"></div>
+  <div id="ovl-map"></div>
+</div>
+
+<script>
+// NYT (bruger-ønske 2026-08-19) — pladsholderen erstattes SERVER-SIDE af
+// GET /admin/overloeb-embed (server.js), ÉN gang, KUN på linjen nedenfor —
+// se admin-dashboard.html's tilsvarende %%TENANT_JSON%%-kommentar for
+// hvorfor pladsholderen aldrig må optræde i klartekst andre steder i denne
+// fil (en tidligere produktionsfejl i den anden fil, samme risikoklasse).
+const EMBED = %%EMBED_JSON%%;
+
+function escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+document.getElementById('ovl-embed-title').textContent = `🏛 ${EMBED.tenantName} — Overløb`;
+
+const OVL_BUCKET_COLOR = { roed: '#c84b1f', gul: '#d4a020', groen: '#2d7d4f', lukket: '#3a3a3a', 'ingen-data': '#1a6faf' };
+const OVL_BUCKET_LABEL = { roed: 'Rød', gul: 'Gul', groen: 'Grøn', lukket: 'Lukket', 'ingen-data': 'Ingen data' };
+const OVL_TILE_SERVER_URL = 'https://tiles.ditbadevand.dk/styles/basic/{z}/{x}/{y}.png';
+
+let ovlMap = null, ovlBadestedLayer = null, ovlUdloebLayer = null;
+let ovlBoundsFitted = false;
+
+function ensureOvlMap() {
+  if (ovlMap) return;
+  ovlMap = L.map('ovl-map', { scrollWheelZoom: false }).setView([56.0, 10.5], 8);
+  L.tileLayer(OVL_TILE_SERVER_URL, {
+    attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    maxZoom: 19, maxNativeZoom: 14,
+  }).addTo(ovlMap);
+  ovlBadestedLayer = L.layerGroup().addTo(ovlMap);
+  ovlUdloebLayer = L.layerGroup().addTo(ovlMap);
+}
+
+async function loadOverloebStatus() {
+  ensureOvlMap();
+  try {
+    const resp = await fetch(`/admin/api/overloeb-status-embed?token=${encodeURIComponent(EMBED.token)}&horizon=nu`, { cache: 'no-store' });
+    const data = await resp.json();
+    if (!resp.ok) {
+      document.getElementById('err').textContent = data.error || 'Kunne ikke hente overløbsstatus.';
+      return;
+    }
+    document.getElementById('err').textContent = '';
+    renderOverloeb(data);
+  } catch (e) {
+    document.getElementById('err').textContent = 'Kunne ikke hente overløbsstatus — tjek forbindelsen.';
+  }
+}
+
+function renderOverloeb(data) {
+  document.getElementById('ovl-t-roed').textContent  = data.totals.roed;
+  document.getElementById('ovl-t-gul').textContent   = data.totals.gul;
+  document.getElementById('ovl-t-groen').textContent = data.totals.groen;
+
+  ovlBadestedLayer.clearLayers();
+  ovlUdloebLayer.clearLayers();
+  const bounds = [];
+
+  for (const b of data.badesteder) {
+    if (b.lat == null || b.lng == null) continue;
+    bounds.push([b.lat, b.lng]);
+    const color = OVL_BUCKET_COLOR[b.bucket] || OVL_BUCKET_COLOR['ingen-data'];
+    L.circleMarker([b.lat, b.lng], { radius: 8, fillColor: color, color: '#fff', weight: 2, fillOpacity: 0.9 })
+      .bindTooltip(`<strong>🏖 ${escHtml(b.navn)}</strong><br>${escHtml(OVL_BUCKET_LABEL[b.bucket] || b.bucket)}`, { sticky: true })
+      .addTo(ovlBadestedLayer);
+  }
+
+  for (const u of data.udloeb) {
+    if (u.lat == null || u.lng == null) continue;
+    bounds.push([u.lat, u.lng]);
+    const color = OVL_BUCKET_COLOR[u.bucket] || OVL_BUCKET_COLOR['ingen-data'];
+    const typeLabel = u.isWastewater ? 'Kloak' : 'Regnvand';
+    const riskPct = u.risk != null ? Math.round(u.risk * 100) + '%' : 'ingen data';
+    L.circleMarker([u.lat, u.lng], { radius: 4, fillColor: color, color: 'rgba(255,255,255,.4)', weight: 1, fillOpacity: 0.85 })
+      .bindTooltip(`<strong>🚰 ${escHtml(u.navn)}</strong><br>${escHtml(typeLabel)} · ${escHtml(OVL_BUCKET_LABEL[u.bucket] || u.bucket)} (${riskPct})`, { sticky: true })
+      .addTo(ovlUdloebLayer);
+
+    if (u.bucket === 'gul' || u.bucket === 'roed') {
+      L.circleMarker([u.lat, u.lng], {
+        radius: 12, fillOpacity: 0, weight: 2, dashArray: '4,4',
+        color: u.bucket === 'roed' ? '#ff6040' : '#f0c040',
+      }).addTo(ovlUdloebLayer);
+    }
+  }
+
+  if (!ovlBoundsFitted && bounds.length > 0) {
+    ovlMap.fitBounds(bounds, { padding: [24, 24], maxZoom: 12 });
+    ovlBoundsFitted = true;
+  }
+}
+
+// NYT (bruger-krav: "igen med en live socketforbindelse") — samme
+// content-frie SSE-ping-mønster som admin-dashboard.html's dashboard-fane,
+// blot token-autentificeret i stedet for cookie-autentificeret. Genopretter
+// selv forbindelsen ved fejl/afbrydelse (native EventSource-adfærd).
+const ovlEventSource = new EventSource(`/admin/api/overloeb-stream-embed?token=${encodeURIComponent(EMBED.token)}`);
+ovlEventSource.addEventListener('overloeb-updated', () => loadOverloebStatus());
+
+loadOverloebStatus();
+</script>
+</body>
+</html>
