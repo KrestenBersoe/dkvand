@@ -1187,6 +1187,35 @@
      tilstand findes længere i stylesheet'et overhovedet.
   */
 
+  /* ═══ .layer-chip — kompakt vandret knap-række til risiko-varmekortene
+     (Bakt./Viral/Alger), samme visuelle mønster som ukwater/frwater's
+     "RISK HEATMAPS"-række øverst i lagvælgeren, i modsætning til de
+     fuldbredde stablede knapper i "Lag"-gruppen nedenfor. Arver stadig
+     .layer-btn's til/fra-farvelogik (setLayerBtnState() sætter inline
+     style uafhængigt af klasse) — kun layout (display/width/margin)
+     overstyres her, med !important for pålideligt at vinde over
+     .lag-group .layer-btn's fuldbredde-regel (samme specificitet,
+     kilde-rækkefølge alene er for skrøbeligt at stole på). ═══ */
+  .lag-chip-row {
+    display: flex;
+    gap: .4rem;
+    margin-bottom: .3rem;
+  }
+  .layer-chip {
+    display: flex !important;
+    width: auto !important;
+    flex: 1 1 0;
+    min-width: 0;
+    align-items: center;
+    justify-content: center;
+    gap: .25rem;
+    text-align: center;
+    font-size: .68rem;
+    padding: .42rem .3rem !important;
+    margin-bottom: 0 !important;
+    border-radius: 8px;
+  }
+
   /* ── Loading overlay ─────────────────────────────────────────────────────── */
   #loader {
     position: absolute;
@@ -2123,18 +2152,20 @@
       <button class="lag-close" onclick="toggleLag()" title="Luk" aria-label="Luk">✕</button>
     </div>
     <div class="lag-group">
-      <div class="lag-group-title">Referencelag</div>
-      <button class="layer-btn" id="btn-vp3bade" aria-pressed="true"  onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
-      <button class="layer-btn" id="btn-vp3overloeb" aria-pressed="false" onclick="toggleVP3Overloeb()">🔵🟤 Overløb</button>
-      <button class="layer-btn" id="btn-vandlobdir" aria-pressed="false" onclick="toggleVandlobDir()">🧭 Vandløbsretning</button>
-      <button class="layer-btn" id="btn-vp3kyst" aria-pressed="false" onclick="toggleVP3Kyst()">🌊 Kystvande</button>
-      <button class="layer-btn" id="btn-currents" aria-pressed="false" onclick="toggleCurrents()">〰 Strøm</button>
+      <div class="lag-group-title">Risikovarmekort</div>
+      <div class="lag-chip-row">
+        <button class="layer-btn layer-chip" id="btn-heat"  aria-pressed="false" onclick="toggleHeat()" title="Bakterielt kort">🌡 Bakt.</button>
+        <button class="layer-btn layer-chip" id="btn-viral" aria-pressed="false" onclick="toggleViral()" title="Viralt kort">🧬 Viral</button>
+        <button class="layer-btn layer-chip" id="btn-algae" aria-pressed="false" onclick="toggleAlgae()" title="Algerisiko">🌿 Alger</button>
+      </div>
     </div>
     <div class="lag-group">
-      <div class="lag-group-title">Risikolag</div>
-      <button class="layer-btn" id="btn-heat"  aria-pressed="false" onclick="toggleHeat()">🌡 Bakterielt kort</button>
-      <button class="layer-btn" id="btn-viral" aria-pressed="false" onclick="toggleViral()">🧬 Viralt kort</button>
-      <button class="layer-btn" id="btn-algae" aria-pressed="false" onclick="toggleAlgae()">🌿 Algerisiko</button>
+      <div class="lag-group-title">Lag</div>
+      <button class="layer-btn" id="btn-vp3bade" aria-pressed="true"  onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
+      <button class="layer-btn" id="btn-vp3overloeb" aria-pressed="false" onclick="toggleVP3Overloeb()">🔵🟤 Overløb</button>
+      <button class="layer-btn" id="btn-vp3kyst" aria-pressed="false" onclick="toggleVP3Kyst()">🌊 Kystvande</button>
+      <button class="layer-btn" id="btn-vandlobdir" aria-pressed="false" onclick="toggleVandlobDir()">🧭 Vandløbsretning</button>
+      <button class="layer-btn" id="btn-currents" aria-pressed="false" onclick="toggleCurrents()">〰 Strøm</button>
     </div>
   </div>
 </div>
@@ -4464,10 +4495,19 @@ function loadFromEmbedded() {
   // PULS_DATA format: { a: [authorities], w: [waterAreas], d: rows }
   // Row: [lat, lng, name, authIdx, areaIdx, volumeM3, eventsPerYear|null,
   //       qualityCode, outfallId, reducedArea, type, sewerStructure,
-  //       latestDischargeYear, thresholdMm|null]
+  //       latestDischargeYear, cod, ..., thresholdMm|null (24)]
   // qualityCode: 0=real, 1=verified zero, 2=imputed from volume, 3=no data
-  // thresholdMm(13): udløbs-specifik empirisk nedbørstærskel (mm), eller null
+  // thresholdMm(24): udløbs-specifik empirisk nedbørstærskel (mm), eller null
   // — se scripts/merge-puls-thresholds.js og computeIntensityFactor() ovenfor.
+  // RETTET (2026-09-01 — kritisk databug, bruger-rapporteret: "tærskel på
+  // 1.561mm"): læste hidtil row[13], som update-puls.js SIDEN 2026-08-20 har
+  // genbrugt til et helt andet felt (cod, kemisk iltforbrug, typisk 0-1000+)
+  // — server-siden (risk-model.js) blev allerede rettet til row[24] samme
+  // dag, men denne klient-side kopi af samme parsing blev ved et uheld
+  // aldrig opdateret til at matche, og læste derfor reelt cod-værdier som om
+  // de var mm-nedbørstærskler i alle risikoberegninger siden. Verificeret
+  // direkte i puls-data.json: row[13] ligger i 0-1000+-intervallet (cod),
+  // row[24] i 0-50mm-intervallet (reelle tærskler).
   const { a: auths, w: areas, d: rows } = PULS_DATA;
   // RETTET (bruger-rapporteret 2026-08-11 — "F-U9 i Furesø" åbnede et
   // udløb i Odense ved klik): id (rækkeindekset) er FORTSAT grundlaget for
@@ -4489,7 +4529,7 @@ function loadFromEmbedded() {
   return rows.map((r, i) => {
     const [lat, lng, name, authIdx, areaIdx, volumeM3, eventsPerYear, quality] = r;
     const outfallId = (r[8] != null && r[8] !== '') ? String(r[8]) : null;
-    const thresholdMm = r[13] ?? null; // udløbs-specifik tærskel, se scripts/merge-puls-thresholds.js
+    const thresholdMm = r[24] ?? null; // udløbs-specifik tærskel, se scripts/merge-puls-thresholds.js
     const ev  = eventsPerYear !== null ? eventsPerYear : 0;
     const vol = volumeM3 > 0 ? volumeM3 : 0;
     return {
