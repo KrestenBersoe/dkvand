@@ -3185,7 +3185,19 @@ async function refreshAllCachedResources() {
 }
 
 // ── PULS cache helpers ───────────────────────────────────────────────────────
-const PULS_CACHE_KEY = 'puls_v3';  // bumped: TTL changed to 14 days  // bumped: volume now from udledning only
+// RETTET (2026-09-01 — bruger-rapporteret: ALLE tjekkede udløb viste 25,0mm
+// tærskel, uanset udløb, selvom serverens puls-data.json og parsing-koden
+// (row[24]) begge var korrekte og bekræftet direkte via SSH): klienter der
+// havde cachet PULS_DATA i IndexedDB (14 dages TTL, se TTL_PULS_MS) FØR
+// thresholdMm-feltet overhovedet blev tilføjet til datasættets skema
+// (RETTET 2026-08-20, se computeIntensityFactor()) blev ved med at bruge
+// deres gamle, kortere rækker (uden felt 24) helt frem til TTL'en naturligt
+// udløb — op til 14 dage efter at både data og kode var rettet server-side.
+// Frisk parsing-kode ændrer intet, hvis den rå, cachede rækkedata den kører
+// på stadig mangler feltet. Nøglen bumpes derfor her, samme mønster som
+// tidligere skema-ændringer på denne linje — tvinger EN gang en frisk
+// netværks-hentning for enhver klient med en cache ældre end i dag.
+const PULS_CACHE_KEY = 'puls_v4';  // bumped: thresholdMm(24) skema — se RETTET-note ovenfor
 
 
 
