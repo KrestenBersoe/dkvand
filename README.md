@@ -99,3 +99,16 @@ PULS opdateres årligt. Hent nye filudtræk fra
 `arealdata.miljoeportal.dk`, regenerér `puls-data.json` (samkør stamdata + udledning
 på navn, omregn ikke volumen — behold m³), og erstat filen. Klienter henter den nye
 version automatisk når deres 1-års cache udløber, eller med ctrl+shift+R.
+
+**OBS:** `update-puls.js`'s `TYPENAME_STAMDATA` (`puls:rbu_punkt`) findes ikke
+længere på WFS-endpointet — GetCapabilities lister i dag kun
+`puls:Regnbetingedeudloeb`, med et andet feltskema (engelske PascalCase-felter,
+intet vandområde/recipient-felt). Scriptets `--out`-standardsti
+(`path.join(__dirname, '..', 'puls-data.json')`) peger desuden én mappe for
+højt op, hvis scriptet køres fra repo-roden (ikke en `scripts/`-undermappe).
+Begge dele skal rettes, før scriptet kan køre igen — kør altid med
+`--dry-run` først og sammenlign optællinger med den nuværende fil.
+
+Efter en stamdata-regenerering: kør `node add-puls-outlet-type.js` for at
+genindsætte udløbstypen (RBU regn/Kloak — Miljøportalens `Type`-felt) i hver
+række; se scriptets egen header for hvordan matchingen foregår.

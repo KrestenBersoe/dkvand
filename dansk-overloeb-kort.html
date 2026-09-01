@@ -108,10 +108,11 @@
     50%      { opacity: .2; }
   }
 
-  /* Aktiv/høj-risiko RBU-ring — "radar-ping" udvidende-og-udtonende ring om
-     RBU-punkter med høj overløbsrisiko (se colorRbuByRisk()). Samme mønster
-     som ukwater's activeOutletRingLayer. Rigtige SVG-circleMarkers (ikke
-     canvas), da canvas-figurer ikke kan CSS-animeres. */
+  /* Aktiv/høj-risiko udløbs-ring — "radar-ping" udvidende-og-udtonende ring
+     om RBU regn/Kloak-udløb i høj risiko (se renderMap()'s brug af
+     regnActiveRingLayer/kloakActiveRingLayer). Samme mønster som ukwater's
+     activeOutletRingLayer. Rigtige SVG-circleMarkers (ikke canvas), da
+     canvas-figurer ikke kan CSS-animeres. */
   @keyframes outlet-ring-pulse {
     0%   { transform: scale(1); opacity: .85; }
     100% { transform: scale(2.4); opacity: 0; }
@@ -1231,6 +1232,7 @@
     <div class="leg-row"><div class="leg-swatch" style="background:#1a6faf;opacity:.5;border:1px solid #1a6faf"></div> Kystvande (VP3)</div>
     <div class="leg-row"><div class="leg-swatch" style="background:#f0c040;opacity:.5;border:1px solid #e6a817"></div> Badevandsområder</div>
     <div class="leg-row"><div class="leg-swatch" style="background:#c0392b;border-radius:50%"></div> RBU VP3-punkter</div>
+    <div class="leg-row"><div class="leg-swatch" style="border:2px solid #c84b1f;border-radius:50%;background:transparent"></div> Animeret ring: udløb i høj risiko (RBU regn/Kloak)</div>
     <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
     <div class="leg-row" style="font-size:.65rem; color:rgba(240,237,230,.4)" id="leg-tau">
       Bakteriel τ: — · Viral τ: —
@@ -1260,6 +1262,8 @@
     </div>
     <div class="lag-group">
       <div class="lag-group-title">Risikolag</div>
+      <button class="ctrl-btn" id="btn-regn"  onclick="toggleRegn()">🌧 RBU regn</button>
+      <button class="ctrl-btn" id="btn-kloak" onclick="toggleKloak()">🚽 RBU Kloak</button>
       <button class="ctrl-btn" id="btn-heat"  onclick="toggleHeat()">🌡 Bakterielt kort</button>
       <button class="ctrl-btn" id="btn-viral" onclick="toggleViral()">🧬 Viralt kort</button>
       <button class="ctrl-btn" id="btn-algae" onclick="toggleAlgae()">🌿 Algerisiko</button>
@@ -1354,12 +1358,12 @@
 
       <section id="doc-kortlag" class="doc-section">
         <h2>Kortlag</h2>
-        <p>Kortet indeholder syv toggelbare lag under Danmark-fanen:</p>
+        <p>Kortet indeholder otte toggelbare lag under Danmark-fanen:</p>
         <table class="doc-table">
           <tr><th>Lag</th><th>Indhold</th><th>Farvelogik</th></tr>
           <tr><td>🌡 Bakterielt kort</td><td>Varmekort over alle 21.556 udløbspunkter</td><td>Grøn → amber → rød efter bakteriel risikoscore</td></tr>
           <tr><td>🧬 Viralt kort</td><td>Varmekort med separat viral risikomodel</td><td>Lilla gradient — vira overlever markant længere om vinteren</td></tr>
-          <tr><td>📍 Udløbspunkter</td><td>Individuelle PULS-udløb som cirkler</td><td>Radius og farve efter risikoniveau; grå/stiplet ved ingen data</td></tr>
+          <tr><td>🌧 RBU regn / 🚽 RBU Kloak</td><td>Individuelle PULS-udløb som cirkler, opdelt efter Miljøportalens udløbstype (separat regnvandsudløb hhv. overløbsbygværk/fælleskloak)</td><td>Radius og farve efter risikoniveau; grå/stiplet ved ingen data. Udløb i høj risiko (≥60 %) får en animeret puls-ring</td></tr>
           <tr><td>⚡ 24h Varsling</td><td>Ring-markører ved udløb med forhøjet prognoserisiko</td><td>Rød stiplet ring ved forecastrisiko > 55 % og aktiv nedbør > 5 mm</td></tr>
           <tr><td>🌊 Kystvande (VP3)</td><td>Polygoner for de 109 målsatte kystvandområder</td><td>Grøn/amber/rød udfyldning efter max-risiko fra PULS-udløb med matching vandområde</td></tr>
           <tr><td>🏖 Badevandsområder</td><td>EU badevandsovervågningsstationer fra VP3. Klik åbner badevandsside med 7-dages nedbørsgraf, risikooversigt og nærliggende udløb</td><td>Cirkelmarkør i grøn/amber/rød efter nærmeste PULS-udløbs risikoniveau inden for 15 km</td></tr>
@@ -1794,12 +1798,17 @@ function initHjemMap() {
 // Det eliminerer det grundlæggende problem: L.heatLayer's canvas-element
 // kan overleve removeLayer() og efterlade et forældet lag i DOM'en.
 
-// "Udløbspunkter"-knappen (den enkeltvise punktvisning) er fjernet fra UI'en
-// — showPoints forbliver derfor altid false, og laget tilføjes aldrig
-// kortet. De 21.556 markører beregnes stadig ved hver renderMap()-kørsel
-// (nødvendigt for badevand/RBU-risikoberegning), men den tunge visuelle
-// rendering sker aldrig.
-const pointsLayer    = L.layerGroup();
+// Den tidligere fælles "Udløbspunkter"-knap (alle 21.556 udløb i ét lag,
+// uden typeopdeling) er erstattet af to typeopdelte lag — RBU regn (separat
+// regnvandsudløb) og RBU Kloak (overløbsbygværk/fælleskloak) — hver med sin
+// egen animerede puls-ring for udløb hvor UDLØBETS EGEN risiko (ingen lån
+// fra nærliggende punkter) når "høj" (≥60%, samme tærskel som riskStyle()).
+// Udløbstypen (pt.outletType) kommer fra Miljøportalens Type-felt — se
+// loadFromEmbedded() og add-puls-outlet-type.js.
+const pointsRegnLayer     = L.layerGroup();
+const pointsKloakLayer    = L.layerGroup();
+const regnActiveRingLayer  = L.layerGroup();
+const kloakActiveRingLayer = L.layerGroup();
 const forecastLayer  = L.layerGroup();
 
 // Heatmap state — ref sættes ved første synlige visning (se nedenfor)
@@ -1947,11 +1956,14 @@ let precipitationMap = {};   // muni_id -> { observed_mm, forecast_mm }
 
 function loadFromEmbedded() {
   // PULS_DATA format: { a: [authorities], w: [waterAreas], d: rows }
-  // Row: [lat, lng, name, authIdx, areaIdx, volumeM3, eventsPerYear|null, qualityCode]
+  // Row: [lat, lng, name, authIdx, areaIdx, volumeM3, eventsPerYear|null, qualityCode, outletType|null]
   // qualityCode: 0=real, 1=verified zero, 2=imputed from volume, 3=no data
+  // outletType (fra Miljøportalens Type-felt, se add-puls-outlet-type.js):
+  //   0=RBU regn (separat regnvandsudløb), 1=RBU Kloak (overløbsbygværk),
+  //   2=andet, undefined/null=ukendt (ikke fundet i det live datasæt)
   const { a: auths, w: areas, d: rows } = PULS_DATA;
   return rows.map((r, i) => {
-    const [lat, lng, name, authIdx, areaIdx, volumeM3, eventsPerYear, quality] = r;
+    const [lat, lng, name, authIdx, areaIdx, volumeM3, eventsPerYear, quality, outletType] = r;
     const ev  = eventsPerYear !== null ? eventsPerYear : 0;
     const vol = volumeM3 > 0 ? volumeM3 : 0;
     return {
@@ -1960,6 +1972,7 @@ function loadFromEmbedded() {
       municipality:       auths[authIdx] || '—',
       waterArea:          areas[areaIdx] || 'Ukendt',
       lat, lng,
+      outletType:         outletType ?? null,
       eventsPerYear:      ev,
       volumeM3Year:       vol,
       quality,
@@ -2162,7 +2175,10 @@ function riskColor(r) {
 // RENDER
 // ═══════════════════════════════════════════════════════════════════════════
 function renderMap() {
-  pointsLayer.clearLayers();
+  pointsRegnLayer.clearLayers();
+  pointsKloakLayer.clearLayers();
+  regnActiveRingLayer.clearLayers();
+  kloakActiveRingLayer.clearLayers();
   forecastLayer.clearLayers();
 
   const heatData   = [];
@@ -2226,7 +2242,31 @@ function renderMap() {
     });
 
     marker.on('click', function(e) { if(window._LC) return; window._LC=true; setTimeout(()=>delete window._LC,50); closePointPanel(); closeBadevandPanel(); openPulsUdlobPanel(pt, risk, foreRisk); });
-    pointsLayer.addLayer(marker);
+
+    // RBU regn (separat regnvandsudløb) / RBU Kloak (overløbsbygværk) —
+    // "Andet"/ukendt type (pt.outletType === 2 eller null) vises ikke i
+    // nogen af de to typeopdelte lag, men indgår stadig i heatmaps m.m. ovenfor.
+    const typeLayer = pt.outletType === 0 ? pointsRegnLayer
+                     : pt.outletType === 1 ? pointsKloakLayer
+                     : null;
+    if (typeLayer) {
+      typeLayer.addLayer(marker);
+      // Animeret puls-ring — udløbets EGEN risiko, ingen lån fra andre
+      // punkter (se .outlet-active-ring/@keyframes outlet-ring-pulse).
+      // Samme "høj" tærskel (≥60%) som riskStyle()/riskTooltipText().
+      if (risk !== null && risk >= 0.6) {
+        const ringLayer = pt.outletType === 0 ? regnActiveRingLayer : kloakActiveRingLayer;
+        ringLayer.addLayer(L.circleMarker([pt.lat, pt.lng], {
+          radius: outletRingRadiusForZoom(),
+          color: riskColor(risk),
+          weight: 2.5,
+          fillOpacity: 0,
+          className: 'outlet-active-ring',
+          interactive: false,
+          pane: 'pointsPane',
+        }));
+      }
+    }
 
     // Forecast warning markers
     if (foreRisk > .55) {
@@ -2276,11 +2316,22 @@ function renderMap() {
   updateStatusTime();
   saveWarnPoints(warnPoints);  // persist for varsel-side.html
   colorKystvandByRisk();       // farv VP3 kystvand-polygoner + badevandspunkter efter max-risiko
-  colorRbuByRisk();            // opdatér puls-ring for aktive/høj-risiko RBU-punkter
 
   // Håndhæv synlighed for points- og forecast-lag
-  if (showPoints) { if (!map.hasLayer(pointsLayer)) pointsLayer.addTo(map); }
-  else            { if (map.hasLayer(pointsLayer))  map.removeLayer(pointsLayer); }
+  if (showRegn) {
+    if (!map.hasLayer(pointsRegnLayer))    pointsRegnLayer.addTo(map);
+    if (!map.hasLayer(regnActiveRingLayer)) regnActiveRingLayer.addTo(map);
+  } else {
+    if (map.hasLayer(pointsRegnLayer))     map.removeLayer(pointsRegnLayer);
+    if (map.hasLayer(regnActiveRingLayer)) map.removeLayer(regnActiveRingLayer);
+  }
+  if (showKloak) {
+    if (!map.hasLayer(pointsKloakLayer))     pointsKloakLayer.addTo(map);
+    if (!map.hasLayer(kloakActiveRingLayer)) kloakActiveRingLayer.addTo(map);
+  } else {
+    if (map.hasLayer(pointsKloakLayer))      map.removeLayer(pointsKloakLayer);
+    if (map.hasLayer(kloakActiveRingLayer))  map.removeLayer(kloakActiveRingLayer);
+  }
   if (showForecast) { if (!map.hasLayer(forecastLayer)) forecastLayer.addTo(map); }
   else              { if (map.hasLayer(forecastLayer))  map.removeLayer(forecastLayer); }
 
@@ -2296,10 +2347,6 @@ function renderMap() {
   if (vp3RbuLayer) {
     if (showVP3Rbu)   addVP3Layer(vp3RbuLayer);
     else              removeVP3Layer(vp3RbuLayer);
-  }
-  if (vp3RbuActiveRingLayer) {
-    if (showVP3Rbu && !map.hasLayer(vp3RbuActiveRingLayer)) vp3RbuActiveRingLayer.addTo(map);
-    if (!showVP3Rbu && map.hasLayer(vp3RbuActiveRingLayer)) map.removeLayer(vp3RbuActiveRingLayer);
   }
 
   // Ingen auto-render af Hjem-panel — Hjem er erstattet af dette kort
@@ -2693,7 +2740,8 @@ async function loadAll() {
 // ═══════════════════════════════════════════════════════════════════════════
 // TOGGLE CONTROLS
 // ═══════════════════════════════════════════════════════════════════════════
-let showPoints   = false;  // ÆNDRET: lazy — indlæses/beregnes stadig i baggrunden, men vises ikke før brugeren slår det til
+let showRegn     = false;
+let showKloak    = false;
 let showHeat     = false;  // ÆNDRET: lazy — se updateHeatmap()
 let showViral    = false;
 let showAlgae    = false;  // algerisiko — nyt lag
@@ -2747,6 +2795,40 @@ function toggleForecast() {
     if (showForecast) map.addLayer(forecastLayer);
     else map.removeLayer(forecastLayer);
   });
+}
+
+function toggleRegn() {
+  showRegn = !showRegn;
+  document.getElementById('btn-regn').classList.toggle('active', showRegn);
+  requestAnimationFrame(() => {
+    if (showRegn) { map.addLayer(pointsRegnLayer); map.addLayer(regnActiveRingLayer); }
+    else          { map.removeLayer(pointsRegnLayer); map.removeLayer(regnActiveRingLayer); }
+  });
+}
+
+function toggleKloak() {
+  showKloak = !showKloak;
+  document.getElementById('btn-kloak').classList.toggle('active', showKloak);
+  requestAnimationFrame(() => {
+    if (showKloak) { map.addLayer(pointsKloakLayer); map.addLayer(kloakActiveRingLayer); }
+    else           { map.removeLayer(pointsKloakLayer); map.removeLayer(kloakActiveRingLayer); }
+  });
+}
+
+// Zoom-skaleret radius for aktiv-ring-lagene (regn + kloak) — samme
+// zoom-keyed formel som ukwater's outletRingRadiusForZoom(): ringen skal
+// krympe ved lav zoom for ikke at "oversvømme" hele landsdele visuelt når
+// mange udløb er høj-risiko samtidig, modsat selve punktets radius som skal
+// forblive synlig ved lav zoom.
+function outletRingRadiusForZoom() {
+  const zoom = map.getZoom();
+  return Math.max(2.5, Math.min(9, (zoom - 5) * 1.3));
+}
+
+function syncOutletRingRadii() {
+  const r = outletRingRadiusForZoom();
+  regnActiveRingLayer.eachLayer(m => m.setRadius(r));
+  kloakActiveRingLayer.eachLayer(m => m.setRadius(r));
 }
 
 // VP3 toggle-hjælper — fjerner parent OG hvert enkelt child-lag
@@ -3040,7 +3122,7 @@ function scheduleCurrentsRebuild() {
   });
 }
 map.on('moveend zoomend', scheduleCurrentsRebuild);
-map.on('zoomend', syncRbuRingRadius);
+map.on('zoomend', syncOutletRingRadii);
 
 function toggleCurrents() {
   showCurrents = !showCurrents;
@@ -3273,65 +3355,6 @@ function colorBadevandByRisk() {
       `<span style="font-size:.65rem;opacity:.7">EU badevandsovervågning · VP3</span>`,
       { sticky: true }
     );
-  });
-}
-
-// ── RBU-punkter (VP3): animeret "puls-ring" for aktive/høj-risiko overløb —
-// samme visuelle mønster (radar-ping, se .outlet-active-ring/@keyframes
-// outlet-ring-pulse) som ukwater's activeOutletRingLayer. RBU-punkter har
-// ingen egen nedbørsdrevet risikomodel, så risikoen lånes fra nærmeste
-// PULS-udløb inden for 15 km — samme opslag som colorBadevandByRisk() og
-// openRbuUdlobPanel() bruger. Ringen udløses ved samme "høj" tærskel (≥60%)
-// som riskStyle()/riskTooltipText() allerede definerer andre steder.
-let vp3RbuActiveRingLayer = null;
-
-function rbuRingRadiusForZoom() {
-  const zoom = map.getZoom();
-  return Math.max(2.5, Math.min(9, (zoom - 5) * 1.3));
-}
-
-function syncRbuRingRadius() {
-  if (!vp3RbuActiveRingLayer) return;
-  const r = rbuRingRadiusForZoom();
-  vp3RbuActiveRingLayer.eachLayer(m => m.setRadius(r));
-}
-
-function colorRbuByRisk() {
-  if (!vp3RbuLayer || !overflowPoints || overflowPoints.length === 0) return;
-
-  const MAX_DEG = 0.135;  // ~15 km — samme radius som colorBadevandByRisk()
-  if (_pulsSpatialIndexRef !== overflowPoints) {
-    _pulsSpatialIndex    = buildPulsSpatialIndex(overflowPoints, MAX_DEG);
-    _pulsSpatialIndexRef = overflowPoints;
-  }
-
-  if (!vp3RbuActiveRingLayer) vp3RbuActiveRingLayer = L.layerGroup();
-  vp3RbuActiveRingLayer.clearLayers();
-  const ringRadius = rbuRingRadiusForZoom();
-
-  vp3RbuLayer.eachLayer(layer => {
-    let ll;
-    try { ll = layer.getLatLng(); } catch(e) { return; }
-
-    let risk = null;
-    const nearby = getNearbyPulsPoints(_pulsSpatialIndex, MAX_DEG, ll.lat, ll.lng);
-    for (const pt of nearby) {
-      if (Math.abs(pt.lat - ll.lat) > MAX_DEG || Math.abs(pt.lng - ll.lng) > MAX_DEG) continue;
-      const w = upstreamWeight(pt.lat, pt.lng, ll.lat, ll.lng);
-      const adjustedRisk = pt.riskScore * w;
-      if (risk === null || adjustedRisk > risk) risk = adjustedRisk;
-    }
-    if (risk === null || risk < 0.6) return;
-
-    vp3RbuActiveRingLayer.addLayer(L.circleMarker(ll, {
-      radius: ringRadius,
-      color: '#c84b1f',
-      weight: 2.5,
-      fillOpacity: 0,
-      className: 'outlet-active-ring',
-      interactive: false,
-      pane: 'pointsPane',
-    }));
   });
 }
 
