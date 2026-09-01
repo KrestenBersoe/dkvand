@@ -420,17 +420,17 @@
      samme fejl — den er nu tilføjet til samme selector. */
   #point-panel-body .field,
   #ud-info-body .field,
-  #ud-quality-body .field {
+  #ud-status-body .field {
     margin: 0 0 .7rem;
     padding-bottom: .55rem;
     border-bottom: 1px solid #f0f3f5;
   }
   #point-panel-body .field:last-child,
   #ud-info-body .field:last-child,
-  #ud-quality-body .field:last-child { border-bottom: none; margin-bottom: 0; }
+  #ud-status-body .field:last-child { border-bottom: none; margin-bottom: 0; }
   #point-panel-body .label,
   #ud-info-body .label,
-  #ud-quality-body .label {
+  #ud-status-body .label {
     display: block;
     font-family: var(--mono);
     font-size: .62rem;
@@ -441,7 +441,7 @@
   }
   #point-panel-body .value,
   #ud-info-body .value,
-  #ud-quality-body .value {
+  #ud-status-body .value {
     display: block;
     font-size: .86rem;
     font-weight: 400;
@@ -480,12 +480,16 @@
   }
   #map-hint.fade { opacity: 0; }
 
-  /* Engangs-hint der peger på signaturforklarings-knappen (bottom-left, lige
-     under denne boks) og nævner kortlag-ikonet (nu top-højre, se #lag) i
-     teksten — vises kun ved allerførste besøg nogensinde, styret af
+  /* Engangs-hint der peger på signaturforklarings-knappen, lige under denne
+     boks — vises kun ved allerførste besøg nogensinde, styret af
      localStorage-flag (se initMapIconHint()). Positioneret relativt til
      #tab-kort, samme forælder som #legend, så den følger den uden ekstra
-     JS-udregning. */
+     JS-udregning. RETTET (bruger-rapport: "tooltip peger forkert") — denne
+     boks nævnte tidligere OGSÅ kortlag-ikonet (top-højre) i teksten, selvom
+     dens eneste pil pegede ned mod signaturforklarings-knappen (bottom-
+     venstre) — de to ikoner blev derfor beskrevet i én boks med kun én,
+     fysisk forkert pil. Nu to uafhængige hints, hver med sin egen pil mod
+     sit eget ikon — se #lag-icon-hint. */
   #map-icon-hint {
     position: absolute;
     bottom: 138px; left: 14px;
@@ -512,6 +516,37 @@
   }
   #map-icon-hint.hidden { display: none; }
   #map-icon-hint.fade { opacity: 0; }
+
+  /* Søster-hint til #map-icon-hint, der specifikt peger på kortlag-ikonet
+     (#lag-btn, top-højre) — se RETTET-noten ovenfor. Samme visuelle stil,
+     men positioneret under #lag-btn med pilen pegende OP mod ikonet,
+     modsat #map-icon-hint's ned-pegende pil. */
+  #lag-icon-hint {
+    position: absolute;
+    top: 54px; right: 12px;
+    z-index: 950;
+    max-width: 190px;
+    background: rgba(26,39,51,.92);
+    color: rgba(240,237,230,.95);
+    font-size: .74rem;
+    line-height: 1.4;
+    padding: .6rem .9rem;
+    border-radius: 10px;
+    box-shadow: var(--shadow-lg);
+    opacity: 1;
+    transition: opacity .5s;
+    pointer-events: none;
+  }
+  #lag-icon-hint::after {
+    content: '';
+    position: absolute;
+    top: -6px; right: 20px;
+    width: 12px; height: 12px;
+    background: inherit;
+    transform: rotate(45deg);
+  }
+  #lag-icon-hint.hidden { display: none; }
+  #lag-icon-hint.fade { opacity: 0; }
   #badevand-panel {
     position: fixed;
     inset: 0;
@@ -2104,9 +2139,10 @@
   </div>
 </div>
 
-<!-- Engangs-tooltip der peger på kortlag-/forklaringsikonerne, kun vist ved
-     allerførste besøg — se initMapIconHint() i JS. -->
-<div id="map-icon-hint" class="hidden">👆 Signaturforklaring er her — Kortlag er ikonet øverst til højre</div>
+<!-- Engangs-tooltips der peger på hhv. forklarings- og kortlag-ikonerne,
+     kun vist ved allerførste besøg — se initMapIconHint() i JS. -->
+<div id="map-icon-hint" class="hidden">👆 Signaturforklaring er her</div>
+<div id="lag-icon-hint" class="hidden">👆 Kortlag er her</div>
 
   </div><!-- /tab-kort -->
 
@@ -3289,6 +3325,40 @@ function estimateLastEventAge(hourlyWeek) {
   if (lastTriggerIndex === -1) return null;
   const hoursAgo = (hourlyWeek.length - 1) - lastTriggerIndex;
   return hoursAgo / 24;
+}
+
+// NYT (bruger-krav — udløbssidens "Nedbør vs. overløbstærskel"-panel):
+// samme henfaldsmodel som estimateLastEventAge() ovenfor (τ=3 dage,
+// identisk med den der driver pt.precipMM/risikoscoren), men tærsklet mod
+// UDLØBETS EGEN empiriske overløbstærskel (thresholdMm) i stedet for det
+// faste 5mm-varslingsniveau — samme regel som ringmarkøren på selve kortet
+// (colorRbuByOwnRisk()) og brugerens eksplicitte krav: "triggers whenever
+// the individual outlet threshold is breached, not borrowing anything from
+// anyone." Returnerer den aktuelle henfaldsvægtede værdi, om udløbet er
+// midt i en hændelse lige nu, og hvornår den seneste hændelse (aktiv eller
+// afsluttet) startede/stoppede.
+function computeThresholdCrossing(hourlyWeek, thresholdMm) {
+  if (!Array.isArray(hourlyWeek) || hourlyWeek.length === 0) return null;
+  const threshold = (thresholdMm !== null && thresholdMm !== undefined) ? thresholdMm : 25;
+  const decayFactor = Math.exp(-1 / (24 * HOURLY_DECAY_TAU_DAYS));
+  let decayed = 0;
+  let wasAbove = false;
+  let startIdx = -1, stopIdx = -1;
+  for (let i = 0; i < hourlyWeek.length; i++) {
+    decayed = decayed * decayFactor + (hourlyWeek[i] || 0);
+    const isAbove = decayed >= threshold;
+    if (isAbove && !wasAbove)  { startIdx = i; stopIdx = -1; }
+    if (!isAbove && wasAbove)  { stopIdx = i; }
+    wasAbove = isAbove;
+  }
+  const idxToDate = (idx) => new Date(Date.now() - (hourlyWeek.length - 1 - idx) * 3600000);
+  return {
+    currentMM: decayed,
+    threshold,
+    isActive: wasAbove,
+    startTime: startIdx >= 0 ? idxToDate(startIdx) : null,
+    stopTime:  (stopIdx >= 0 && !wasAbove) ? idxToDate(stopIdx) : null,
+  };
 }
 
 // Viral concentration in CSO relative to bacteria (log10 ratio):
@@ -8572,10 +8642,11 @@ document.addEventListener('click', function(e) {
   window.location.href = a.href;
 });
 
-// Viser en engangs-tooltip der peger på kortlag-/forklaringsikonerne
-// (#lag-btn/#legend-toggle) nederst til venstre — brugere overser dem ofte,
-// da de kun er små runde ikoner uden tekst. Gates på et rent localStorage-
-// flag (ikke visitCount) så den vises præcis én gang, uanset enhed/session.
+// Viser to engangs-tooltips, hver med sin egen pil mod sit eget ikon:
+// #map-icon-hint (forklaringsikonet, bottom-left) og #lag-icon-hint
+// (kortlag-ikonet, top-right) — brugere overser dem ofte, da de kun er små
+// ikoner uden tekst. Gates på et rent localStorage-flag (ikke visitCount)
+// så de vises præcis én gang, uanset enhed/session.
 function initMapIconHint() {
   let alreadyShown;
   try {
@@ -8584,13 +8655,15 @@ function initMapIconHint() {
   } catch(e) { return; } // uden localStorage kan vi ikke undgå at genvise — spring over
   if (alreadyShown) return;
 
-  const el = document.getElementById('map-icon-hint');
-  if (!el) return;
-  el.classList.remove('hidden');
-  setTimeout(() => {
-    el.classList.add('fade');
-    setTimeout(() => el.remove(), 500);
-  }, 6000);
+  ['map-icon-hint', 'lag-icon-hint'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.classList.remove('hidden');
+    setTimeout(() => {
+      el.classList.add('fade');
+      setTimeout(() => el.remove(), 500);
+    }, 6000);
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -10727,23 +10800,9 @@ async function showUdlobPanel(pt) {
   }
 
   // ── Stamdata ───────────────────────────────────────────────────────────────
-  // ── Vandkvalitet — supplerende (ANDEN slags risiko end overløb ovenfor) ────
-  const qualityBody = document.getElementById('ud-quality-body');
-  function qChip(score) {
-    if (score === null || score === undefined) return '<span style="color:#5a6b78">Ingen data</span>';
-    // RETTET: brugte tidligere .chip-klassen (farvet baggrund/tekst efter
-    // risikoniveau) — skal nu være almindelig sort tekst, ingen farve.
-    const rl = riskLabel(score);
-    return `${rl.label} · ${Math.round(score*100)}%`;
-  }
-  qualityBody.innerHTML = `
-    <div class="field"><span class="label">🦠 Bakteriel risiko</span><span class="value">${qChip(pt.riskScore)}</span></div>
-    <div class="field"><span class="label">🧬 Viral risiko</span><span class="value">${qChip(pt.viralScore)}</span></div>
-    <div class="field">
-      <span class="label">🌿 Algerisiko${pt.waterTemp!=null?` (${pt.waterTemp.toFixed(1)}°C${pt.tempSource==='estimated'?', estimeret ud fra lufttemp.':' — CMEMS'})`:''}</span>
-      <span class="value">${qChip(pt.algaeScore)}</span>
-    </div>`;
-
+  const thresholdDisplay = (pt.thresholdMm !== null && pt.thresholdMm !== undefined)
+    ? `${pt.thresholdMm.toFixed(1)} mm`
+    : '25,0 mm (standardværdi — intet udløbs-specifikt datagrundlag)';
   const infoBody = document.getElementById('ud-info-body');
   const mapsLink = `<a class="value" target="_blank" rel="noopener" href="https://www.google.com/maps/search/?api=1&query=${pt.lat},${pt.lng}" title="Åbn i Google Maps">📍 ${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}</a>`;
   if (isPuls) {
@@ -10757,7 +10816,8 @@ async function showUdlobPanel(pt) {
       ${pt.waterArea ? `<div class="field"><span class="label">Recipient</span><span class="value">${escHtml(pt.waterArea)}</span></div>` : ''}
       <div class="field"><span class="label">Datakvalitet</span><span class="value" style="font-size:.78rem">${qualLabel}</span></div>
       <div class="field"><span class="label">Historik</span><span class="value">${pt.eventsPerYear != null ? pt.eventsPerYear.toFixed(0) : '—'} overløb/år · ${formatL(pt.volumeM3Year)}/år</span></div>
-      <div class="field"><span class="label">Gns. volumen pr. hændelse</span><span class="value">${formatL(pt.meanVolumePerEvent)}</span></div>`;
+      <div class="field"><span class="label">Gns. volumen pr. hændelse</span><span class="value">${formatL(pt.meanVolumePerEvent)}</span></div>
+      <div class="field"><span class="label">Beregnet overløbstærskel</span><span class="value">${thresholdDisplay}</span></div>`;
   } else {
     const hasRealData = pt.eventsPerYear !== undefined;
     const qualLabel = pt.quality===0 ? '✅ Reelle data'
@@ -10778,12 +10838,15 @@ async function showUdlobPanel(pt) {
       ${hasRealData ? `
       <div class="field"><span class="label">Datakvalitet (PULS)</span><span class="value" style="font-size:.78rem">${qualLabel}</span></div>
       <div class="field"><span class="label">Historik</span><span class="value">${pt.eventsPerYear.toFixed(0)} overløb/år · ${formatL(pt.volumeM3Year)}/år</span></div>
-      <div class="field"><span class="label">Gns. volumen pr. hændelse</span><span class="value">${formatL(pt.meanVolumePerEvent)}</span></div>` : ''}`;
+      <div class="field"><span class="label">Gns. volumen pr. hændelse</span><span class="value">${formatL(pt.meanVolumePerEvent)}</span></div>` : ''}
+      <div class="field"><span class="label">Beregnet overløbstærskel</span><span class="value">${thresholdDisplay}</span></div>`;
   }
 
-  // ── 7-dages nedbørsgraf ─────────────────────────────────────────────────────
-  const chartWrap = document.getElementById('ud-chart-wrap');
-  chartWrap.innerHTML = 'Indlæser vejrdata…';
+  // ── 7-dages nedbørsgraf + nedbør-vs-tærskel-status ──────────────────────────
+  const chartWrap  = document.getElementById('ud-chart-wrap');
+  const statusBody = document.getElementById('ud-status-body');
+  chartWrap.innerHTML  = 'Indlæser vejrdata…';
+  statusBody.innerHTML = 'Indlæser…';
   try {
     const resp = await fetch(`api/weather/weekly?key=${encodeURIComponent(pt.weatherKey)}`);
     if (resp.ok) {
@@ -10793,11 +10856,39 @@ async function showUdlobPanel(pt) {
       chartWrap.innerHTML = (week.length > 0 || foreArr.length > 0)
         ? buildWeeklyChart(week, foreArr, w.totalRain7d)
         : '<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Ingen nedbørsdata tilgængeligt</div>';
+
+      const crossing = computeThresholdCrossing(week, pt.thresholdMm);
+      if (crossing) {
+        const pct      = Math.min((crossing.currentMM / Math.max(crossing.threshold, 0.01)) * 100, 999);
+        const barColor = crossing.isActive ? '#c84b1f' : pct >= 70 ? '#d4a020' : '#2d7d4f';
+        const fmtDt    = d => d.toLocaleString('da-DK', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' });
+        statusBody.innerHTML = `
+          <div style="text-align:center;margin-bottom:.7rem;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:${crossing.isActive ? '#c84b1f' : '#5a6b78'}">
+            ${crossing.isActive ? '🔴 Aktivt overløb — tærskel overskredet' : '⚪ Intet aktivt overløb'}
+          </div>
+          <div class="field">
+            <span class="label">Henfaldsvægtet nedbør nu</span>
+            <span class="value">${crossing.currentMM.toFixed(1)} mm af ${crossing.threshold.toFixed(1)} mm tærskel (${Math.round(pct)}%)</span>
+          </div>
+          <div style="background:#eef4f7;border-radius:6px;height:10px;overflow:hidden;margin-bottom:.7rem">
+            <div style="height:100%;border-radius:6px;width:${Math.min(pct,100).toFixed(1)}%;background:${barColor};transition:width .5s ease"></div>
+          </div>
+          ${crossing.isActive
+            ? `<div class="field"><span class="label">Startede</span><span class="value">${fmtDt(crossing.startTime)}</span></div>`
+            : crossing.startTime
+              ? `<div class="field"><span class="label">Seneste hændelse</span><span class="value">${fmtDt(crossing.startTime)} → ${crossing.stopTime ? fmtDt(crossing.stopTime) : '—'}</span></div>`
+              : `<div class="field"><span class="label">Seneste 7 dage</span><span class="value">Ingen hændelse registreret</span></div>`
+          }`;
+      } else {
+        statusBody.innerHTML = '<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Ingen nedbørsdata tilgængeligt</div>';
+      }
     } else {
-      chartWrap.innerHTML = '<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Vejrdata utilgængelig</div>';
+      chartWrap.innerHTML  = '<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Vejrdata utilgængelig</div>';
+      statusBody.innerHTML = '<div style="color:#5a6b78;font-size:.8rem;padding:.5rem 0">Vejrdata utilgængelig</div>';
     }
   } catch(e) {
-    chartWrap.innerHTML = `<div style="color:#c84b1f;font-size:.8rem;padding:.5rem 0">Fejl: ${e.message}</div>`;
+    chartWrap.innerHTML  = `<div style="color:#c84b1f;font-size:.8rem;padding:.5rem 0">Fejl: ${e.message}</div>`;
+    statusBody.innerHTML = `<div style="color:#c84b1f;font-size:.8rem;padding:.5rem 0">Fejl: ${e.message}</div>`;
   }
 
   // ── Andre udløb der påvirker denne lokation (opstrøms, strømvægtet) ─────────
@@ -10858,6 +10949,7 @@ function openPulsUdlobPanel(pt, risk, foreRisk) {
     meanVolumePerEvent: pt.meanVolumePerEvent,
     viralScore: pt.viralScore, algaeScore: pt.algaeScore,
     waterTemp: pt.waterTemp, tempSource: pt.tempSource,
+    thresholdMm: pt.thresholdMm,
     weatherKey: `${clat.toFixed(4)}:${clng.toFixed(4)}`,
   });
 }
@@ -10932,6 +11024,7 @@ function openRbuUdlobPanel(feature) {
     algaeScore: matchedPt ? matchedPt.algaeScore : undefined,
     waterTemp:  matchedPt ? matchedPt.waterTemp  : undefined,
     tempSource: matchedPt ? matchedPt.tempSource : undefined,
+    thresholdMm: matchedPt ? matchedPt.thresholdMm : undefined,
     weatherKey: `${clat.toFixed(4)}:${clng.toFixed(4)}`,
   });
 }
@@ -12148,12 +12241,14 @@ document.addEventListener('visibilitychange', () => {
       </div>
     </div>
 
-    <!-- Supplerende vandkvalitets-indikatorer — ANDEN slags risiko end
-         overløbsrisikoen ovenfor (forureningskonsekvens, ikke overløbs-
-         sandsynlighed). Vises separat for at undgå at blande begreberne. -->
-    <div class="bv-card" id="ud-quality-card">
-      <div class="bv-card-title">Vandkvalitet — supplerende indikatorer</div>
-      <div id="ud-quality-body"></div>
+    <!-- Nedbør (henfaldsvægtet, samme model som risikoscoren ovenfor) vs.
+         udløbets egen beregnede overløbstærskel — visualiserer hvor tæt
+         udløbet er på (eller om det er midt i) en overløbshændelse, samt
+         hvornår en evt. aktiv/senest afsluttet hændelse startede/stoppede.
+         Se computeThresholdCrossing(). -->
+    <div class="bv-card" id="ud-status-card">
+      <div class="bv-card-title">Nedbør vs. overløbstærskel</div>
+      <div id="ud-status-body">Indlæser…</div>
     </div>
 
     <!-- Stamdata -->
