@@ -2101,7 +2101,6 @@
       <button class="layer-btn" id="btn-heat"  aria-pressed="false" onclick="toggleHeat()">🌡 Bakterielt kort</button>
       <button class="layer-btn" id="btn-viral" aria-pressed="false" onclick="toggleViral()">🧬 Viralt kort</button>
       <button class="layer-btn" id="btn-algae" aria-pressed="false" onclick="toggleAlgae()">🌿 Algerisiko</button>
-      <button class="layer-btn" id="btn-fore"  aria-pressed="false" onclick="toggleForecast()">⚡ 24h Varsling</button>
     </div>
   </div>
 </div>
@@ -2325,13 +2324,12 @@
 
       <section id="doc-kortlag" class="doc-section">
         <h2>Kortlag</h2>
-        <p>Kortet indeholder ti toggelbare lag under Danmark-fanen:</p>
+        <p>Kortet indeholder ni toggelbare lag under Danmark-fanen:</p>
         <table class="doc-table">
           <tr><th>Lag</th><th>Indhold</th><th>Farvelogik</th></tr>
           <tr><td>🌡 Bakterielt kort</td><td>Varmekort over alle 21.600 udløbspunkter</td><td>Grøn → amber → rød efter bakteriel risikoscore</td></tr>
           <tr><td>🧬 Viralt kort</td><td>Varmekort med separat viral risikomodel</td><td>Lilla gradient — vira overlever markant længere om vinteren</td></tr>
           <tr><td>🌿 Algerisiko</td><td>Varmekort baseret på næringsstof-proxy × temperatur-gate (se Badevandsvurdering)</td><td>Gul → grøn gradient efter algerisiko-score — ikke maskeret til præcise vandområde-polygoner for søer/vandløb (kun kystvande), se Begrænsninger</td></tr>
-          <tr><td>⚡ 24h Varsling</td><td>Ring-markører ved udløb med forhøjet prognoserisiko</td><td>Rød stiplet ring ved forecastrisiko > 55 % og aktiv nedbør > 5 mm</td></tr>
           <tr><td>🌊 Kystvande (VP3)</td><td>Polygoner for de 109 målsatte kystvandområder</td><td>Grøn/amber/rød udfyldning efter max af waterArea-tekstmatch og ID15-opstrøms-matching, se Kystvandvurdering</td></tr>
           <tr><td>🔴 RBU Regn</td><td>VP3's regnbetingede udløbspunkter (RBU-registret) klassificeret som rent regnvand — officielt myndighedsregistrerede udledningssteder, adskilt fra PULS-udløbene. Bygværkstypen (<span class="doc-mono">bgv_type</span>) er enten bekræftet "Separat regnvand" (SE/SF, langt de fleste) eller ukendt/uklassificeret (UR, Bypass, SKYBRUD, "ikke oplyst" — under 0,5% af punkterne) — sidstnævnte grupperes bevidst her frem for i Kloak-laget, for ikke at overklassificere dem som spildevand uden belæg, se Datakvalitet</td><td>Farve/størrelse/gennemsigtighed gradueres efter zoom-niveau (mere fremtrædende jo tættere man zoomer ind). Punkter, der deler outfallId med et PULS-udløb i høj risiko (≥60%, udløbets EGEN empiriske tærskel — ingen naboudløb-vægtning), får en animeret puls-ring; punkter uden PULS-modstykke får ingen ring, se Kortlag-indledningen</td></tr>
           <tr><td>🟤 RBU Kloak</td><td>VP3's RBU-punkter, hvis bygværkstype (<span class="doc-mono">bgv_type</span>) er et overløbsbygværk og derfor reelt indeholder spildevand (OS/OV/OF/OVI/OSI/OK/OKI)</td><td>Fast brun farve (samme som signaturforklaringens brune prik) ved alle zoomniveauer, kun størrelse/gennemsigtighed gradueres efter zoom — adskilt fra RBU Regn, netop for ikke at forveksle rene regnvandsudløb med udløb, der reelt kan indeholde spildevand. Samme animerede puls-ring som RBU Regn ved høj risiko på det matchede PULS-udløb</td></tr>
@@ -5508,15 +5506,6 @@ function toggleAlgae() {
   });
 }
 
-function toggleForecast() {
-  showForecast = !showForecast;
-  setLayerBtnState('btn-fore', showForecast);
-  requestAnimationFrame(() => {
-    if (showForecast) map.addLayer(forecastLayer);
-    else map.removeLayer(forecastLayer);
-  });
-}
-
 // VP3 toggle-hjælper — fjerner parent OG hvert enkelt child-lag
 // Nødvendigt fordi Leaflet's FeatureGroup tilføjer children direkte til
 // map._layers. map.hasLayer(parent) kan returnere false mens children
@@ -5576,7 +5565,6 @@ setLayerBtnState('btn-currents', false);
 setLayerBtnState('btn-heat', false);
 setLayerBtnState('btn-viral', false);
 setLayerBtnState('btn-algae', false);
-setLayerBtnState('btn-fore', false);
 setLayerBtnState('btn-vandlobdir', false);
 
 // ═══════════════════════════════════════════════════════════════════════════
