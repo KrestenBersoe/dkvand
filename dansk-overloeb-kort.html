@@ -222,7 +222,7 @@
     50%      { opacity: .2; }
   }
 
-  /* Animeret "aktiv overløb"-ring på RBU Regn/Kloak-punkter (se
+  /* Animeret "aktiv overløb"-ring på Overløb-punkter (se
      colorRbuByOwnRisk()) — radar-ping udvidende-og-udtonende ring om et
      RBU-punkt hvis PRÆCIS samme fysiske udløb (matchet på outfallId===
      pkt_id, ingen nabo-baseret gæt) har nået "høj" risiko (≥60%) i PULS'
@@ -2064,8 +2064,8 @@
     <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
     <div class="leg-row"><div class="leg-swatch" style="background:#1a6faf;opacity:.5;border:1px solid #1a6faf"></div> Kystvande (VP3)</div>
     <div class="leg-row"><div class="leg-swatch" style="background:#f0c040;opacity:.5;border:1px solid #e6a817"></div> Badevandsområder</div>
-    <div class="leg-row"><div class="leg-swatch" style="background:#c0392b;border-radius:50%"></div> RBU Regn</div>
-    <div class="leg-row"><div class="leg-swatch" style="background:#8b5a2b;border-radius:50%"></div> RBU Kloak</div>
+    <div class="leg-row"><div class="leg-swatch" style="background:#3584e4;border-radius:50%"></div> Overløb — regnvand</div>
+    <div class="leg-row"><div class="leg-swatch" style="background:#8b5a2b;border-radius:50%"></div> Overløb — kloak</div>
     <div class="leg-row"><div class="leg-swatch" style="border:2px solid #c84b1f;border-radius:50%;background:transparent"></div> Animeret ring: udløb i høj risiko</div>
     <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
     <div class="leg-row" style="font-size:.65rem; color:rgba(240,237,230,.4)" id="leg-tau">
@@ -2090,8 +2090,7 @@
     <div class="lag-group">
       <div class="lag-group-title">Referencelag</div>
       <button class="layer-btn" id="btn-vp3bade" aria-pressed="true"  onclick="toggleVP3Bade()">🏖 Badevandsområder</button>
-      <button class="layer-btn" id="btn-vp3rburegn"  aria-pressed="false" onclick="toggleVP3RbuRegn()">🔴 RBU Regn</button>
-      <button class="layer-btn" id="btn-vp3rbukloak" aria-pressed="false" onclick="toggleVP3RbuKloak()">🟤 RBU Kloak</button>
+      <button class="layer-btn" id="btn-vp3overloeb" aria-pressed="false" onclick="toggleVP3Overloeb()">🔵🟤 Overløb</button>
       <button class="layer-btn" id="btn-vandlobdir" aria-pressed="false" onclick="toggleVandlobDir()">🧭 Vandløbsretning</button>
       <button class="layer-btn" id="btn-vp3kyst" aria-pressed="false" onclick="toggleVP3Kyst()">🌊 Kystvande</button>
       <button class="layer-btn" id="btn-currents" aria-pressed="false" onclick="toggleCurrents()">〰 Strøm</button>
@@ -2324,15 +2323,14 @@
 
       <section id="doc-kortlag" class="doc-section">
         <h2>Kortlag</h2>
-        <p>Kortet indeholder ni toggelbare lag under Danmark-fanen:</p>
+        <p>Kortet indeholder otte toggelbare lag under Danmark-fanen:</p>
         <table class="doc-table">
           <tr><th>Lag</th><th>Indhold</th><th>Farvelogik</th></tr>
           <tr><td>🌡 Bakterielt kort</td><td>Varmekort over alle 21.600 udløbspunkter</td><td>Grøn → amber → rød efter bakteriel risikoscore</td></tr>
           <tr><td>🧬 Viralt kort</td><td>Varmekort med separat viral risikomodel</td><td>Lilla gradient — vira overlever markant længere om vinteren</td></tr>
           <tr><td>🌿 Algerisiko</td><td>Varmekort baseret på næringsstof-proxy × temperatur-gate (se Badevandsvurdering)</td><td>Gul → grøn gradient efter algerisiko-score — ikke maskeret til præcise vandområde-polygoner for søer/vandløb (kun kystvande), se Begrænsninger</td></tr>
           <tr><td>🌊 Kystvande (VP3)</td><td>Polygoner for de 109 målsatte kystvandområder</td><td>Grøn/amber/rød udfyldning efter max af waterArea-tekstmatch og ID15-opstrøms-matching, se Kystvandvurdering</td></tr>
-          <tr><td>🔴 RBU Regn</td><td>VP3's regnbetingede udløbspunkter (RBU-registret) klassificeret som rent regnvand — officielt myndighedsregistrerede udledningssteder, adskilt fra PULS-udløbene. Bygværkstypen (<span class="doc-mono">bgv_type</span>) er enten bekræftet "Separat regnvand" (SE/SF, langt de fleste) eller ukendt/uklassificeret (UR, Bypass, SKYBRUD, "ikke oplyst" — under 0,5% af punkterne) — sidstnævnte grupperes bevidst her frem for i Kloak-laget, for ikke at overklassificere dem som spildevand uden belæg, se Datakvalitet</td><td>Farve/størrelse/gennemsigtighed gradueres efter zoom-niveau (mere fremtrædende jo tættere man zoomer ind). Punkter, der deler outfallId med et PULS-udløb i høj risiko (≥60%, udløbets EGEN empiriske tærskel — ingen naboudløb-vægtning), får en animeret puls-ring; punkter uden PULS-modstykke får ingen ring, se Kortlag-indledningen</td></tr>
-          <tr><td>🟤 RBU Kloak</td><td>VP3's RBU-punkter, hvis bygværkstype (<span class="doc-mono">bgv_type</span>) er et overløbsbygværk og derfor reelt indeholder spildevand (OS/OV/OF/OVI/OSI/OK/OKI)</td><td>Fast brun farve (samme som signaturforklaringens brune prik) ved alle zoomniveauer, kun størrelse/gennemsigtighed gradueres efter zoom — adskilt fra RBU Regn, netop for ikke at forveksle rene regnvandsudløb med udløb, der reelt kan indeholde spildevand. Samme animerede puls-ring som RBU Regn ved høj risiko på det matchede PULS-udløb</td></tr>
+          <tr><td>🔵🟤 Overløb</td><td>VP3's regnbetingede udløbspunkter (RBU-registret) — officielt myndighedsregistrerede udledningssteder, adskilt fra PULS-udløbene. Ét samlet lag/knap; hvert punkts bygværkstype (<span class="doc-mono">bgv_type</span>) afgør om det er rent regnvand (SE/SF, langt de fleste, samt ukendt/uklassificeret UR/Bypass/SKYBRUD/"ikke oplyst" — under 0,5% af punkterne, grupperet her for ikke at overklassificere dem som spildevand uden belæg) eller reelt spildevandsførende overløbsbygværk (OS/OV/OF/OVI/OSI/OK/OKI), se Datakvalitet</td><td>Blå = regnvand, brun = kloak (fast farve pr. type ved alle zoomniveauer, kun størrelse/gennemsigtighed gradueres efter zoom). Punkter, der deler outfallId med et PULS-udløb i høj risiko (≥60%, udløbets EGEN empiriske tærskel — ingen naboudløb-vægtning), får en animeret puls-ring; punkter uden PULS-modstykke får ingen ring, se Kortlag-indledningen</td></tr>
           <tr><td>🏖 Badevandsområder</td><td>EU badevandsovervågningsstationer fra VP3. Klik åbner badevandsside med 7-dages nedbørsgraf, risikooversigt og opstrøms-matchede udløb</td><td>Cirkelmarkør i grøn/amber/rød ud fra bekræftet punkt-i-polygon-/punkt-nær-linje-match (sø → kystvand → vandløb); grå/"ukendt" hvis ingen bekræftet forbindelse — se Badevandsvurdering</td></tr>
           <tr><td>〰 Strøm</td><td>Animeret partikel-lag for havstrøm (CMEMS Østersø- og Nordsø-model, se CMEMS/Copernicus Marine), klippet til vandområder (VP3 kystvande-/sø-polygoner)</td><td>Bevægelsesretning/-fart fra strømvektoren; farve efter vandtemperatur, relativ skala over det aktuelt viste datasæt (lyseblå=koldt → mørkerød=varmt)</td></tr>
           <tr><td>🧭 Vandløbsretning</td><td>Pile langs vandløbslinjer, der viser udledt strømretning — se Vandløbenes strømretning</td><td>Grøn = sikker retning (>1 m højdeforskel mellem endepunkternes ID15-oplande); grå = usikker (retning vist, men under margen); ingen pil hvis retning ikke kunne afgøres</td></tr>
@@ -2351,7 +2349,7 @@
           <tr><td><span class="q-chip q3">Utilstrækkelig</span></td><td>Hverken volumen eller frekvens oplyst</td><td>766</td></tr>
         </table>
         <p>Stamdata-feltet <span class="doc-mono">Outflow</span> bruges <em>ikke</em> som datagrundlag — det er et designestimat, ikke en målt udledning, og er systematisk for lavt.</p>
-        <p><strong>RBU Regn/Kloak-klassificeringen</strong> bygger på VP3-lagets bygværkstype-felt (<span class="doc-mono">bgv_type</span>), krydstjekket mod PULS' eget SewerStructure-kodesystem: OS/OV/OF/OVI/OSI/OK/OKI mapper entydigt til "Overløbsbygværk" (kombineret kloak/regnvand, vises som RBU Kloak), SE/SF mapper entydigt til "Separat regnvand" (RBU Regn). De resterende koder (UR, Bypass, SKYBRUD, "ikke oplyst" — 66 af 21.375 punkter, under 0,5%) har intet entydigt match og placeres bevidst i RBU Regn frem for RBU Kloak, for ikke at påstå et udløb indeholder spildevand uden belæg i data.</p>
+        <p><strong>Overløb-lagets regn/kloak-farvning</strong> bygger på VP3-lagets bygværkstype-felt (<span class="doc-mono">bgv_type</span>), krydstjekket mod PULS' eget SewerStructure-kodesystem: OS/OV/OF/OVI/OSI/OK/OKI mapper entydigt til "Overløbsbygværk" (kombineret kloak/regnvand, vises brun), SE/SF mapper entydigt til "Separat regnvand" (vises blå). De resterende koder (UR, Bypass, SKYBRUD, "ikke oplyst" — 66 af 21.375 punkter, under 0,5%) har intet entydigt match og farves bevidst blå frem for brun, for ikke at påstå et udløb indeholder spildevand uden belæg i data.</p>
       </section>
 
       <section id="doc-model" class="doc-section">
@@ -3542,10 +3540,8 @@ function currentHeatRadius(baseRadius) {
 // noget andet, endnu ufundet, der reelt er skyld — indtil det er fundet,
 // er dette ført tilbage til de tidligere, bekræftet ikke-værre værdier.
 const RBU_MARKER_BASE_RADIUS = 6;
-const RBU_ZOOM_FAR  = 9;   // og lavere: fuldt "fjern"-udseende (lille, neutral, gennemsigtig)
-const RBU_ZOOM_NEAR = 13;  // og højere: fuldt "tæt"-udseende (normal størrelse, rød, uigennemsigtig)
-const RBU_COLOR_FAR      = { stroke: [138, 130, 110], fill: [201, 184, 148] }; // neutral grå-beige — IKKE farver der signalerer fare
-const RBU_COLOR_NEAR     = { stroke: [139, 26, 26],   fill: [192, 57, 43] };   // den oprindelige, informative røde markering
+const RBU_ZOOM_FAR  = 9;   // og lavere: fuldt "fjern"-udseende (lille, gennemsigtig)
+const RBU_ZOOM_NEAR = 13;  // og højere: fuldt "tæt"-udseende (normal størrelse, uigennemsigtig)
 
 // NYT: cirkelstørrelse ved badevand/udløbspunkter skalerede tidligere IKKE
 // med zoom (modsat RBU ovenfor, som allerede gør det via RBU_ZOOM_FAR/NEAR)
@@ -3594,56 +3590,45 @@ function rbuTypeLabel(props) {
   return 'unknown';
 }
 
-// Brun er den internationalt konventionelle farve for spildevand/kloak
-// (fx APWA's farvekode for underjordiske ledninger) — bevidst valgt væk fra
-// grøn/gul/rød (risikolagenes alarm-farver) og lilla (viral-laget), så
-// betydningen ikke kan forveksles med en risikoscore. Bruges som en FAST
-// farve (se currentRbuStyle) i stedet for en fjern/tæt-lerp, samme værdier
-// som signaturforklaringens brune prik (#8b5a2b/#4a2c14).
+// Brun er den internationalt konventionelle farve for spildevand/kloak (fx
+// APWA's farvekode for underjordiske ledninger); blå er den tilsvarende
+// konvention for rent regnvand. Begge bevidst valgt væk fra grøn/gul/rød
+// (risikolagenes alarm-farver) og lilla (viral-laget), så betydningen ikke
+// kan forveksles med en risikoscore. Begge er FASTE farver (se
+// currentRbuStyle), ikke en fjern/tæt-lerp — en tidligere lerpet rødlig
+// regn-farve viste sig umulige at skelne fra kloaks brune ved almindelig
+// udzoomet brug (begge lå i samme varme farvefamilie midt i overgangen);
+// blå/brun er derimod skelnelige ved ethvert zoomniveau.
+const RBU_REGN_COLOR  = '#1a4d7a';   // stroke
+const RBU_REGN_FILL   = '#3584e4';   // fill
+const RBU_KLOAK_COLOR = '#4a2c14';   // stroke
+const RBU_KLOAK_FILL  = '#8b5a2b';   // fill
 
 function _lerp(a, b, t) { return a + (b - a) * t; }
-function _lerpColor(c1, c2, t) {
-  return `rgb(${Math.round(_lerp(c1[0], c2[0], t))},${Math.round(_lerp(c1[1], c2[1], t))},${Math.round(_lerp(c1[2], c2[2], t))})`;
-}
 
 function currentRbuStyle(isWastewater) {
   const z = map.getZoom();
   const t = Math.max(0, Math.min(1, (z - RBU_ZOOM_FAR) / (RBU_ZOOM_NEAR - RBU_ZOOM_FAR)));
   const radius = Math.max(3, Math.round(_lerp(3, RBU_MARKER_BASE_RADIUS, t)));
-  // RETTET (2. forsøg): et t-baseret GULV (forrige rettelse) løste ikke
-  // problemet — brugeren rapporterede stadig "ALLE punkter er røde, INGEN
-  // forskel". Årsagen er strukturel, ikke en tærskelværdi: begge farver
-  // lerpes langs hver sin egen fjern→tæt-akse af BEGGE samme varme,
-  // rødlige/brune familie (fjern-spildevandsfarven 181,136,88 er stadig en
-  // slags rødbrun beige) — midt i overgangen (almindelig udzoomet/moderat
-  // brug, ikke fuldt indzoomet på et enkelt punkt) ender de to farver tæt
-  // nok på hinanden i både nuance OG mætning til at læses som "det samme
-  // rødlige" af øjet, uanset gulv. Spildevandspunkter får derfor nu en FAST
-  // farvetone (samme brun som i signaturforklaringen, #8b5a2b/#4a2c14) ved
-  // ALLE zoomniveauer — kun størrelse/opacitet skaleres med zoom (som før),
-  // aldrig selve farvetonen — så den aldrig kan glide gennem en tvetydig
-  // rødbrun mellemtilstand, der forveksles med den almindelige farve.
   if (isWastewater) {
     return {
       radius: Math.max(radius, 4),   // synlig/klikbar selv ved RBU_ZOOM_FAR, hvor almindelige punkter er 3px
       fillOpacity: _lerp(0.55, 0.85, t),
       opacity: _lerp(0.75, 1, t),
-      color: '#4a2c14',
-      fillColor: '#8b5a2b',
+      color: RBU_KLOAK_COLOR,
+      fillColor: RBU_KLOAK_FILL,
     };
   }
   return {
-    radius,
-    fillOpacity: _lerp(0.30, 0.75, t),
-    opacity: _lerp(0.5, 1, t),      // kant-linjens egen gennemsigtighed — samme nedtoning som fyldet
-    color: _lerpColor(RBU_COLOR_FAR.stroke, RBU_COLOR_NEAR.stroke, t),
-    fillColor: _lerpColor(RBU_COLOR_FAR.fill, RBU_COLOR_NEAR.fill, t),
+    radius: Math.max(radius, 4),
+    fillOpacity: _lerp(0.55, 0.85, t),
+    opacity: _lerp(0.75, 1, t),
+    color: RBU_REGN_COLOR,
+    fillColor: RBU_REGN_FILL,
   };
 }
-// RETTET: tog tidligere intet argument og opdaterede kun ét, fælles
-// vp3RbuLayer — efter opsplitningen i to uafhængige lag (RBU Regn/RBU
-// Kloak, se VP3_LAYERS) skal begge kunne opdateres uafhængigt af hinanden,
-// bl.a. fordi kun ét af dem er synligt ad gangen ved en typisk toggle.
+// RETTET: tog tidligere intet argument — nu parametriseret så samme
+// funktion kan bruges uanset regn/kloak-farve (se currentRbuStyle).
 function updateRbuRadii(layer) {
   if (!layer || !map.hasLayer(layer)) return;
   layer.eachLayer(l => {
@@ -3654,8 +3639,7 @@ function updateRbuRadii(layer) {
   });
 }
 map.on('zoomend', () => {
-  updateRbuRadii(vp3RbuRegnLayer);
-  updateRbuRadii(vp3RbuKloakLayer);
+  updateRbuRadii(vp3OverloebLayer);
   syncRbuRingRadii();   // efter updateRbuRadii() — læser markørernes NYE radius
   updateBadevandRadii();
   updatePointsLayerRadii();
@@ -3977,22 +3961,22 @@ function getBadevandNavn(p) {
 }
 
 let vp3BadevandLayer = null;
-// RETTET: ét fælles vp3RbuLayer erstattet af to uafhængige lag (RBU Regn/
-// RBU Kloak, se VP3_LAYERS og loadVP3Layers()) — samme underliggende
-// vp3_rbu_slim.geojson, filtreret ved lag-opbygning efter bgv_type
-// (isRbuWastewater), ikke to separate fetches.
-let vp3RbuRegnLayer  = null;
-let vp3RbuKloakLayer = null;
-// Animeret "aktiv overløb"-ring for RBU Regn/Kloak — se colorRbuByOwnRisk().
-// Egne lag (ikke børn af vp3RbuRegnLayer/vp3RbuKloakLayer selv), fordi
-// ringene er rigtige SVG-circleMarkers (CSS-animerbare), mens hoved-lagenes
-// punkter deler sharedInteractiveRenderer (Canvas, ikke CSS-animerbar).
-let vp3RbuRegnRingLayer  = null;
-let vp3RbuKloakRingLayer = null;
+// RETTET (bruger-krav — "Combine Regn og Kloak into a single layer/button:
+// Overløb"): tidligere to uafhængige lag (RBU Regn/RBU Kloak) slået sammen
+// til ét "Overløb"-lag/knap igen — samme underliggende vp3_rbu_slim.geojson,
+// nu UDEN filter ved lag-opbygning (se buildRbuLayer i loadVP3Layers()).
+// Regn/kloak-sondringen (bgv_type via isRbuWastewater) er ikke forsvundet —
+// den styrer stadig hvert enkelt punkts farve (blå/brun, se
+// currentRbuStyle()), blot ikke længere hvilket LAG punktet hører til.
+let vp3OverloebLayer = null;
+// Animeret "aktiv overløb"-ring for Overløb-laget — se colorRbuByOwnRisk().
+// Eget lag (ikke børn af vp3OverloebLayer selv), fordi ringene er rigtige
+// SVG-circleMarkers (CSS-animerbare), mens hoved-lagets punkter deler
+// sharedInteractiveRenderer (Canvas, ikke CSS-animerbar).
+let vp3OverloebRingLayer = null;
 let showVP3Kyst      = false;  // default kun badesteder synlige
 let showVP3Bade      = true;   // synlig som standard
-let showVP3RbuRegn   = false;
-let showVP3RbuKloak  = false;
+let showVP3Overloeb  = false;
 
 // Strøm-visualisering (punkt 11) — animeret partikel-lag (windy-currents.js,
 // se dens sektion nedenfor), klippet til hav via en SVG clip-path
@@ -4938,7 +4922,7 @@ function renderMap() {
   console.timeEnd(`renderMap #${_rmId}: colorSoeerByRisk (985 søer)`);
   console.time(`renderMap #${_rmId}: colorKystvandByRisk + colorBadevandByRisk (109 kystvande + 1039 badesteder)`);
   colorKystvandByRisk();       // farv VP3 kystvand-polygoner + badevandspunkter efter max-risiko
-  colorRbuByOwnRisk();         // opdatér "aktiv overløb"-ringene på RBU Regn/Kloak
+  colorRbuByOwnRisk();         // opdatér "aktiv overløb"-ringene på Overløb-laget
   console.timeEnd(`renderMap #${_rmId}: colorKystvandByRisk + colorBadevandByRisk (109 kystvande + 1039 badesteder)`);
 
   // Håndhæv synlighed for points- og forecast-lag
@@ -5558,8 +5542,7 @@ document.querySelectorAll('.layer-btn').forEach(btn => {
 // HTML'ens aria-pressed-attributter alene styrer intet visuelt længere,
 // så den faktiske farve skal sættes eksplicit her, ikke antages fra CSS.
 setLayerBtnState('btn-vp3bade', true);   // badevandsområder er synlige som standard
-setLayerBtnState('btn-vp3rburegn', false);
-setLayerBtnState('btn-vp3rbukloak', false);
+setLayerBtnState('btn-vp3overloeb', false);
 setLayerBtnState('btn-vp3kyst', false);
 setLayerBtnState('btn-currents', false);
 setLayerBtnState('btn-heat', false);
@@ -5616,15 +5599,12 @@ const VP3_LAYERS = {
   // præcise Leaflet-interne mekanisme direkte (ingen fjernadgang til en
   // fejlende iPhone for at bekræfte via devtools).
   badevand:   { getShow: () => showVP3Bade,    getLayer: () => vp3BadevandLayer, onShown: () => refreshBadevandMarkers() },
-  // RETTET: ét fælles 'rbu'-lag (rødt = regnvand, brunt = kloak i samme
-  // lag) erstattet af to selvstændige, uafhængigt til/fra-bare lag — se
-  // vp3RbuRegnLayer/vp3RbuKloakLayer's filhoved.
-  rbuRegn:    { getShow: () => showVP3RbuRegn,  getLayer: () => vp3RbuRegnLayer,  onShown: () => updateRbuRadii(vp3RbuRegnLayer) },
-  rbuKloak:   { getShow: () => showVP3RbuKloak, getLayer: () => vp3RbuKloakLayer, onShown: () => updateRbuRadii(vp3RbuKloakLayer) },
-  // Samme show-state som deres hoved-lag ovenfor — ringene tændes/slukkes
-  // altid sammen med RBU Regn/Kloak, aldrig uafhængigt.
-  rbuRegnRing:  { getShow: () => showVP3RbuRegn,  getLayer: () => vp3RbuRegnRingLayer },
-  rbuKloakRing: { getShow: () => showVP3RbuKloak, getLayer: () => vp3RbuKloakRingLayer },
+  // Ét fælles Overløb-lag (blå = regnvand, brun = kloak i samme lag, se
+  // currentRbuStyle()) — se vp3OverloebLayer's filhoved.
+  overloeb:     { getShow: () => showVP3Overloeb, getLayer: () => vp3OverloebLayer,     onShown: () => updateRbuRadii(vp3OverloebLayer) },
+  // Samme show-state som hoved-laget ovenfor — ringen tændes/slukkes altid
+  // sammen med Overløb, aldrig uafhængigt.
+  overloebRing: { getShow: () => showVP3Overloeb, getLayer: () => vp3OverloebRingLayer },
   vandlobdir: { getShow: () => showVandlobDir, getLayer: () => vp3VandlobDirLayer },
 };
 
@@ -5670,16 +5650,10 @@ function toggleVP3Bade() {
   requestAnimationFrame(() => syncVP3Layer('badevand'));
 }
 
-function toggleVP3RbuRegn() {
-  showVP3RbuRegn = !showVP3RbuRegn;
-  setLayerBtnState('btn-vp3rburegn', showVP3RbuRegn);
-  requestAnimationFrame(() => { syncVP3Layer('rbuRegn'); syncVP3Layer('rbuRegnRing'); });
-}
-
-function toggleVP3RbuKloak() {
-  showVP3RbuKloak = !showVP3RbuKloak;
-  setLayerBtnState('btn-vp3rbukloak', showVP3RbuKloak);
-  requestAnimationFrame(() => { syncVP3Layer('rbuKloak'); syncVP3Layer('rbuKloakRing'); });
+function toggleVP3Overloeb() {
+  showVP3Overloeb = !showVP3Overloeb;
+  setLayerBtnState('btn-vp3overloeb', showVP3Overloeb);
+  requestAnimationFrame(() => { syncVP3Layer('overloeb'); syncVP3Layer('overloebRing'); });
 }
 
 function toggleVandlobDir() {
@@ -7046,9 +7020,9 @@ function colorBadevandByRisk() {
   console.timeEnd('colorBadevandByRisk: 1039 punkters computeBadevandRisk');
 }
 
-// Animeret "aktiv overløb"-ring på RBU Regn/Kloak — se
-// vp3RbuRegnRingLayer/vp3RbuKloakRingLayer's filhoved og
-// .outlet-active-ring/@keyframes outlet-ring-pulse for selve CSS'en.
+// Animeret "aktiv overløb"-ring på Overløb-laget — se
+// vp3OverloebRingLayer's filhoved og .outlet-active-ring/@keyframes
+// outlet-ring-pulse for selve CSS'en.
 //
 // Matcher HVER RBU-punkt til PULS' egen outfallId (r[8] i puls-data.json)
 // via en eksakt ID-sammenligning (pkt_id === outfallId) — IKKE nærmeste-
@@ -7080,7 +7054,7 @@ let _rbuOutfallIndexRef = null;   // overflowPoints-referencen indekset er bygge
 let sharedRingRenderer = null;
 
 function colorRbuByOwnRisk() {
-  if (!vp3RbuRegnLayer || !vp3RbuKloakLayer || !vp3RbuRegnRingLayer || !vp3RbuKloakRingLayer) return;
+  if (!vp3OverloebLayer || !vp3OverloebRingLayer) return;
   if (!overflowPoints || overflowPoints.length === 0) return;
   if (!sharedRingRenderer) sharedRingRenderer = L.svg({ pane: 'pointsPane' });
 
@@ -7090,31 +7064,26 @@ function colorRbuByOwnRisk() {
     _rbuOutfallIndexRef = overflowPoints;
   }
 
-  vp3RbuRegnRingLayer.clearLayers();
-  vp3RbuKloakRingLayer.clearLayers();
+  vp3OverloebRingLayer.clearLayers();
 
-  const addRings = (sourceLayer, ringLayer) => {
-    sourceLayer.eachLayer(marker => {
-      const pktId = marker.feature?.properties?.pkt_id;
-      if (!pktId) return;
-      const pt = _rbuOutfallIndex.get(pktId);
-      if (!pt || pt.riskScore === null || pt.riskScore < 0.6) return;
-      const ring = L.circleMarker(marker.getLatLng(), {
-        radius: marker.getRadius() + 3,
-        color: riskColor(pt.riskScore),
-        weight: 2.5,
-        fillOpacity: 0,
-        className: 'outlet-active-ring',
-        interactive: false,
-        pane: 'pointsPane',
-        renderer: sharedRingRenderer,
-      });
-      ring._sourceMarker = marker;   // se syncRbuRingRadii() — O(1) opslag ved zoom, ikke en lat/lng-søgning
-      ringLayer.addLayer(ring);
+  vp3OverloebLayer.eachLayer(marker => {
+    const pktId = marker.feature?.properties?.pkt_id;
+    if (!pktId) return;
+    const pt = _rbuOutfallIndex.get(pktId);
+    if (!pt || pt.riskScore === null || pt.riskScore < 0.6) return;
+    const ring = L.circleMarker(marker.getLatLng(), {
+      radius: marker.getRadius() + 3,
+      color: riskColor(pt.riskScore),
+      weight: 2.5,
+      fillOpacity: 0,
+      className: 'outlet-active-ring',
+      interactive: false,
+      pane: 'pointsPane',
+      renderer: sharedRingRenderer,
     });
-  };
-  addRings(vp3RbuRegnLayer, vp3RbuRegnRingLayer);
-  addRings(vp3RbuKloakLayer, vp3RbuKloakRingLayer);
+    ring._sourceMarker = marker;   // se syncRbuRingRadii() — O(1) opslag ved zoom, ikke en lat/lng-søgning
+    vp3OverloebRingLayer.addLayer(ring);
+  });
 }
 
 // Ringens radius følger kilde-markørens EGEN, allerede zoom-skalerede
@@ -7124,8 +7093,7 @@ function colorRbuByOwnRisk() {
 // (direkte objektreference, se _sourceMarker i colorRbuByOwnRisk()) —
 // ingen lat/lng-søgning gennem hele hoved-laget.
 function syncRbuRingRadii() {
-  vp3RbuRegnRingLayer?.eachLayer(ring => { if (ring._sourceMarker) ring.setRadius(ring._sourceMarker.getRadius() + 3); });
-  vp3RbuKloakRingLayer?.eachLayer(ring => { if (ring._sourceMarker) ring.setRadius(ring._sourceMarker.getRadius() + 3); });
+  vp3OverloebRingLayer?.eachLayer(ring => { if (ring._sourceMarker) ring.setRadius(ring._sourceMarker.getRadius() + 3); });
 }
 
 // RETTET: fjernelses-loopet nedenfor gør genkald sikkert i SEKVENS, men ikke
@@ -7519,41 +7487,30 @@ async function _loadVP3LayersImpl() {
     }
   } catch(e) { console.warn('VP3 badevand fejl:', e.message); }
 
-  // RBU-punkter fra VP3 (separate fra PULS-punkter — VP3-klassificering).
-  // RETTET: ét fælles vp3RbuLayer (rødt/brunt blandet i samme lag) erstattet
-  // af to selvstændige lag — samme hentede/parsede GeoJSON (ét fetch, ikke
-  // to), men filtreret ved lag-opbygning efter isRbuWastewater(). Fjernes
-  // HER, synkront, umiddelbart før de nye udgaver oprettes, IKKE i den
-  // fælles løkke øverst i funktionen — samme begrundelse som badevands-
-  // sektionen ovenfor (renderMap()'s egen gensynkronisering ville ellers nå
-  // at genskabe den præcise reference, den lige er blevet fjernet).
-  if (vp3RbuRegnLayer && map.hasLayer(vp3RbuRegnLayer)) {
-    try { map.removeLayer(vp3RbuRegnLayer); }
-    catch(e) { console.warn('loadVP3Layers: fjernelse af gammelt RBU Regn-lag fejlede —', e.message); }
+  // RBU-punkter fra VP3 (separate fra PULS-punkter — VP3-klassificering),
+  // ét fælles Overløb-lag (blå/brun blandet i samme lag efter
+  // isRbuWastewater(), se currentRbuStyle()). Fjernes HER, synkront,
+  // umiddelbart før den nye udgave oprettes, IKKE i den fælles løkke øverst
+  // i funktionen — samme begrundelse som badevands-sektionen ovenfor
+  // (renderMap()'s egen gensynkronisering ville ellers nå at genskabe den
+  // præcise reference, den lige er blevet fjernet).
+  if (vp3OverloebLayer && map.hasLayer(vp3OverloebLayer)) {
+    try { map.removeLayer(vp3OverloebLayer); }
+    catch(e) { console.warn('loadVP3Layers: fjernelse af gammelt Overløb-lag fejlede —', e.message); }
   }
-  if (vp3RbuKloakLayer && map.hasLayer(vp3RbuKloakLayer)) {
-    try { map.removeLayer(vp3RbuKloakLayer); }
-    catch(e) { console.warn('loadVP3Layers: fjernelse af gammelt RBU Kloak-lag fejlede —', e.message); }
-  }
-  if (vp3RbuRegnRingLayer && map.hasLayer(vp3RbuRegnRingLayer)) {
-    try { map.removeLayer(vp3RbuRegnRingLayer); }
-    catch(e) { console.warn('loadVP3Layers: fjernelse af gammel RBU Regn-ring fejlede —', e.message); }
-  }
-  if (vp3RbuKloakRingLayer && map.hasLayer(vp3RbuKloakRingLayer)) {
-    try { map.removeLayer(vp3RbuKloakRingLayer); }
-    catch(e) { console.warn('loadVP3Layers: fjernelse af gammel RBU Kloak-ring fejlede —', e.message); }
+  if (vp3OverloebRingLayer && map.hasLayer(vp3OverloebRingLayer)) {
+    try { map.removeLayer(vp3OverloebRingLayer); }
+    catch(e) { console.warn('loadVP3Layers: fjernelse af gammel Overløb-ring fejlede —', e.message); }
   }
   try {
     console.time('loadVP3Layers: vp3_rbu_slim.geojson (hent+parse+lag, ~6,3 MB)');
     const resp = await hentBuildBustet('vp3_rbu_slim.geojson');
     if (resp.ok) {
       const data = await resp.json();
-      console.time('L.geoJSON RBU-lag (21375 punkter)');
-      // Fælles opbygning for begge lag — kun filter-prædikatet (hvilke
-      // features der medtages) adskiller Regn fra Kloak, selve
-      // stil/tooltip/klik-logikken er identisk.
-      const buildRbuLayer = (wastewaterOnly) => L.geoJSON(data, {
-        filter: f => isRbuWastewater(f.properties) === wastewaterOnly,
+      console.time('L.geoJSON Overløb-lag (21375 punkter)');
+      // Ét fælles lag, intet filter — regn/kloak sondres udelukkende via
+      // hvert punkts egen farve (currentRbuStyle(isRbuWastewater(...))).
+      const buildRbuLayer = () => L.geoJSON(data, {
         pointToLayer: (f, latlng) => {
           const style = currentRbuStyle(isRbuWastewater(f.properties));
           // RETTET: weight hævet 1→2 (se RBU_MARKER_BASE_RADIUS's
@@ -7586,18 +7543,13 @@ async function _loadVP3LayersImpl() {
           l.on('click', function(e) { if(window._LC) return; window._LC=true; setTimeout(()=>delete window._LC,50); closeBadevandPanel(); openRbuUdlobPanel(f); });
         }
       });
-      vp3RbuRegnLayer  = buildRbuLayer(false);
-      vp3RbuKloakLayer = buildRbuLayer(true);
-      vp3RbuRegnRingLayer  = L.layerGroup();
-      vp3RbuKloakRingLayer = L.layerGroup();
-      colorRbuByOwnRisk();        // udfylder ring-lagene med aktuel risiko FØR de evt. vises
-      syncVP3Layer('rbuRegn');    // tilføjer OG kalder updateRbuRadii() via onShown, hvis showVP3RbuRegn er sandt
-      syncVP3Layer('rbuKloak');   // samme, for showVP3RbuKloak
-      syncVP3Layer('rbuRegnRing');
-      syncVP3Layer('rbuKloakRing');
-      console.timeEnd('L.geoJSON RBU-lag (21375 punkter)');
-      console.info('VP3 RBU indlæst:', data.features?.length, 'features',
-        `(${vp3RbuRegnLayer.getLayers().length} regn, ${vp3RbuKloakLayer.getLayers().length} kloak)`);
+      vp3OverloebLayer     = buildRbuLayer();
+      vp3OverloebRingLayer = L.layerGroup();
+      colorRbuByOwnRisk();          // udfylder ring-laget med aktuel risiko FØR det evt. vises
+      syncVP3Layer('overloeb');     // tilføjer OG kalder updateRbuRadii() via onShown, hvis showVP3Overloeb er sandt
+      syncVP3Layer('overloebRing');
+      console.timeEnd('L.geoJSON Overløb-lag (21375 punkter)');
+      console.info('VP3 Overløb indlæst:', vp3OverloebLayer.getLayers().length, 'punkter');
     }
     console.timeEnd('loadVP3Layers: vp3_rbu_slim.geojson (hent+parse+lag, ~6,3 MB)');
   } catch(e) { console.warn('VP3 RBU fejl:', e.message); }
@@ -7953,8 +7905,7 @@ async function showDebugPanel() {
     <div class="dbg-row"><span>Søer</span><span class="${vp3SoeerRaw ? 'dbg-ok' : 'dbg-bad'}">${vp3SoeerRaw ? (vp3SoeerRaw.features?.length ?? 0) + ' polygoner' : 'ikke indlæst'}</span></div>
     <div class="dbg-row"><span>Vandløb</span><span class="${vandlobDisplayData ? 'dbg-ok' : 'dbg-bad'}">${vandlobDisplayData ? vandlobDisplayData.length + ' linjer (server-prækomputeret)' : 'ikke indlæst'}</span></div>
     <div class="dbg-row"><span>Badevand</span><span class="${vp3BadevandLayer ? 'dbg-ok' : 'dbg-bad'}">${vp3BadevandLayer ? vp3BadevandLayer.getLayers().length + ' punkter' : 'ikke indlæst'}</span></div>
-    <div class="dbg-row"><span>RBU Regn</span><span class="${vp3RbuRegnLayer ? 'dbg-ok' : 'dbg-bad'}">${vp3RbuRegnLayer ? vp3RbuRegnLayer.getLayers().length + ' punkter' : 'ikke indlæst'}</span></div>
-    <div class="dbg-row"><span>RBU Kloak</span><span class="${vp3RbuKloakLayer ? 'dbg-ok' : 'dbg-bad'}">${vp3RbuKloakLayer ? vp3RbuKloakLayer.getLayers().length + ' punkter' : 'ikke indlæst'}</span></div>
+    <div class="dbg-row"><span>Overløb</span><span class="${vp3OverloebLayer ? 'dbg-ok' : 'dbg-bad'}">${vp3OverloebLayer ? vp3OverloebLayer.getLayers().length + ' punkter' : 'ikke indlæst'}</span></div>
   </div>`);
 
   rows.push(`<div class="dbg-group"><div class="dbg-group-title">Punkter i hukommelsen</div>
