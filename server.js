@@ -34,6 +34,15 @@ const webpush     = require('web-push');
 // er oprettet), så koden virker uændret begge steder.
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 
+// ── Selvhostede vector-tiles (tiles/build-tiles.sh) ─────────────────────────
+// coverage.pmtiles (DK+GB+IE/NI+FR, z0-14, ~5.5GB) ligger på Volumen, IKKE i
+// git — for stor til et repo, og genereres separat via build-tiles.sh (se
+// tiles/README.md). Skal uploades til Volumen manuelt efter hver
+// build-tiles.sh-kørsel (fly sftp shell -a dkvand, put tiles/data/
+// coverage.pmtiles data/tiles/coverage.pmtiles) — ingen automatisk deploy-
+// step gør det endnu.
+const TILES_DIR = path.join(DATA_DIR, 'tiles');
+
 // ── VAPID configuration ─────────────────────────────────────────────────────
 // Set these as environment variables on Fly.io:
 //   fly secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=...
@@ -116,25 +125,9 @@ VP3_FILES.forEach(f => {
 // (Use a short max-age in production once stable; no-cache avoids stale-JS
 // confusion during active development.)
 //
-// MapTiler-nøglen injiceres her fra en Fly secret (MAPTILER_KEY) i stedet
-// for at ligge hardcoded i selve HTML-filen. Nøglen bliver stadig synlig i
-// browserens netværkstrafik og sidekilde — det er uundgåeligt, da kort-
-// tiles hentes direkte fra brugerens browser til MapTiler, ikke via denne
-// server — men denne tilgang holder den ude af selve kildekode-filerne, og
-// gør det muligt at rotere nøglen uden at redeploye HTML'en. Kombinér med
-// domænebegrænsning i MapTilers dashboard for reel beskyttelse mod misbrug.
-let _htmlCache = null;
-function getHtmlWithKey() {
-  if (_htmlCache) return _htmlCache;
-  const raw = fs.readFileSync(path.join(STATIC_DIR, 'dansk-overloeb-kort.html'), 'utf8');
-  const key = process.env.MAPTILER_KEY || '';
-  if (!key) console.warn('MAPTILER_KEY er ikke sat — kortet vil ikke kunne hente tiles. Kør: fly secrets set MAPTILER_KEY=din-nøgle');
-  _htmlCache = raw.replace(/__MAPTILER_KEY__/g, key);
-  return _htmlCache;
-}
 app.get(['/', '/dansk-overloeb-kort.html'], (req, res) => {
   res.set('Cache-Control', 'no-cache');
-  res.type('html').send(getHtmlWithKey());
+  res.type('html').sendFile(path.join(STATIC_DIR, 'dansk-overloeb-kort.html'));
 });
 
 // Service worker: never cache (must update immediately)
@@ -922,6 +915,12 @@ app.get('/api/health', (req, res) => {
     ttlHours: WEATHER_TTL_MS / 3600000,
   });
 });
+
+// Selvhostede vector-tiles (protomaps-leaflet henter dem via HTTP Range-
+// requests — express.static understøtter Range/206 Partial Content ud af
+// boksen, ingen ekstra kode nødvendig). Lang cache-levetid: filen ændrer
+// sig kun ved en manuel build-tiles.sh-kørsel + upload, ikke løbende.
+app.use('/tiles', express.static(TILES_DIR, { maxAge: '30d', immutable: true }));
 
 // Serve any other static assets (varsel page if split out, etc.)
 app.use(express.static(STATIC_DIR, { maxAge: '5m' }));

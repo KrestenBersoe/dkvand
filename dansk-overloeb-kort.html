@@ -10,6 +10,8 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <!-- Leaflet.heat -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+<!-- protomaps-leaflet: renders our self-hosted coverage.pmtiles (tiles/build-tiles.sh) as the basemap, replacing MapTiler -->
+<script src="https://unpkg.com/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 
 <style>
   /* ── Design tokens ───────────────────────────────────────────────────────── */
@@ -1703,27 +1705,25 @@ map.getPane('pointsPane').style.zIndex = 620;   // overlayPane er 400, markerPan
 
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-// Light basemap — MapTiler (kræver gratis API-nøgle, sæt herunder).
-// Skiftet fra CARTO, hvis gratis rå tile-CDN nu OGSÅ er blevet indskrænket
-// (deres nyeste dokumentation nævner eksplicit at gratis brug kun gælder
-// "CARTO grantees" — kommerciel/produktionsbrug kræver Enterprise-licens).
-// Før det skiftede vi fra rå tile.openstreetmap.org af samme årsag (skærpet
-// Tile Usage Policy). Mønstret er klart: uautentificerede "gratis" tile-CDN'er
-// strammes ind uden varsel. En gratis API-nøgle er beskyttet af en reel
-// aftale/kvote i stedet, og er derfor markant mere stabil på sigt.
-//
-// OPSÆTNING (gøres kun én gang, på serveren — IKKE i denne fil):
-//   1. Opret gratis konto på https://www.maptiler.com/ (ingen kreditkort nødvendigt)
-//   2. Kopiér din API-nøgle fra kontrolpanelet
-//   3. Sæt den som Fly secret: fly secrets set MAPTILER_KEY=din-nøgle -a dkvand
-//   (server.js injicerer nøglen her ved serverering — se getHtmlWithKey())
-// Gratis niveau: 100.000 tile-visninger/måned — rigeligt til denne app.
-const MAPTILER_KEY = '__MAPTILER_KEY__';
+// Light basemap — selvhostede vector-tiles (protomaps-leaflet + coverage.
+// pmtiles, se tiles/build-tiles.sh), IKKE længere MapTiler. Erstatter en
+// kæde af tidligere "gratis" raster tile-CDN'er (rå tile.openstreetmap.org,
+// så CARTO, så MapTiler) der hver især til sidst strammede deres gratis-
+// vilkår ind — vores egne tiles har ingen tredjeparts kvote/pris at ramme.
+// Kræver: (1) tiles/build-tiles.sh er kørt og coverage.pmtiles uploadet til
+// Volumen (se server.js's TILES_DIR-kommentar), (2) det obligatoriske
+// OpenMapTiles-attributionskrav nedenfor, som Planetiler selv udskriver
+// ved hver build.
+const BASEMAP_OPTIONS = {
+  url: 'tiles/coverage.pmtiles',
+  flavor: 'light',
+  lang: 'da',
+  maxDataZoom: 14,
+  maxZoom: 19,
+  attribution: '© <a href="https://github.com/openmaptiles/openmaptiles/#license">OpenMapTiles</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+};
 
-L.tileLayer(`https://api.maptiler.com/maps/basic-v2/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`, {
-  attribution: '© <a href="https://www.maptiler.com/copyright/">MapTiler</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-  maxZoom: 19
-}).addTo(map);
+protomapsL.leafletLayer(BASEMAP_OPTIONS).addTo(map);
 
 // ── Hjem-kort: separat lille Leaflet-instans for lokal visning ─────────────
 let hjemMap = null;
@@ -1739,10 +1739,7 @@ function initHjemMap() {
     zoom: 6,
     zoomControl: true,
   });
-  L.tileLayer(`https://api.maptiler.com/maps/basic-v2/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`, {
-    attribution: '© <a href="https://www.maptiler.com/copyright/">MapTiler</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: 19
-  }).addTo(hjemMap);
+  protomapsL.leafletLayer(BASEMAP_OPTIONS).addTo(hjemMap);
   hjemNearestLayer = L.layerGroup().addTo(hjemMap);
   return hjemMap;
 }
