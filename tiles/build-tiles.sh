@@ -53,9 +53,12 @@ docker run --rm \
   ghcr.io/onthegomap/planetiler:latest \
   --osm-path=/data/merged.osm.pbf \
   --output=/data/coverage.pmtiles \
-  --maxzoom="$MAXZOOM"
-# NOTE: verify --maxzoom against `docker run ghcr.io/onthegomap/planetiler:latest --help`
-# before relying on this — not independently confirmed against current Planetiler docs.
+  --maxzoom="$MAXZOOM" \
+  --download
+# --download fetches the OpenMapTiles profile's auxiliary sources (lake
+# centerlines, water polygons, Natural Earth) that aren't part of the OSM
+# extract itself. It only fetches files that don't already exist locally,
+# so it won't re-download merged.osm.pbf.
 
 echo "== Done =="
 ls -lh "$OUTPUT_PMTILES"
