@@ -128,6 +128,13 @@ const CSV_PATH        = argVal('--csv');
 const ZIP_PATH        = argVal('--zip');
 const ZIP_ENTRY       = argVal('--zip-entry');
 const OUT_FILE        = path.resolve(argVal('--out', path.join(STATIC_DIR, 'badevand-analyseresultater.json')));
+// Fuld prøvehistorik (ikke kun seneste-pr-station som OUT_FILE ovenfor) —
+// samplesByStation nedenfor har den allerede i hukommelsen (parsingen
+// smider intet væk, kun output-opbygningen reducerer til "seneste"), så
+// dette koster ingen ekstra CSV-gennemløb. Rå ingrediens til
+// scripts/validate-predictions.js, samme mønster som frwater's
+// bathing-water-samples.json (se dens pipeline-fils egen kommentar).
+const OUT_SAMPLES_FILE = path.resolve(argVal('--out-samples', path.join(STATIC_DIR, 'badevand-proeve-historik.json')));
 const ENCODING        = argVal('--encoding', 'utf8');
 const DELIMITER       = argVal('--delimiter', ';');
 const LIMIT           = argVal('--limit') ? parseInt(argVal('--limit'), 10) : null;  // KUN til hurtig lokal test
@@ -732,6 +739,29 @@ async function main() {
   fs.writeFileSync(OUT_FILE, json, 'utf8');
   console.log(`Skrevet: ${OUT_FILE}`);
   console.log('\nHusk: tilføj en COPY-linje for badevand-analyseresultater.json i Dockerfile, hvis den ikke allerede er der, og deploy (fly deploy -a dkvand) når du er klar.');
+
+  // Fuld prøvehistorik — se OUT_SAMPLES_FILE's egen kommentar. Ikke nødvendig
+  // for den kørende app (scripts/validate-predictions.js er offline, samme
+  // "ikke en del af Dockerfile'ens COPY-liste"-status som selve dette
+  // build-script), så ingen deploy-huskeseddel nødvendig for den.
+  const samples = [];
+  for (const [stationId, byDate] of samplesByStation) {
+    for (const [, sample] of byDate) {
+      samples.push({
+        siteId: stationId,
+        dateIso: new Date(sample.dateMs).toISOString().slice(0, 10),
+        ecoli: sample.ecoli?.vaerdi ?? sample.ecoli?.value ?? null,
+        enterokokker: sample.entero?.vaerdi ?? sample.entero?.value ?? null,
+      });
+    }
+  }
+  samples.sort((a, b) => a.dateIso.localeCompare(b.dateIso));
+  fs.writeFileSync(
+    OUT_SAMPLES_FILE,
+    JSON.stringify({ generatedAt: new Date().toISOString(), count: samples.length, samples }),
+    'utf8'
+  );
+  console.log(`Skrevet: ${OUT_SAMPLES_FILE} (${samples.length.toLocaleString('da')} prøver, fuld historik).`);
 }
 
 main().catch(err => {
