@@ -79,12 +79,13 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <!-- Leaflet.heat -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
+<script src="https://unpkg.com/protomaps-leaflet@5.1.0/dist/protomaps-leaflet.js"></script>
 <!-- Strøm-visualisering (se toggleCurrents()/aktiveringskæden ved windy-
      currents.js): vendoret windy.js-motor (fra wind-js-leaflet, se windy-
      currents.js' filhoved) — animeret partikel-lag med retning+fart+
      temperatur. Erstattede den tidligere statiske pil-visualisering
      (buildCurrentsArrowLayer(), fjernet). Selv-hostet, ikke CDN (samme
-     princip som TILE_SERVER_URL nedenfor), da vi patcher motoren (danske
+     princip som BASEMAP_OPTIONS nedenfor), da vi patcher motoren (danske
      temperatur-grænser, land-maskering, forstærket synlighed). -->
 <!-- ?v= er en engangs-cache-bust (se server.js' Cache-Control: no-cache-rettelse
      for disse to filer) — enhver besøgende, der havde åbnet siden bare ÉN
@@ -3789,57 +3790,32 @@ function centerOnMyLocation(btnEl) {
   );
 }
 
-// Light basemap — selv-hostet, kun-Danmark tileserver (se tileserver/-
-// mappen i repoet for hele opsætningen).
+// Light basemap — selv-hostede vector-tiles (coverage.pmtiles, se
+// server.js' /tiles-route). protomaps-leaflet henter fliserne direkte som
+// vektordata via HTTP Range-requests og renderer dem client-side, samme
+// grundprincip (egen-hostet, ingen ekstern kvote/API-nøgle) som den
+// tidligere TileServer GL-opsætning nedenfor, men uden en separat Fly-
+// app/service at holde kørende og betale for — fliserne ligger som én fil
+// på samme Volume som resten af appen.
 //
-// RETTET/MIGRERET: skiftede tidligere gentagne gange leverandør, hver gang
-// det "gratis" niveau blev strammet uden varsel (rå tile.openstreetmap.org
-// → CARTO → MapTiler, se git-historik for de tidligere begrundelser hvis
-// nødvendigt). Mønstret var klart: uautentificerede/kvote-baserede
-// tredjeparts-CDN'er strammes før eller siden. Løsningen her fjerner
-// problemet permanent i stedet for at udskyde det: vi genererer og
-// hoster selv kortfliser for Danmark (+ kystnært farvand), baseret på
-// OpenStreetMap-data (samme kildedata MapTiler i øvrigt selv bruger) via
-// Planetiler + TileServer GL, deployet som en selvstændig Fly.io-service
-// ved siden af denne. Ingen ekstern kvote at løbe tør for, ingen API-nøgle
-// at rotere. Se scripts/tiles/build-denmark-tiles.sh for generering af
-// selve fliserne, og tileserver/ for serverings-opsætningen.
-//
-// RETTET (2026-07-25): peger nu på tiles.ditbadevand.dk i stedet for det
-// rå dkvand-tiles.fly.dev — det rå fly.dev-hostname går UDEN OM
-// Cloudflare (som ellers allerede ligger foran hele ditbadevand.dk),
-// fordi det er et helt andet hostname/origin. Hver besøgendes browser
-// lavede dermed sin egen, ucachede forbindelse direkte til tileserveren
-// for hver eneste flise. tiles.ditbadevand.dk er en Cloudflare-proxied
-// CNAME til samme dkvand-tiles.fly.dev (se fly certs list -a dkvand-tiles
-// for TLS-certifikatet), med en Cache Rule der cacher alt på stien —
-// bekræftet virkende (cf-cache-status: HIT på gentagne opslag).
-//
-// RETTET (2026-08-14/15, bruger-beslutning — reverserer et kort mellemspil):
-// prøvede kortvarigt SDFI/Klimadatastyrelsens Skærmkortet (officiel WMS,
-// proxyet server-side, se git-historik commit a0e4564 hvis den skal
-// genoplives) — reverseret igen samme dag: WMS-tjenesten renderer i faste
-// 256×256-rasterfliser uden hensyn til devicePixelRatio, hvilket så
-// mærkbart uskarpt ud på almindelige (retina/høj-DPI) skærme sammenlignet
-// med det selv-hostede vektor-afledte kort. server.js' /api/tiles/
-// skaermkort-graa-proxy-route og SKAERMKORT_API_KEY-secreten er fjernet
-// igen som en del af denne reversering.
-const TILE_SERVER_URL = 'https://tiles.ditbadevand.dk/styles/basic/{z}/{x}/{y}.png';
-
-L.tileLayer(TILE_SERVER_URL, {
-  attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+// RETTET/MIGRERET (historik, ældste først): rå tile.openstreetmap.org →
+// CARTO → MapTiler (uautentificerede/kvote-baserede tredjeparts-CDN'er,
+// strammet uden varsel én efter én) → selv-hostet TileServer GL (separat
+// Fly-service, dkvand-tiles.fly.dev via tiles.ditbadevand.dk/Cloudflare) →
+// kortvarigt SDFI/Klimadatastyrelsens Skærmkortet (WMS, reverseret samme
+// dag pga. uskarp rendering på høj-DPI-skærme) → tilbage til TileServer GL
+// → nu protomaps-leaflet/coverage.pmtiles. Se git-historik for de enkelte
+// begrundelser hvis en tidligere løsning skal genoplives.
+const BASEMAP_OPTIONS = {
+  url: 'tiles/coverage.pmtiles',
+  flavor: 'light',
+  lang: 'da',
+  maxDataZoom: 14,
   maxZoom: 19,
-  // RETTET (KRITISK — overbelastede tileserveren): denmark.mbtiles har kun
-  // data til zoom 14 (se metadata: minzoom/maxzoom). Uden maxNativeZoom
-  // bad Leaflet tileserveren om ÆGTE fliser for zoom 15-19 også, hvilket
-  // tvang den (kun 1 delt vCPU) til dyr on-the-fly vektor→raster-rendering
-  // pr. flise (1,4-3 sek. observeret pr. flise i produktionslogs) — nok til
-  // at overbelaste serveren så almindelige fliser på ALLE zoom-niveauer
-  // begyndte at time out. maxNativeZoom får Leaflet til i stedet at
-  // CSS-opskalere den sidste rigtige zoom-14-flise for niveau 15-19,
-  // helt uden server-belastning.
-  maxNativeZoom: 14
-}).addTo(map);
+  attribution: '© <a href="https://github.com/openmaptiles/openmaptiles/#license">OpenMapTiles</a> © <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+};
+
+protomapsL.leafletLayer(BASEMAP_OPTIONS).addTo(map);
 
 // ── Hjem-kort: separat lille Leaflet-instans for lokal visning ─────────────
 let hjemMap = null;
@@ -3855,11 +3831,7 @@ function initHjemMap() {
     zoom: 6,
     zoomControl: true,
   });
-  L.tileLayer(TILE_SERVER_URL, {
-    attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
-    maxZoom: 19,
-    maxNativeZoom: 14 // se hovedkortets tileLayer ovenfor for hvorfor
-  }).addTo(hjemMap);
+  protomapsL.leafletLayer(BASEMAP_OPTIONS).addTo(hjemMap);
   hjemNearestLayer = L.layerGroup().addTo(hjemMap);
   return hjemMap;
 }
