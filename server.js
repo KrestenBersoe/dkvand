@@ -110,6 +110,18 @@ const multer       = require('multer');
 // er oprettet), så koden virker uændret begge steder.
 const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
 
+// Selvhostede vector-tiles (coverage.pmtiles) — uploadet manuelt til Volumen
+// via build-tiles.sh + fly ssh sftp put, ikke en del af git/Docker-imaget
+// (filen er ~5,5 GB). Ligger under DATA_DIR, samme Volume-afhængighed som
+// currents-cache.json ovenfor.
+const TILES_DIR = path.join(DATA_DIR, 'tiles');
+
+// Stil/skrifttyper/sprite til vector-tile-renderingen (OSM Liberty, tilpasset
+// til at pege på coverage.pmtiles i stedet for MapTiler) — ~6,3 MB, ligger
+// derfor almindeligt i git (map-assets/), ikke på Volumen som selve
+// flisefilen.
+const MAP_ASSETS_DIR = path.join(__dirname, 'map-assets');
+
 // ── VAPID configuration ─────────────────────────────────────────────────────
 // Set these as environment variables on Fly.io:
 //   fly secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=...
@@ -5545,6 +5557,30 @@ app.get('/api/health', (req, res) => {
 // af samme grund uforvarende have åbnet requirements.txt; robots.txt
 // serveres i stedet via sin egen eksplicitte route (se den, samme mønster
 // som /overloeb-sw.js).
+// Selvhostede vector-tiles (protomaps/pmtiles henter dem via HTTP Range-
+// requests — express.static understøtter Range/206 Partial Content ud af
+// boksen, ingen ekstra kode nødvendig). Lang cache-levetid: filen ændrer
+// sig kun ved en manuel build-tiles.sh-kørsel + upload, ikke løbende.
+// Placeret FØR allowlist-filteret nedenfor — .pmtiles-endelsen er bevidst
+// IKKE i PUBLIC_STATIC_EXTENSIONS, filen skal kun serveres via denne
+// navngivne rute.
+app.use('/tiles', express.static(TILES_DIR, { maxAge: '30d', immutable: true }));
+
+// Stil/skrifttyper/sprite til samme kortløsning — se MAP_ASSETS_DIR ovenfor.
+// Samme placering-før-allowlisten-begrundelse: .pbf (skrifttype-glyffer)
+// er bevidst IKKE i PUBLIC_STATIC_EXTENSIONS.
+app.use('/map-assets', express.static(MAP_ASSETS_DIR, { maxAge: '30d', immutable: true }));
+
+// MIDLERTIDIG testside til visuel verifikation af den selvhostede
+// vector-tile-opsætning (OSM Liberty-stil mod coverage.pmtiles), FØR den
+// erstatter det rigtige kort — se samtalen om at undgå at gentage den
+// forrige, uverificerede pmtiles-fejl. Ikke linket fra nogen anden side.
+// FJERNES igen når den rigtige basemap er skiftet og bekræftet.
+app.get('/tile-test.html', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(STATIC_DIR, 'tile-test.html'));
+});
+
 const BLOCKED_STATIC_PATH_PATTERNS = [
   /^\/node_modules\//i,
   /^\/package(-lock)?\.json$/i,
