@@ -31,6 +31,12 @@ scripts/
 # '/tiles'-routen i server.js), ikke længere en del af denne app.
 tileserver/
 
+# Zippet kildepakke (~1,9 GB) brugt til dengang at sætte tileserver/ op —
+# IKKE i git (bekræftet: `git status` viser den untracked), rent lokalt
+# levn. Samme "ikke længere en del af denne app"-begrundelse som
+# tileserver/ selv ovenfor — kan roligt slettes helt fra disk.
+tileserver-src.zip
+
 # coverage.pmtiles (~5,5 GB) uploades manuelt til Fly-Volumen via
 # build-tiles.sh + fly ssh sftp put — ALDRIG en del af imaget/git. Ligger
 # lokalt her under tiles/ under udvikling (TILES_DIR falder tilbage til
