@@ -5571,16 +5571,6 @@ app.use('/tiles', express.static(TILES_DIR, { maxAge: '30d', immutable: true }))
 // er bevidst IKKE i PUBLIC_STATIC_EXTENSIONS.
 app.use('/map-assets', express.static(MAP_ASSETS_DIR, { maxAge: '30d', immutable: true }));
 
-// MIDLERTIDIG testside til visuel verifikation af den selvhostede
-// vector-tile-opsætning (OSM Liberty-stil mod coverage.pmtiles), FØR den
-// erstatter det rigtige kort — se samtalen om at undgå at gentage den
-// forrige, uverificerede pmtiles-fejl. Ikke linket fra nogen anden side.
-// FJERNES igen når den rigtige basemap er skiftet og bekræftet.
-app.get('/tile-test.html', (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  res.sendFile(path.join(STATIC_DIR, 'tile-test.html'));
-});
-
 const BLOCKED_STATIC_PATH_PATTERNS = [
   /^\/node_modules\//i,
   /^\/package(-lock)?\.json$/i,
