@@ -3539,7 +3539,7 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     const precipMM    = w.antecedentMM ?? null;
     const todayMM      = w.todayMM ?? null;
     const forecastMM   = w.forecastMM ?? null;
-    const lastEventAge = riskModel.estimateLastEventAge(w.hourlyWeek);
+    const lastEventAge = riskModel.estimateLastEventAge(w.hourlyWeek, pt.thresholdMm);
 
     const riskInput = {
       overflowProbBase: pt.overflowProbBase,
