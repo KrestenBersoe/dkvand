@@ -11,6 +11,15 @@ tileserver/data/
 # scripts ved hver kørsel, tidsstemplet i filnavnet) — ikke kildedata.
 puls-data.bak-*.json
 
+# Fuld prøvehistorik (scripts/build-badevand-analyseresultater.js's
+# OUT_SAMPLES_FILE) — i modsætning til badevand-analyseresultater.json
+# ovenfor (som ER committet, den kørende app henter den direkte) er denne
+# et rent offline valideringsingrediens til scripts/validate-predictions*.js
+# (samme mønster som frwater's gitignorede bathing-water-samples.json):
+# flere hundrede tusinde rækker, aldrig læst af den kørende server, og
+# regenereres lokalt fra en manuel PULS-CSV-eksport ved behov.
+badevand-proeve-historik.json
+
 # Lokale miljøvariabler/hemmeligheder (DATABASE_URL, VAPID-nøgler m.fl. —
 # sættes via `fly secrets`, ikke committet).
 .env
