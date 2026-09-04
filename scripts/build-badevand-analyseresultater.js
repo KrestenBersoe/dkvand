@@ -131,11 +131,14 @@ function argVal(flag, fallback = null) {
 // Auto-detect: hvis hverken --csv eller --zip er angivet, led i repo-roden
 // efter en udpakket/zippet PULS-eksport i stedet for at kræve en eksplicit
 // sti hver gang — bekvemt når filen bare er droppet i repo-mappen. Kun
-// filnavne der reelt ligner PULS-eksporten (matcher "puls" og "badevand",
-// case-insensitivt) tælles med, så vilkårlige andre .csv/.zip-filer i
-// roden (fx test-fixtures) ikke fejlagtigt vælges.
+// filnavne der reelt ligner PULS-eksporten (matcher "badevand" og
+// "resultat", case-insensitivt) tælles med, så vilkårlige andre .csv/.zip-
+// filer i roden (fx test-fixtures) ikke fejlagtigt vælges. Kræver IKKE
+// "puls" i navnet — det unzippede PULS-udtræk hedder typisk bare
+// "vBadevandsstationResultater.csv", uden "puls"-præfiks (kun selve
+// zip-filen fra PULS er navngivet med det).
 function findLocalExport(dir, ext) {
-  const rx = /puls.*badevand|badevand.*puls/i;
+  const rx = /badevand.*resultat|resultat.*badevand/i;
   const matches = fs.readdirSync(dir).filter(f => f.toLowerCase().endsWith(ext) && rx.test(f));
   return matches.map(f => path.join(dir, f));
 }
@@ -179,7 +182,7 @@ const ECOLI_THRESHOLD    = argVal('--ecoli-threshold') ? parseFloat(argVal('--ec
 const ENTERO_THRESHOLD   = argVal('--entero-threshold') ? parseFloat(argVal('--entero-threshold')) : ENTEROKOKKER_THRESHOLD_PER_100ML;
 
 if (!CSV_PATH && !ZIP_PATH) {
-  console.error(`Angiv enten --csv <udpakket .csv-fil> eller --zip <puls_vBadevandsstationResultater_csv.zip>, eller læg filen direkte i ${STATIC_DIR} (filnavnet skal indeholde "puls" og "badevand").`);
+  console.error(`Angiv enten --csv <udpakket .csv-fil> eller --zip <puls_vBadevandsstationResultater_csv.zip>, eller læg filen direkte i ${STATIC_DIR} (filnavnet skal indeholde "badevand" og "resultat").`);
   process.exit(1);
 }
 
