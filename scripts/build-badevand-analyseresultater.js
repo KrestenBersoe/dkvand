@@ -225,10 +225,19 @@ async function fetchAllFeatures(typename) {
   while (true) {
     const wfsUrl = buildWfsUrl(typename, start);
     let body;
-    try {
-      body = await fetchUrl(wfsUrl, 60000);
-    } catch (e) {
-      throw new Error(`WFS-fejl ved ${typename} (start=${start}): ${e.message}`);
+    // WFS-tjenesten er observeret at timeoute lejlighedsvis på selv den
+    // første side (start=0) uden nogen underliggende dataproblem — retry
+    // et par gange med kort pause, frem for at kaste hele det 2 GB CSV-
+    // gennemløb væk pga. ét transient timeout.
+    for (let attempt = 0; ; attempt++) {
+      try {
+        body = await fetchUrl(wfsUrl, 60000);
+        break;
+      } catch (e) {
+        if (attempt >= 3) throw new Error(`WFS-fejl ved ${typename} (start=${start}): ${e.message} (opgivet efter ${attempt + 1} forsøg)`);
+        console.warn(`\n  (${typename} start=${start}: ${e.message} — forsøg ${attempt + 1}/4, prøver igen om ${(attempt + 1) * 5}s)`);
+        await new Promise(r => setTimeout(r, (attempt + 1) * 5000));
+      }
     }
     let parsed;
     try {
@@ -689,6 +698,33 @@ async function main() {
     return;
   }
 
+  // Fuld prøvehistorik skrives HER — umiddelbart efter CSV-parsing, FØR
+  // WFS-stamdata hentes nedenfor — fordi samplesByStation allerede er
+  // komplet på dette tidspunkt og ikke afhænger af WFS på nogen måde (se
+  // OUT_SAMPLES_FILE's egen kommentar). WFS-tjenesten er observeret at fejle
+  // (timeout) uafhængigt af CSV'en; hvis vi ventede til efter WFS-kaldet som
+  // før, gik hele det 2 GB CSV-gennemløb tabt ved et enkelt WFS-timeout.
+  if (!DRY_RUN) {
+    const samples = [];
+    for (const [stationId, byDate] of samplesByStation) {
+      for (const [, sample] of byDate) {
+        samples.push({
+          siteId: stationId,
+          dateIso: new Date(sample.dateMs).toISOString().slice(0, 10),
+          ecoli: sample.ecoli?.vaerdi ?? sample.ecoli?.value ?? null,
+          enterokokker: sample.entero?.vaerdi ?? sample.entero?.value ?? null,
+        });
+      }
+    }
+    samples.sort((a, b) => a.dateIso.localeCompare(b.dateIso));
+    fs.writeFileSync(
+      OUT_SAMPLES_FILE,
+      JSON.stringify({ generatedAt: new Date().toISOString(), count: samples.length, samples }),
+      'utf8'
+    );
+    console.log(`Skrevet: ${OUT_SAMPLES_FILE} (${samples.length.toLocaleString('da')} prøver, fuld historik).`);
+  }
+
   // ── Stamdata ──────────────────────────────────────────────────────────
   const stamdataByStation = await loadStamdata();
 
@@ -776,29 +812,6 @@ async function main() {
   fs.writeFileSync(OUT_FILE, json, 'utf8');
   console.log(`Skrevet: ${OUT_FILE}`);
   console.log('\nHusk: tilføj en COPY-linje for badevand-analyseresultater.json i Dockerfile, hvis den ikke allerede er der, og deploy (fly deploy -a dkvand) når du er klar.');
-
-  // Fuld prøvehistorik — se OUT_SAMPLES_FILE's egen kommentar. Ikke nødvendig
-  // for den kørende app (scripts/validate-predictions.js er offline, samme
-  // "ikke en del af Dockerfile'ens COPY-liste"-status som selve dette
-  // build-script), så ingen deploy-huskeseddel nødvendig for den.
-  const samples = [];
-  for (const [stationId, byDate] of samplesByStation) {
-    for (const [, sample] of byDate) {
-      samples.push({
-        siteId: stationId,
-        dateIso: new Date(sample.dateMs).toISOString().slice(0, 10),
-        ecoli: sample.ecoli?.vaerdi ?? sample.ecoli?.value ?? null,
-        enterokokker: sample.entero?.vaerdi ?? sample.entero?.value ?? null,
-      });
-    }
-  }
-  samples.sort((a, b) => a.dateIso.localeCompare(b.dateIso));
-  fs.writeFileSync(
-    OUT_SAMPLES_FILE,
-    JSON.stringify({ generatedAt: new Date().toISOString(), count: samples.length, samples }),
-    'utf8'
-  );
-  console.log(`Skrevet: ${OUT_SAMPLES_FILE} (${samples.length.toLocaleString('da')} prøver, fuld historik).`);
 }
 
 main().catch(err => {
