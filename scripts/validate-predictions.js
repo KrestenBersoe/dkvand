@@ -49,6 +49,15 @@ async function main() {
   const riskByKey = new Map(riskRows.map((r) => [`${r.badested_id}|${r.date}`, r]));
   console.log(`Loaded ${riskRows.length} badevand_daily_risk rows.`);
 
+  // Diagnostic: id/date format between the two sources has mismatched
+  // before (badested_id is whatever computeBadevandRiskCascade() assigns
+  // as pt.id — not guaranteed to be the raw PULS BathingwaterStationId
+  // samplesData.samples[].siteId uses) — print a few real examples from
+  // both sides so a "0 compared" run is diagnosable at a glance instead of
+  // requiring a fresh DB round-trip.
+  console.log('Example badevand_daily_risk keys:', riskRows.slice(0, 5).map((r) => `${r.badested_id}|${r.date}`));
+  console.log('Example sample keys:', samplesData.samples.slice(0, 5).map((s) => `${s.siteId}|${s.dateIso}`));
+
   let noResult = 0;
   let noPrediction = 0;
   let tp = 0, fp = 0, tn = 0, fn = 0;
