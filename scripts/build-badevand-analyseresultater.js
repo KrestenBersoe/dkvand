@@ -698,39 +698,37 @@ async function main() {
     return;
   }
 
-  // Fuld prøvehistorik skrives HER — umiddelbart efter CSV-parsing, FØR
-  // WFS-stamdata hentes nedenfor — fordi samplesByStation allerede er
-  // komplet på dette tidspunkt og ikke afhænger af WFS på nogen måde (se
-  // OUT_SAMPLES_FILE's egen kommentar). WFS-tjenesten er observeret at fejle
-  // (timeout) uafhængigt af CSV'en; hvis vi ventede til efter WFS-kaldet som
-  // før, gik hele det 2 GB CSV-gennemløb tabt ved et enkelt WFS-timeout.
-  if (!DRY_RUN) {
-    const samples = [];
-    for (const [stationId, byDate] of samplesByStation) {
-      for (const [, sample] of byDate) {
-        samples.push({
-          siteId: stationId,
-          dateIso: new Date(sample.dateMs).toISOString().slice(0, 10),
-          ecoli: sample.ecoli?.vaerdi ?? sample.ecoli?.value ?? null,
-          enterokokker: sample.entero?.vaerdi ?? sample.entero?.value ?? null,
-        });
-      }
-    }
-    samples.sort((a, b) => a.dateIso.localeCompare(b.dateIso));
-    fs.writeFileSync(
-      OUT_SAMPLES_FILE,
-      JSON.stringify({ generatedAt: new Date().toISOString(), count: samples.length, samples }),
-      'utf8'
-    );
-    console.log(`Skrevet: ${OUT_SAMPLES_FILE} (${samples.length.toLocaleString('da')} prøver, fuld historik).`);
-  }
-
   // ── Stamdata ──────────────────────────────────────────────────────────
   const stamdataByStation = await loadStamdata();
 
   // ── Sammenfat pr. station ─────────────────────────────────────────────
   let activeCount = 0, closedCount = 0, orphanCount = 0;
   const output = {};
+
+  // Fuld prøvehistorik (til scripts/validate-predictions.js) — bygges i
+  // SAMME løkke som output[] nedenfor, da begge har brug for samme
+  // stamdata-opslag pr. station. siteId er BEVIDST stamdata.dkbw (formatteret
+  // "DKBW<tal>"), IKKE stationId (CSV'ens BathingwaterStationId): bekræftet
+  // ved en rigtig valideringskørsel at BathingwaterStationId er en
+  // PULS-intern GUID, mens badevand_daily_risk.badested_id (se badested-
+  // risk.js's pt.id for badevand-punkter) er EU-badevandsdirektivets
+  // "DKBW<tal>"-id fra vp3_badevand.geojson's bathingwat-felt — samme id som
+  // stamdata.dkbw her (fra WFS' Dkbw-felt, se extractStamdata()). En
+  // GUID-baseret siteId matchede derfor ALDRIG en prædiktion (0/470.234
+  // sammenlignet i praksis). Stationer uden en dkbw-værdi (kun fundet i
+  // puls:Kontrol, som ikke har feltet — se loadStamdata()'s fallback-
+  // rækkefølge) kan aldrig matches mod en prædiktion og springes derfor
+  // over her, i stedet for at bloate filen med ubrugelige rækker.
+  //
+  // MIN_SAMPLE_YEAR: samme mønster som futureDateCount ovenfor — nogle
+  // kildeposter har en tydeligt forkert (tastefejl) SamplingStarted,
+  // bekræftet i praksis, fx "0211-06-22" (år 211) eller "1899-12-31"
+  // (klassisk regnearks-nul-dato-artefakt) — hverken en fremtidig ELLER en
+  // plausibel historisk prøvedato. Filtreres her (ikke i CSV-parseren
+  // ovenfor, som ikke kender "plausibel", kun "parsérbar").
+  const MIN_SAMPLE_YEAR = 1990;
+  let noDkbwCount = 0, implausibleDateCount = 0;
+  const proevehistorik = [];
 
   for (const [stationId, samples] of samplesByStation) {
     let latestEcoli = null, latestEntero = null, latestUnder = null, latestOver = null;
@@ -769,6 +767,21 @@ async function main() {
     else if (stamdata.lukket) { status = 'lukket'; closedCount++; }
     else { status = 'aktiv'; activeCount++; }
 
+    if (stamdata?.dkbw == null) {
+      noDkbwCount++;
+    } else {
+      for (const [, s] of samples) {
+        const d = new Date(s.dateMs);
+        if (d.getUTCFullYear() < MIN_SAMPLE_YEAR) { implausibleDateCount++; continue; }
+        proevehistorik.push({
+          siteId: `DKBW${stamdata.dkbw}`,
+          dateIso: d.toISOString().slice(0, 10),
+          ecoli: s.ecoli?.value ?? null,
+          enterokokker: s.entero?.value ?? null,
+        });
+      }
+    }
+
     output[stationId] = {
       navn:    stamdata?.navn || csvNameByStation.get(stationId) || null,
       kommune: stamdata?.kommune ?? null,
@@ -795,6 +808,8 @@ async function main() {
   for (const s of Object.values(output)) farveCounts[s.farve]++;
   console.log(`\nStationer i output: ${Object.keys(output).length.toLocaleString('da')} (${activeCount} aktive, ${closedCount} lukkede, ${orphanCount} udgåede/ukendte i WFS).`);
   console.log(`Farvefordeling: ${farveCounts.groen} grøn, ${farveCounts.gul} gul, ${farveCounts.roed} rød.`);
+  if (noDkbwCount > 0) console.warn(`⚠ ${noDkbwCount.toLocaleString('da')} stationer uden en DKBW-id fra WFS sprunget over i prøvehistorikken (kan aldrig matches mod en prædiktion).`);
+  if (implausibleDateCount > 0) console.warn(`⚠ ${implausibleDateCount.toLocaleString('da')} prøver med en usandsynlig dato (før ${MIN_SAMPLE_YEAR}) sprunget over i prøvehistorikken.`);
 
   const json = JSON.stringify(output);
   console.log(`Outputstørrelse: ${(json.length / 1024).toFixed(0)} KB (ukomprimeret, kompakt JSON).`);
@@ -803,6 +818,14 @@ async function main() {
     console.log(`\n--dry-run: ingen fil skrevet. Ville have skrevet til: ${OUT_FILE}`);
     return;
   }
+
+  proevehistorik.sort((a, b) => a.dateIso.localeCompare(b.dateIso));
+  fs.writeFileSync(
+    OUT_SAMPLES_FILE,
+    JSON.stringify({ generatedAt: new Date().toISOString(), count: proevehistorik.length, samples: proevehistorik }),
+    'utf8'
+  );
+  console.log(`Skrevet: ${OUT_SAMPLES_FILE} (${proevehistorik.length.toLocaleString('da')} prøver, fuld historik, DKBW-id'er).`);
 
   if (fs.existsSync(OUT_FILE)) {
     const backup = OUT_FILE.replace(/\.json$/, `.bak-${Date.now()}.json`);
