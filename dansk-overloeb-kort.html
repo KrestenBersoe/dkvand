@@ -4257,6 +4257,24 @@ function buildLokationCardHtml(lat, lng) {
     <a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(q)}" target="_blank" rel="noopener" style="font-size:.82rem;font-weight:600;color:var(--accent);text-decoration:none">Få rutevejledning →</a>`;
 }
 
+// Sæt af dkbw-koder, som rent faktisk har en markør i vp3_badevand.geojson
+// (indlæst som vp3BadevandLayer, se loadVP3Layers()) — dvs. de eneste
+// badesteder, slug-index.js's buildBadestedSlugs() genererer en /badested/-
+// slug for server-side. Bruges af renderBadestedExtras() til at undgå at
+// linke til badesteder, der kun findes i badevand-analyseresultater.json
+// (nedlagte/udgåede stationer) og derfor altid 404'er. Genberegnes ved hvert
+// kald frem for at caches — kaldes kun når badested-panelet åbnes, ingen
+// performance-grund til at holde sættet synkroniseret på tværs af kald.
+function getVp3DkbwSet() {
+  const set = new Set();
+  if (!vp3BadevandLayer) return set;
+  vp3BadevandLayer.eachLayer(layer => {
+    const m = /(\d+)/.exec(layer.feature?.properties?.bathingwat || '');
+    if (m) set.add(parseInt(m[1], 10));
+  });
+  return set;
+}
+
 function buildNearbyListHtmlClient(items) {
   return items.map(b => `<a class="bv-outlet-row" href="/badested/${encodeURIComponent(b.slug)}" style="text-decoration:none;color:inherit">
     <div style="flex:1"><div class="bv-outlet-name">${escHtml(b.navn)}</div><div class="bv-outlet-sub">${b.distKm.toFixed(1)} km</div></div>
@@ -4281,7 +4299,18 @@ async function renderBadestedExtras(p, latlng) {
       const dkbwMatch = String(p.bathingwat || '').match(/(\d+)/);
       const dkbw = dkbwMatch ? parseInt(dkbwMatch[1], 10) : null;
       const selfEntry = dkbw != null ? badevandAnalyseData.get(dkbw) : null;
-      const all = [...badevandAnalyseData.values()].filter(e => e.lat != null && e.lng != null && e.dkbw !== dkbw);
+      // RETTET (bruger-rapport 2026-09-04): badevand-analyseresultater.json
+      // indeholder ~400 dkbw-koder, som IKKE findes i vp3_badevand.geojson
+      // (nedlagte/udgåede stationer, jf. entry.status 'lukket'/'udgaaet'
+      // ovenfor i renderBadevandVandmaalinger()). slug-index.js's
+      // buildBadestedSlugs() genererer KUN slugs for badesteder fra selve
+      // geojson'et (server.js's /badested/:slug 404'er derfor på alle
+      // andre) — kandidatlisten her filtreres derfor ned til dkbw-koder,
+      // som rent faktisk har en markør i det allerede indlæste
+      // vp3BadevandLayer, så et link her aldrig peger på et ikke-eksisterende
+      // /badested/-slug. Se getVp3DkbwSet()'s filhoved.
+      const registeredDkbw = getVp3DkbwSet();
+      const all = [...badevandAnalyseData.values()].filter(e => e.lat != null && e.lng != null && e.dkbw !== dkbw && registeredDkbw.has(e.dkbw));
 
       const nearbyDistance = all
         .map(e => ({ navn: e.navn, kommune: e.kommune, distKm: haversineKmClient(latlng.lat, latlng.lng, e.lat, e.lng) }))
