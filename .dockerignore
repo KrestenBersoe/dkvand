@@ -75,3 +75,14 @@ observation-photos/
 # .gitignore's egen regel for disse — tidsstemplet i filnavnet, ikke
 # kildedata, regenereres løbende af opdaterings-scripts).
 puls-data.bak-*.json
+
+# NYT (bruger-rapporteret 2026-09-04): rå kildedata til scripts/build-
+# badevand-analyseresultater.js (se dens filhoved) — udpakkes/lægges ofte
+# direkte i STATIC_DIR (repo-roden) lokalt for bekvemmelighed under en
+# kørsel af scriptet, som selv accepterer den dér. server.js læser
+# UDELUKKENDE scriptets FÆRDIGE output (badevand-analyseresultater.json),
+# aldrig denne rå CSV — samme "rå kildedata hører ikke hjemme i imaget"-
+# princip som scripts/ selv ovenfor. En loose CSV ved roden ville ellers
+# blive fejet med af Dockerfile'ens `COPY . .`.
+*.csv
+puls_vBadevandsstationResultater_csv.zip

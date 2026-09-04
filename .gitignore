@@ -20,6 +20,15 @@ puls-data.bak-*.json
 # regenereres lokalt fra en manuel PULS-CSV-eksport ved behov.
 badevand-proeve-historik.json
 
+# NYT (bruger-rapporteret 2026-09-04): rå kilde-CSV til scripts/build-
+# badevand-analyseresultater.js (samme "aldrig læst af den kørende
+# server, kun offline byggeingrediens"-princip som badevand-proeve-
+# historik.json ovenfor) — scriptet accepterer den direkte i STATIC_DIR
+# (repo-roden) som en bekvemmelighed, men den hører ikke hjemme i
+# versionsstyring, endsige i Docker-imaget (se .dockerignore).
+*.csv
+puls_vBadevandsstationResultater_csv.zip
+
 # Lokale miljøvariabler/hemmeligheder (DATABASE_URL, VAPID-nøgler m.fl. —
 # sættes via `fly secrets`, ikke committet).
 .env
