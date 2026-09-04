@@ -3,6 +3,10 @@
 // build-badevand-analyseresultater.js — kør fra repo-roden:
 //   node scripts/build-badevand-analyseresultater.js --csv /sti/til/udpakket.csv
 //   node scripts/build-badevand-analyseresultater.js --zip /sti/til/puls_vBadevandsstationResultater_csv.zip
+//   node scripts/build-badevand-analyseresultater.js
+//     (uden --csv/--zip: leder selv i repo-roden efter en .csv eller .zip
+//      hvis filnavn indeholder "puls" og "badevand" — bekvemt når filen bare
+//      er droppet i repo-mappen)
 //   node scripts/build-badevand-analyseresultater.js --zip ... --inspect-csv     (skema-tjek, ingen skrivning)
 //   node scripts/build-badevand-analyseresultater.js --zip ... --dry-run
 //   node scripts/build-badevand-analyseresultater.js --zip ... --limit 100000    (hurtig lokal test)
@@ -124,8 +128,38 @@ function argVal(flag, fallback = null) {
   const i = argv.indexOf(flag);
   return i >= 0 ? argv[i + 1] : fallback;
 }
-const CSV_PATH        = argVal('--csv');
-const ZIP_PATH        = argVal('--zip');
+// Auto-detect: hvis hverken --csv eller --zip er angivet, led i repo-roden
+// efter en udpakket/zippet PULS-eksport i stedet for at kræve en eksplicit
+// sti hver gang — bekvemt når filen bare er droppet i repo-mappen. Kun
+// filnavne der reelt ligner PULS-eksporten (matcher "puls" og "badevand",
+// case-insensitivt) tælles med, så vilkårlige andre .csv/.zip-filer i
+// roden (fx test-fixtures) ikke fejlagtigt vælges.
+function findLocalExport(dir, ext) {
+  const rx = /puls.*badevand|badevand.*puls/i;
+  const matches = fs.readdirSync(dir).filter(f => f.toLowerCase().endsWith(ext) && rx.test(f));
+  return matches.map(f => path.join(dir, f));
+}
+function autoDetectExport() {
+  const csvMatches = findLocalExport(STATIC_DIR, '.csv');
+  if (csvMatches.length === 1) return { csv: csvMatches[0] };
+  if (csvMatches.length > 1) {
+    console.error(`Flere kandidat-CSV'er fundet i ${STATIC_DIR} — angiv den rigtige med --csv:\n  ${csvMatches.join('\n  ')}`);
+    process.exit(1);
+  }
+  const zipMatches = findLocalExport(STATIC_DIR, '.zip');
+  if (zipMatches.length === 1) return { zip: zipMatches[0] };
+  if (zipMatches.length > 1) {
+    console.error(`Flere kandidat-zip'er fundet i ${STATIC_DIR} — angiv den rigtige med --zip:\n  ${zipMatches.join('\n  ')}`);
+    process.exit(1);
+  }
+  return null;
+}
+const explicitCsv = argVal('--csv');
+const explicitZip = argVal('--zip');
+const autoDetected = (!explicitCsv && !explicitZip) ? autoDetectExport() : null;
+const CSV_PATH        = explicitCsv || autoDetected?.csv || null;
+const ZIP_PATH        = explicitZip || autoDetected?.zip || null;
+if (autoDetected) console.log(`Ingen --csv/--zip angivet — bruger fundet fil: ${autoDetected.csv || autoDetected.zip}`);
 const ZIP_ENTRY       = argVal('--zip-entry');
 const OUT_FILE        = path.resolve(argVal('--out', path.join(STATIC_DIR, 'badevand-analyseresultater.json')));
 // Fuld prøvehistorik (ikke kun seneste-pr-station som OUT_FILE ovenfor) —
@@ -145,7 +179,7 @@ const ECOLI_THRESHOLD    = argVal('--ecoli-threshold') ? parseFloat(argVal('--ec
 const ENTERO_THRESHOLD   = argVal('--entero-threshold') ? parseFloat(argVal('--entero-threshold')) : ENTEROKOKKER_THRESHOLD_PER_100ML;
 
 if (!CSV_PATH && !ZIP_PATH) {
-  console.error('Angiv enten --csv <udpakket .csv-fil> eller --zip <puls_vBadevandsstationResultater_csv.zip>.');
+  console.error(`Angiv enten --csv <udpakket .csv-fil> eller --zip <puls_vBadevandsstationResultater_csv.zip>, eller læg filen direkte i ${STATIC_DIR} (filnavnet skal indeholde "puls" og "badevand").`);
   process.exit(1);
 }
 
