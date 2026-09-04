@@ -49,14 +49,31 @@ async function main() {
   const riskByKey = new Map(riskRows.map((r) => [`${r.badested_id}|${r.date}`, r]));
   console.log(`Loaded ${riskRows.length} badevand_daily_risk rows.`);
 
-  // Diagnostic: id/date format between the two sources has mismatched
-  // before (badested_id is whatever computeBadevandRiskCascade() assigns
-  // as pt.id — not guaranteed to be the raw PULS BathingwaterStationId
-  // samplesData.samples[].siteId uses) — print a few real examples from
-  // both sides so a "0 compared" run is diagnosable at a glance instead of
-  // requiring a fresh DB round-trip.
+  // Diagnostic: id format matched between the two sources on a previous
+  // run yet still compared 0 pairs — samplesData.samples is sorted
+  // ascending by date (decades of PULS history), so printing the first 5
+  // just showed 1990-era rows, nowhere near badevand_daily_risk's short,
+  // recent accumulation window (it only has data from whenever
+  // accumulateDailyBadevandRisk() started being called, not real history).
+  // Show the actual date RANGES and a real id-level overlap count instead
+  // of a few arbitrary rows, so a "0 compared" run is diagnosable without
+  // another DB round-trip.
+  const riskDates = riskRows.map((r) => r.date).sort();
+  const sampleDates = samplesData.samples.map((s) => s.dateIso).sort();
+  console.log(`badevand_daily_risk date range: ${riskDates[0]} .. ${riskDates[riskDates.length - 1]}`);
+  console.log(`Sample date range:              ${sampleDates[0]} .. ${sampleDates[sampleDates.length - 1]}`);
+  const riskSiteIds = new Set(riskRows.map((r) => r.badested_id));
+  const sampleSiteIds = new Set(samplesData.samples.map((s) => s.siteId));
+  const overlapSiteIds = [...sampleSiteIds].filter((id) => riskSiteIds.has(id));
+  console.log(`Distinct sites — risk: ${riskSiteIds.size}, samples: ${sampleSiteIds.size}, overlapping ids: ${overlapSiteIds.length}`);
+  // Samples that fall WITHIN the risk table's own date range, for a site
+  // that risk table also covers — the actual pool an exact-day match could
+  // ever be drawn from.
+  const riskMinDate = riskDates[0], riskMaxDate = riskDates[riskDates.length - 1];
+  const inWindow = samplesData.samples.filter((s) => riskSiteIds.has(s.siteId) && s.dateIso >= riskMinDate && s.dateIso <= riskMaxDate);
+  console.log(`Samples for a covered site within the risk date range: ${inWindow.length}`);
+  console.log('Example in-window sample keys:', inWindow.slice(0, 5).map((s) => `${s.siteId}|${s.dateIso}`));
   console.log('Example badevand_daily_risk keys:', riskRows.slice(0, 5).map((r) => `${r.badested_id}|${r.date}`));
-  console.log('Example sample keys:', samplesData.samples.slice(0, 5).map((s) => `${s.siteId}|${s.dateIso}`));
 
   let noResult = 0;
   let noPrediction = 0;
