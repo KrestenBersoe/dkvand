@@ -175,8 +175,15 @@ test('estimateLastEventAge: ingen nedbør nogensinde i vinduet giver null', () =
 test('estimateLastEventAge: en kraftig regnbyge for PRÆCIS 24 timer siden giver ~1 dag', () => {
   const hours = new Array(168).fill(0);
   // Sidste indeks (167) = "nu". Kraftig byge 24 timer før nu = indeks 167-24=143.
-  hours[143] = 15; // klart over 5mm-tærsklen på én gang
-  const age = estimateLastEventAge(hours);
+  hours[143] = 15; // klart over den her eksplicit satte 5mm-tærskel på én gang
+  // RETTET: kaldte tidligere estimateLastEventAge(hours) uden thresholdMm —
+  // faldt da tilbage til DEFAULT_THRESHOLD_MM (25mm, se risk-model.js'
+  // computeIntensityFactor()-filhoved for hvorfor den blev hævet fra 5mm),
+  // som denne bygstyrke slet ikke krydsede. Testens EGEN kommentar ("5mm-
+  // tærsklen") viser hensigten var altid et lavt, eksplicit testtærskel —
+  // ikke appens produktions-fallback. Sætter nu tærsklen eksplicit, som
+  // udløbs-specifikke tærskler altid gør i den rigtige risikoløkke.
+  const age = estimateLastEventAge(hours, 5);
   assert.ok(age !== null, 'forventede et fund, fik null');
   assert.ok(Math.abs(age - 1.0) < 0.05, `forventede ~1,0 dag, fik ${age}`);
 });
@@ -193,7 +200,11 @@ test('estimateLastEventAge: mange små regnbyger der akkumulerer over tærsklen 
   const hours = new Array(168).fill(0);
   // 5 timer i træk med 1,5mm hver, tæt på hinanden -> akkumuleret over 5mm samlet, henfald er minimalt over få timer
   for (let i = 150; i < 155; i++) hours[i] = 1.5;
-  const age = estimateLastEventAge(hours);
+  // RETTET: samme årsag som testen ovenfor — uden en eksplicit tærskel
+  // faldt kaldet tilbage til DEFAULT_THRESHOLD_MM (25mm), som denne
+  // ~7,5mm samlede regnmængde aldrig krydsede. Se dens kommentar for fuld
+  // begrundelse.
+  const age = estimateLastEventAge(hours, 5);
   assert.ok(age !== null, 'forventede at den akkumulerede regn udløste tærsklen');
 });
 

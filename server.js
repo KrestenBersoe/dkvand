@@ -38,6 +38,11 @@ const { Worker }  = require('worker_threads');
 const riskModel    = require('./risk-model');
 const waterClass    = require('./water-classification');
 const badevandRisk  = require('./badevand-risk');
+// NYT (bruger-krav 2026-09-04: "measured rainfall should take priority to
+// predicted") — reelt målt nedbør fra DMI's regnmålernetværk, bruges i
+// stedet for Open-Meteo-modellen for enhver badevands-celle med en
+// regnmåler inden for rækkevidde. Se dmi-rain.js's filhoved.
+const dmiRain      = require('./dmi-rain');
 // NYT: borgerobservationer (ét-tryks status + algeobservation) — se modulets
 // eget filhoved for den HÅRDE grænse mod at dette nogensinde må påvirke
 // badevandRisk's officielle farve/badge. Egen SQLite-fil på samme Volume,
@@ -3548,10 +3553,26 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     if (!w) { cellMissing++; continue; } // ingen vejrdata for denne celle endnu
     cellMatched++;
 
-    const precipMM    = w.antecedentMM ?? null;
-    const todayMM      = w.todayMM ?? null;
+    // NYT (bruger-krav 2026-09-04: målt nedbør har ALTID forrang for
+    // prognose/model) — se dmi-rain.js's filhoved. w.hourlyWeek (Open-Meteo-
+    // modellen) bruges KUN som fallback, når ingen DMI-regnmåler er inden
+    // for rækkevidde af denne celle, eller dens seneste måling er for
+    // gammel (dmi-rain.getMeasuredForCell() returnerer da null). forecastMM
+    // er BEVIDST ALTID fra Open-Meteo uanset dette — fremtidig nedbør kan
+    // pr. definition ikke være "målt". precipMM og lastEventAge udledes
+    // begge af SAMME valgte kilde (aldrig en blanding af målt+model), samme
+    // princip risk-model.js's estimateLastEventAge()-filhoved allerede
+    // beskriver for tærskel-konsistens.
+    const measuredRain = dmiRain.getMeasuredForCell(key);
+    const rainHourlyWeek = measuredRain ? measuredRain.hourlyWeek : w.hourlyWeek;
+    pt.rainSource = measuredRain ? 'malt' : 'prognose'; // NYT — til fremtidig UI-transparens
+
+    const precipMM = rainHourlyWeek?.length
+      ? riskModel.accumulateDecayed(rainHourlyWeek, riskModel.HOURLY_DECAY_TAU_DAYS)[rainHourlyWeek.length - 1]
+      : (w.antecedentMM ?? null);
+    const todayMM      = measuredRain ? measuredRain.todayMM : (w.todayMM ?? null);
     const forecastMM   = w.forecastMM ?? null;
-    const lastEventAge = riskModel.estimateLastEventAge(w.hourlyWeek, pt.thresholdMm);
+    const lastEventAge = riskModel.estimateLastEventAge(rainHourlyWeek, pt.thresholdMm);
 
     const riskInput = {
       overflowProbBase: pt.overflowProbBase,
@@ -3893,14 +3914,40 @@ async function ensureFreshRiskCaches() {
 // inden for minutter i stedet for at kunne stå i op til 6 timer.
 const WEATHER_CHECK_INTERVAL_MS = 15 * 60 * 1000;  // tjek hvert 15. minut — billigt, da fortsat-friske celler bare springes over
 setTimeout(() => warmCache()
+  .then(() => dmiRain.refreshLatest())
   .then(() => evaluatePushNotifications())
   .catch(e => console.warn('warmCache (2s):', e.message)), 2000);
 setTimeout(() => warmCache()
+  .then(() => dmiRain.refreshLatest())
   .then(() => evaluatePushNotifications())
   .catch(e => console.warn('warmCache (10s):', e.message)), 10000);
 setInterval(() => warmCache()
+  .then(() => dmiRain.refreshLatest())
   .then(() => evaluatePushNotifications())
   .catch(e => console.warn('warmCache (interval):', e.message)), WEATHER_CHECK_INTERVAL_MS);
+
+// NYT (bruger-krav 2026-09-04) — engangs-opstart af dmi-rain.js's
+// celle-indeks + 7-dages historisk opbakning (se dens filhoved for hvorfor
+// opbakningen er nødvendig: uden den ville målt data først "vinde" over
+// Open-Meteo-modellen efter en hel uges drift). refreshLatest() køres FØRST
+// — den er samtidig den eneste kilde til stationskoordinater (se
+// stationCoords' filhoved i dmi-rain.js), rebuildCellIndex() har derfor
+// intet at matche imod før mindst ét kald har kørt. Uafhængig af
+// warmCache-kæden ovenfor (egen fejlhåndtering, blokerer intet andet) —
+// indtil den er færdig, returnerer dmiRain.getMeasuredForCell() blot null
+// for alle celler, og risikoløkken falder tilbage til Open-Meteo-modellen,
+// præcis som før denne fil fandtes.
+const DMI_RAIN_CELL_REMATCH_MS = 24 * 3600 * 1000; // gen-match celler mod evt. nye/forsvundne stationer ~dagligt
+(async () => {
+  try {
+    await dmiRain.refreshLatest();
+    dmiRain.rebuildCellIndex(buildPulsGrid());
+    await dmiRain.backfillHistory(dmiRain.matchedStationIds());
+  } catch (e) {
+    console.warn('dmi-rain: opstartsindlæsning fejlede —', e.message);
+  }
+})();
+setInterval(() => dmiRain.rebuildCellIndex(buildPulsGrid()), DMI_RAIN_CELL_REMATCH_MS);
 
 // NYT (bruger-ønske 2026-08-17) — se vurderingCount30dCache's filhoved for
 // hvorfor dette er præ-beregnet fremfor et pr.-request DB-kald. Time-cadence
@@ -5487,6 +5534,7 @@ app.get('/api/debug', (req, res) => {
       ageMin:  currentsCache.ts ? Math.round((now - currentsCache.ts) / 60000) : null,
       error:   currentsCache.error ?? null,
     },
+    dmiRain: dmiRain.stats(),
     sample,
   });
 });

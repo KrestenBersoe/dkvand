@@ -4257,6 +4257,24 @@ function buildLokationCardHtml(lat, lng) {
     <a href="https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(q)}" target="_blank" rel="noopener" style="font-size:.82rem;font-weight:600;color:var(--accent);text-decoration:none">Få rutevejledning →</a>`;
 }
 
+// Sæt af dkbw-koder, som rent faktisk har en markør i vp3_badevand.geojson
+// (indlæst som vp3BadevandLayer, se loadVP3Layers()) — dvs. de eneste
+// badesteder, slug-index.js's buildBadestedSlugs() genererer en /badested/-
+// slug for server-side. Bruges af renderBadestedExtras() til at undgå at
+// linke til badesteder, der kun findes i badevand-analyseresultater.json
+// (nedlagte/udgåede stationer) og derfor altid 404'er. Genberegnes ved hvert
+// kald frem for at caches — kaldes kun når badested-panelet åbnes, ingen
+// performance-grund til at holde sættet synkroniseret på tværs af kald.
+function getVp3DkbwSet() {
+  const set = new Set();
+  if (!vp3BadevandLayer) return set;
+  vp3BadevandLayer.eachLayer(layer => {
+    const m = /(\d+)/.exec(layer.feature?.properties?.bathingwat || '');
+    if (m) set.add(parseInt(m[1], 10));
+  });
+  return set;
+}
+
 function buildNearbyListHtmlClient(items) {
   return items.map(b => `<a class="bv-outlet-row" href="/badested/${encodeURIComponent(b.slug)}" style="text-decoration:none;color:inherit">
     <div style="flex:1"><div class="bv-outlet-name">${escHtml(b.navn)}</div><div class="bv-outlet-sub">${b.distKm.toFixed(1)} km</div></div>
@@ -4281,7 +4299,18 @@ async function renderBadestedExtras(p, latlng) {
       const dkbwMatch = String(p.bathingwat || '').match(/(\d+)/);
       const dkbw = dkbwMatch ? parseInt(dkbwMatch[1], 10) : null;
       const selfEntry = dkbw != null ? badevandAnalyseData.get(dkbw) : null;
-      const all = [...badevandAnalyseData.values()].filter(e => e.lat != null && e.lng != null && e.dkbw !== dkbw);
+      // RETTET (bruger-rapport 2026-09-04): badevand-analyseresultater.json
+      // indeholder ~400 dkbw-koder, som IKKE findes i vp3_badevand.geojson
+      // (nedlagte/udgåede stationer, jf. entry.status 'lukket'/'udgaaet'
+      // ovenfor i renderBadevandVandmaalinger()). slug-index.js's
+      // buildBadestedSlugs() genererer KUN slugs for badesteder fra selve
+      // geojson'et (server.js's /badested/:slug 404'er derfor på alle
+      // andre) — kandidatlisten her filtreres derfor ned til dkbw-koder,
+      // som rent faktisk har en markør i det allerede indlæste
+      // vp3BadevandLayer, så et link her aldrig peger på et ikke-eksisterende
+      // /badested/-slug. Se getVp3DkbwSet()'s filhoved.
+      const registeredDkbw = getVp3DkbwSet();
+      const all = [...badevandAnalyseData.values()].filter(e => e.lat != null && e.lng != null && e.dkbw !== dkbw && registeredDkbw.has(e.dkbw));
 
       const nearbyDistance = all
         .map(e => ({ navn: e.navn, kommune: e.kommune, distKm: haversineKmClient(latlng.lat, latlng.lng, e.lat, e.lng) }))
@@ -6475,6 +6504,23 @@ function confidenceBadgeHtml(tier) {
   return `<div style="font-size:.72rem;color:${meta.color};padding:.3rem 0 .5rem 0;margin-bottom:.4rem;border-bottom:1px solid #e5e5e5">Datakonfidens: <strong>${meta.label}</strong> — ${escHtml(meta.text)}</div>`;
 }
 
+// NYT (bruger-krav 2026-09-04) — samme badge-mønster som CONFIDENCE_META/
+// confidenceBadgeHtml() ovenfor, blot for badevand-risk.js's rainSource-felt
+// (sat af server.js's risikoløkke, se dmi-rain.js's filhoved: reelt MÅLT
+// nedbør fra DMI's regnmålernetværk har ALTID forrang, Open-Meteo-
+// prognosemodellen er fallback). null (ingen badge) dækker BÅDE "intet
+// udløb bidrog endnu" og en cache fra før dette felt fandtes — samme
+// no-op-ved-ukendt-værdi-garanti som confidenceBadgeHtml().
+const RAIN_SOURCE_META = {
+  'malt':     { label: 'Målt',     color: '#2d7d4f', text: 'Fra en nærliggende DMI-regnmåler, ikke en vejrmodel.' },
+  'prognose': { label: 'Prognose', color: '#5a6b78', text: 'Ingen DMI-regnmåler inden for rækkevidde — baseret på vejrmodellen (Open-Meteo).' },
+};
+function rainSourceBadgeHtml(source) {
+  const meta = RAIN_SOURCE_META[source];
+  if (!meta) return '';
+  return `<div style="font-size:.72rem;color:${meta.color};padding:.3rem 0 .5rem 0;margin-bottom:.4rem;border-bottom:1px solid #e5e5e5">Nedbørskilde: <strong>${meta.label}</strong> — ${escHtml(meta.text)}</div>`;
+}
+
 function colorKystvandByRisk() {
   // RETTET (fuldt omskrevet — FJERNER lokal fallback bevidst, efter
   // eksplicit ønske): brugte tidligere sin egen komplette, lokale
@@ -6870,7 +6916,7 @@ function computeBadevandRisk(lat, lng, badevandId) {
     // (de syntetiske værdier), rammer derfor altid DENNE gren, aldrig de
     // øvrige nedenfor. undefined for et upatchet badested, ikke null —
     // showBadevandPanel()'s banner-tjek bruger `if (sp.overrideInfo)`.
-    return { bact: sp.bact, viral: sp.viral, algae: sp.algae, forecast: sp.forecast, source: sp.source, outlets: sp.outlets || [], dataConfidence: sp.dataConfidence ?? null, overrideInfo: sp.overrideInfo, waterType: sp.waterType ?? null };
+    return { bact: sp.bact, viral: sp.viral, algae: sp.algae, forecast: sp.forecast, source: sp.source, outlets: sp.outlets || [], dataConfidence: sp.dataConfidence ?? null, rainSource: sp.rainSource ?? null, overrideInfo: sp.overrideInfo, waterType: sp.waterType ?? null };
   }
   // RETTET (KRITISK — se brugerrapport 2026-07-25, DKBW1031/Skanderborg Sø
   // Camping): denne funktion tjekkede kun 'nedstroms-bekraeftet' som en
@@ -6892,7 +6938,7 @@ function computeBadevandRisk(lat, lng, badevandId) {
     // confirmReason) — kun 'id15-empty' er faktisk ID15-terrænsporing af
     // et SØ-opland. confirmReason lader colorBadevandByRisk()/
     // showBadevandPanel() vise en tekst, der matcher den faktiske årsag.
-    return { bact: null, viral: null, algae: null, source: 'ingen-bekraeftet', confirmReason: sp.confirmReason || null, outlets: [], geomMatchNoData: null, dataConfidence: sp.dataConfidence ?? null, waterType: sp.waterType ?? null };
+    return { bact: null, viral: null, algae: null, source: 'ingen-bekraeftet', confirmReason: sp.confirmReason || null, outlets: [], geomMatchNoData: null, dataConfidence: sp.dataConfidence ?? null, rainSource: sp.rainSource ?? null, waterType: sp.waterType ?? null };
   }
   // NYT: 'nedstroms-bekraeftet' — tredje, POSITIV kategori (se
   // badevand-risk.js's allDownstreamKyst): kystvandet HAR kendte udløb, men
@@ -6901,13 +6947,13 @@ function computeBadevandRisk(lat, lng, badevandId) {
   // "ingen-bekraeftet" (source:'ingen-bekraeftet', grøn, kun søer/ID15-
   // opland uden udløb) — denne er kystvandenes strømdrevne modstykke.
   if (sp.source === 'nedstroms-bekraeftet') {
-    return { bact: null, viral: null, algae: null, source: 'nedstroms-bekraeftet', outlets: [], geomMatchNoData: null, allDownstreamMatch: sp.allDownstreamMatch || null, dataConfidence: sp.dataConfidence ?? null, waterType: sp.waterType ?? null };
+    return { bact: null, viral: null, algae: null, source: 'nedstroms-bekraeftet', outlets: [], geomMatchNoData: null, allDownstreamMatch: sp.allDownstreamMatch || null, dataConfidence: sp.dataConfidence ?? null, rainSource: sp.rainSource ?? null, waterType: sp.waterType ?? null };
   }
   // NYT: serveren sender nu selv skelnen mellem "vandområde matchet, men
   // ingen data" og "intet match overhovedet" (se badevand-risk.js's
   // allLakeGeoms/allKystvandGeoms + noDataMatch) — ingen lokal
   // geometri-genberegning nødvendig for at bevare denne besked.
-  return { bact: null, viral: null, algae: null, source: 'ingen', outlets: [], geomMatchNoData: sp.noDataMatch || null, dataConfidence: sp.dataConfidence ?? null, waterType: sp.waterType ?? null };
+  return { bact: null, viral: null, algae: null, source: 'ingen', outlets: [], geomMatchNoData: sp.noDataMatch || null, dataConfidence: sp.dataConfidence ?? null, rainSource: sp.rainSource ?? null, waterType: sp.waterType ?? null };
 }
 
 // NYT (Kommunepakke, modul 6): kommune-overstyrings-banner — se
@@ -8162,6 +8208,8 @@ function showLakeLoadPanel(navn, _startTs) {
   // grovere end badestedernes — kun hoej/middel/ingen-data). Samme
   // confidenceBadgeHtml()-helper som badested-panelets #bv-outlets bruger.
   rows.push(confidenceBadgeHtml(lakesRiskData?.[navn]?.dataConfidence));
+  // NYT (bruger-krav 2026-09-04) — se rainSourceBadgeHtml()'s filhoved.
+  rows.push(rainSourceBadgeHtml(lakesRiskData?.[navn]?.rainSource));
   rows.push(lakeSiblingNoteHtml(navn, false));
 
   // FJERNET (bruger-ønske): den fulde udløbsliste ("Udløb der påvirker
@@ -10579,7 +10627,11 @@ async function showBadevandPanel(feature, skipUrlPush) {
     // OPSTRØMS-udledningskilderne — samme emne som resten af dette kort
     // allerede dækker. '' (tom streng) ved manglende tier (fx server-
     // utilgaengelig, hvor der intet grundlag er at vurdere tillid ud fra).
-    const confBadge = confidenceBadgeHtml(_risk.dataConfidence);
+    // NYT (bruger-krav 2026-09-04) — samme beholder som datakonfidens-
+    // badge'en ovenover, sat sammen (ikke to separate DOM-elementer) — de
+    // besvarer beslægtede "hvor meget kan jeg stole på dette"-spørgsmål og
+    // hører naturligt sammen visuelt.
+    const confBadge = confidenceBadgeHtml(_risk.dataConfidence) + rainSourceBadgeHtml(_risk.rainSource);
     if (confDiv) confDiv.innerHTML = confBadge;
     if (_risk.source === 'server-utilgaengelig') {
       // NYT: distinkt fra "ingen bekræftet forbindelse" — det ved vi
