@@ -366,7 +366,14 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
              // selve benchmark-beregningen (den læser direkte fra
              // loadPulsPointsFull(), uden om denne outlet-matching), men
              // medbragt for konsistens — samme mønster som isWastewater.
-             dataQuality: pt.dataQuality ?? null };
+             dataQuality: pt.dataQuality ?? null,
+             // NYT (bruger-krav 2026-09-04 — målt vs. prognose-nedbør): sat
+             // direkte på pt af server.js's risikoløkke (se dmi-rain.js's
+             // filhoved), 'malt' eller 'prognose'. Medbragt her samme
+             // mønster som isWastewater/dataQuality, så deriveRainSource()
+             // nedenfor kan læse det af det DOMINERENDE udløb (annotated[0]),
+             // præcis som deriveDataConfidence() allerede gør for tillid.
+             rainSource: pt.rainSource ?? null };
   }
   // Samler en Set af bidragende punkt-ID'er til en dedupliceret, klientklar
   // outlet-liste. Bruges ved sammenlægning af flere kilder pr. sø/kystvand.
@@ -1444,6 +1451,19 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
     return dominant.dist <= nearKm ? 'middel' : 'lav';
   }
 
+  // NYT (bruger-krav 2026-09-04 — målt vs. prognose-nedbør i UI'en) — samme
+  // "læs af det DOMINERENDE udløb"-princip som deriveDataConfidence()
+  // ovenfor bruger til dist/upstream, blot for rainSource (sat af
+  // server.js's risikoløkke via toOutlet() ovenfor). Bruges for BÅDE
+  // badested-objektet (result.outlets) og søer (lakes[navn].outlets har
+  // samme form, se lakeEdges-fremskrivningen) — én fælles funktion, ikke to
+  // parallelle kopier. null hvis intet udløb bidrog (samme datamangel-
+  // tilfælde deriveDataConfidence() allerede dækker med 'ingen-data').
+  function deriveRainSource(resultOrLake) {
+    const dominant = (resultOrLake?.outlets ?? [])[0];
+    return dominant?.rainSource ?? null;
+  }
+
   // Sø-udgaven — bruges til lakes[navn].dataConfidence (se tildelingen
   // efter lakeEdges-fremskrivningen nedenfor), til /soe/:slug-siderne.
   // Søer mangler den positions-specifikke information deriveDataConfidence()
@@ -1582,6 +1602,7 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
   // confirmedNoOutlet, se dens filhoved).
   for (const navn of Object.keys(lakes)) {
     lakes[navn].dataConfidence = deriveLakeDataConfidence(lakes[navn]);
+    lakes[navn].rainSource = deriveRainSource(lakes[navn]);
   }
 
   // ── Badevand: punkt-i-polygon (sø → kystvand) → punkt-nær-linje (vandløb) ─
@@ -1755,6 +1776,9 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
         // NYT (bruger-ønske — datakonfidens): se deriveDataConfidence()
         // ovenfor for den fulde begrundelse. 'hoej'|'middel'|'lav'|'ingen-data'.
         dataConfidence: deriveDataConfidence(result, allDownstreamKyst),
+        // NYT (bruger-krav 2026-09-04 — målt vs. prognose-nedbør): se
+        // deriveRainSource() ovenfor. 'malt'|'prognose'|null.
+        rainSource: deriveRainSource(result),
       });
       // NYT (bruger-ønske 2026-07-25 — "Læsø"-fejlen): saml dette badesteds
       // EGET, allerede afstands-/strømkorrigerede resultat til senere at

@@ -6504,6 +6504,23 @@ function confidenceBadgeHtml(tier) {
   return `<div style="font-size:.72rem;color:${meta.color};padding:.3rem 0 .5rem 0;margin-bottom:.4rem;border-bottom:1px solid #e5e5e5">Datakonfidens: <strong>${meta.label}</strong> — ${escHtml(meta.text)}</div>`;
 }
 
+// NYT (bruger-krav 2026-09-04) — samme badge-mønster som CONFIDENCE_META/
+// confidenceBadgeHtml() ovenfor, blot for badevand-risk.js's rainSource-felt
+// (sat af server.js's risikoløkke, se dmi-rain.js's filhoved: reelt MÅLT
+// nedbør fra DMI's regnmålernetværk har ALTID forrang, Open-Meteo-
+// prognosemodellen er fallback). null (ingen badge) dækker BÅDE "intet
+// udløb bidrog endnu" og en cache fra før dette felt fandtes — samme
+// no-op-ved-ukendt-værdi-garanti som confidenceBadgeHtml().
+const RAIN_SOURCE_META = {
+  'malt':     { label: 'Målt',     color: '#2d7d4f', text: 'Fra en nærliggende DMI-regnmåler, ikke en vejrmodel.' },
+  'prognose': { label: 'Prognose', color: '#5a6b78', text: 'Ingen DMI-regnmåler inden for rækkevidde — baseret på vejrmodellen (Open-Meteo).' },
+};
+function rainSourceBadgeHtml(source) {
+  const meta = RAIN_SOURCE_META[source];
+  if (!meta) return '';
+  return `<div style="font-size:.72rem;color:${meta.color};padding:.3rem 0 .5rem 0;margin-bottom:.4rem;border-bottom:1px solid #e5e5e5">Nedbørskilde: <strong>${meta.label}</strong> — ${escHtml(meta.text)}</div>`;
+}
+
 function colorKystvandByRisk() {
   // RETTET (fuldt omskrevet — FJERNER lokal fallback bevidst, efter
   // eksplicit ønske): brugte tidligere sin egen komplette, lokale
@@ -6899,7 +6916,7 @@ function computeBadevandRisk(lat, lng, badevandId) {
     // (de syntetiske værdier), rammer derfor altid DENNE gren, aldrig de
     // øvrige nedenfor. undefined for et upatchet badested, ikke null —
     // showBadevandPanel()'s banner-tjek bruger `if (sp.overrideInfo)`.
-    return { bact: sp.bact, viral: sp.viral, algae: sp.algae, forecast: sp.forecast, source: sp.source, outlets: sp.outlets || [], dataConfidence: sp.dataConfidence ?? null, overrideInfo: sp.overrideInfo, waterType: sp.waterType ?? null };
+    return { bact: sp.bact, viral: sp.viral, algae: sp.algae, forecast: sp.forecast, source: sp.source, outlets: sp.outlets || [], dataConfidence: sp.dataConfidence ?? null, rainSource: sp.rainSource ?? null, overrideInfo: sp.overrideInfo, waterType: sp.waterType ?? null };
   }
   // RETTET (KRITISK — se brugerrapport 2026-07-25, DKBW1031/Skanderborg Sø
   // Camping): denne funktion tjekkede kun 'nedstroms-bekraeftet' som en
@@ -6921,7 +6938,7 @@ function computeBadevandRisk(lat, lng, badevandId) {
     // confirmReason) — kun 'id15-empty' er faktisk ID15-terrænsporing af
     // et SØ-opland. confirmReason lader colorBadevandByRisk()/
     // showBadevandPanel() vise en tekst, der matcher den faktiske årsag.
-    return { bact: null, viral: null, algae: null, source: 'ingen-bekraeftet', confirmReason: sp.confirmReason || null, outlets: [], geomMatchNoData: null, dataConfidence: sp.dataConfidence ?? null, waterType: sp.waterType ?? null };
+    return { bact: null, viral: null, algae: null, source: 'ingen-bekraeftet', confirmReason: sp.confirmReason || null, outlets: [], geomMatchNoData: null, dataConfidence: sp.dataConfidence ?? null, rainSource: sp.rainSource ?? null, waterType: sp.waterType ?? null };
   }
   // NYT: 'nedstroms-bekraeftet' — tredje, POSITIV kategori (se
   // badevand-risk.js's allDownstreamKyst): kystvandet HAR kendte udløb, men
@@ -6930,13 +6947,13 @@ function computeBadevandRisk(lat, lng, badevandId) {
   // "ingen-bekraeftet" (source:'ingen-bekraeftet', grøn, kun søer/ID15-
   // opland uden udløb) — denne er kystvandenes strømdrevne modstykke.
   if (sp.source === 'nedstroms-bekraeftet') {
-    return { bact: null, viral: null, algae: null, source: 'nedstroms-bekraeftet', outlets: [], geomMatchNoData: null, allDownstreamMatch: sp.allDownstreamMatch || null, dataConfidence: sp.dataConfidence ?? null, waterType: sp.waterType ?? null };
+    return { bact: null, viral: null, algae: null, source: 'nedstroms-bekraeftet', outlets: [], geomMatchNoData: null, allDownstreamMatch: sp.allDownstreamMatch || null, dataConfidence: sp.dataConfidence ?? null, rainSource: sp.rainSource ?? null, waterType: sp.waterType ?? null };
   }
   // NYT: serveren sender nu selv skelnen mellem "vandområde matchet, men
   // ingen data" og "intet match overhovedet" (se badevand-risk.js's
   // allLakeGeoms/allKystvandGeoms + noDataMatch) — ingen lokal
   // geometri-genberegning nødvendig for at bevare denne besked.
-  return { bact: null, viral: null, algae: null, source: 'ingen', outlets: [], geomMatchNoData: sp.noDataMatch || null, dataConfidence: sp.dataConfidence ?? null, waterType: sp.waterType ?? null };
+  return { bact: null, viral: null, algae: null, source: 'ingen', outlets: [], geomMatchNoData: sp.noDataMatch || null, dataConfidence: sp.dataConfidence ?? null, rainSource: sp.rainSource ?? null, waterType: sp.waterType ?? null };
 }
 
 // NYT (Kommunepakke, modul 6): kommune-overstyrings-banner — se
@@ -8191,6 +8208,8 @@ function showLakeLoadPanel(navn, _startTs) {
   // grovere end badestedernes — kun hoej/middel/ingen-data). Samme
   // confidenceBadgeHtml()-helper som badested-panelets #bv-outlets bruger.
   rows.push(confidenceBadgeHtml(lakesRiskData?.[navn]?.dataConfidence));
+  // NYT (bruger-krav 2026-09-04) — se rainSourceBadgeHtml()'s filhoved.
+  rows.push(rainSourceBadgeHtml(lakesRiskData?.[navn]?.rainSource));
   rows.push(lakeSiblingNoteHtml(navn, false));
 
   // FJERNET (bruger-ønske): den fulde udløbsliste ("Udløb der påvirker
@@ -10608,7 +10627,11 @@ async function showBadevandPanel(feature, skipUrlPush) {
     // OPSTRØMS-udledningskilderne — samme emne som resten af dette kort
     // allerede dækker. '' (tom streng) ved manglende tier (fx server-
     // utilgaengelig, hvor der intet grundlag er at vurdere tillid ud fra).
-    const confBadge = confidenceBadgeHtml(_risk.dataConfidence);
+    // NYT (bruger-krav 2026-09-04) — samme beholder som datakonfidens-
+    // badge'en ovenover, sat sammen (ikke to separate DOM-elementer) — de
+    // besvarer beslægtede "hvor meget kan jeg stole på dette"-spørgsmål og
+    // hører naturligt sammen visuelt.
+    const confBadge = confidenceBadgeHtml(_risk.dataConfidence) + rainSourceBadgeHtml(_risk.rainSource);
     if (confDiv) confDiv.innerHTML = confBadge;
     if (_risk.source === 'server-utilgaengelig') {
       // NYT: distinkt fra "ingen bekræftet forbindelse" — det ved vi
