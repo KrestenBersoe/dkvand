@@ -59,13 +59,48 @@ pool.on('error', (err) => {
   // forbindelsen efter inaktivitet) crasher ellers HELE Node-processen —
   // samme klasse fejl som ville have ramt en uventet SQLite-fejl før i
   // tiden, blot at pg's pool har sin egen 'error'-event for netop dette.
-  console.error('Uventet fejl på idle Postgres-forbindelse:', err.message);
+  console.error('Uventet fejl på idle Postgres-forbindelse:', err.message, poolStats());
 });
+
+// NYT (produktionshændelse 2026-09-05 — gentagne "Connection terminated due
+// to connection timeout" på TVÆRS af samtlige Postgres-kaldende moduler,
+// samtidigt med gentagne OOM-kills): hvert enkelt kaldested logger allerede
+// sin egen fejlbesked, men INGEN af dem viser poolens tilstand i selve
+// øjeblikket — umuligt derfor at skelne mellem tre meget forskellige
+// rodårsager, der alle giver samme fejltekst:
+//   1) Postgres/Fly's proxy reelt utilgængelig  → waitingCount højt, totalCount
+//      hurtigt mod 0 (ingen forbindelser kan overhovedet oprettes).
+//   2) Puljen fuld af RIGTIGE, aktive forbindelser (reel overbelastning)
+//      → totalCount = max (20), waitingCount højt.
+//   3) Puljen fuld af DØDE forbindelser efter et netværksglip, som pg endnu
+//      ikke har opdaget/smidt ud (kendt pg-adfærd) → totalCount = max,
+//      idleCount lavt, men intet reelt arbejde udføres.
+// poolStats() vedhæftes derfor CENTRALT her — ét sted, alle kaldere får det
+// automatisk — i stedet for at rette op til et dusin spredte try/catch-blokke.
+function poolStats() {
+  return { total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount };
+}
 
 /** @param {string} text @param {any[]} [params] */
 async function query(text, params) {
-  return pool.query(text, params);
+  try {
+    return await pool.query(text, params);
+  } catch (e) {
+    console.warn('Postgres-forespørgsel fejlede —', e.message, poolStats());
+    throw e;
+  }
 }
+
+// NYT (samme hændelse): et lavfrekvent, altid-kørende hjertslag — uafhængigt
+// af om noget rent faktisk fejler lige nu — så en efterfølgende gennemgang
+// af logs kan se poolens tilstand HELE vejen op til en OOM-kill, ikke kun i
+// de sekunder hvor en fejl tilfældigvis også blev logget. 5 min er hyppigt
+// nok til at fange optrapningen af et problem, sjældent nok til ikke selv at
+// blive støj i logs' normaldrift.
+setInterval(() => {
+  const s = poolStats();
+  if (s.total > 0 || s.waiting > 0) console.log('Postgres-pulje:', s);
+}, 5 * 60 * 1000);
 
 /**
  * Låner en dedikeret klient til transaktioner (BEGIN/COMMIT/ROLLBACK) —
