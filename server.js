@@ -276,13 +276,32 @@ async function flushPushQueue() {
     const { rows: subRows } = await query(`SELECT * FROM push_subscriptions WHERE endpoint = ANY($1)`, [endpoints]);
     const subsByEndpoint = new Map(subRows.map(r => [r.endpoint, mapSubscriptionRow(r)]));
 
-    // NYT: SAMTIDIG afsendelse — Promise.all i stedet for en sekventiel
-    // for-await-løkke. Ved den nuværende, beskedne abonnenttal (typisk
-    // få-til-nogle-og-tyve) er der ingen grund til en kunstig
-    // samtidigheds-grænse (p-limit-lignende); bliver abonnenttallet
-    // markant større (hundreder+), er det værd at genoverveje for ikke at
-    // ramme push-tjenesternes egne rate-grænser.
-    const results = await Promise.all(jobs.map(job => sendOnePushJob(job, subsByEndpoint)));
+    // RETTET (produktionshændelse 2026-09-05): denne kommentar sagde
+    // tidligere "ved den nuværende, beskedne abonnenttal (typisk få-til-
+    // nogle-og-tyve) er der ingen grund til en kunstig samtidigheds-
+    // grænse... bliver abonnenttallet markant større (hundreder+), er det
+    // værd at genoverveje" — abonnenttallet ER nu markant større (516,
+    // bekræftet direkte i produktionslogs), men grænsen blev aldrig
+    // indført. Et enkelt bredt regnvejr kunne derfor sætte alle ~516
+    // jobs i kø til ÉN flush, som affyrede alle 516 samtidige udgående
+    // HTTPS-kald til push-tjenesterne (FCM/APNs/Mozilla) i ét
+    // Promise.all — ingen ekstern trafik involveret, men målte ALLIGEVEL
+    // som en "App Concurrency"-spids i Fly's egne metrics, fejlagtigt
+    // tolket som brugertrafik. Samme afgrænsede worker-pool-mønster som
+    // dmi-rain.js's backfillHistory() allerede bruger mod eksterne
+    // tjenester — bevarer downstream-koden (for-loopet over `results`)
+    // helt uændret, da rækkefølgen af resultater aldrig har haft
+    // betydning der.
+    const PUSH_SEND_CONCURRENCY = 20;
+    const results = [];
+    let _pushIdx = 0;
+    async function pushWorker() {
+      while (_pushIdx < jobs.length) {
+        const job = jobs[_pushIdx++];
+        results.push(await sendOnePushJob(job, subsByEndpoint));
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PUSH_SEND_CONCURRENCY, jobs.length) }, pushWorker));
 
     let sent = 0, failed = 0;
     const expiredEndpoints = [];
