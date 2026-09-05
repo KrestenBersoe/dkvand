@@ -275,14 +275,22 @@
     pointer-events: none;
   }
   @keyframes outlet-ring-watch {
-    0%, 100% { transform: scale(1);   opacity: .55; }
-    50%      { transform: scale(1.4); opacity: .16; }
+    0%, 100% { transform: scale(1);   opacity: .7; }
+    50%      { transform: scale(1.4); opacity: .35; }
   }
   .outlet-watch-ring {
     transform-box: fill-box;
     transform-origin: center;
     animation: outlet-ring-watch 3.6s ease-in-out infinite;
-    stroke-dasharray: 3 2;
+    /* RETTET (bruger-rapport 2026-09-05 — "ingen stiplede ringe overhovedet
+       på kortet", bekræftet via getComputedStyle at 3px/2px rent faktisk
+       blev anvendt korrekt): på en ~10-13px-radius cirkel giver 3px/2px
+       et dusin+ mikroskopiske streger på en ~65-80px omkreds, som ved
+       normalt kortzoom og med .16-bunden i opacity-animationen herunder
+       ikke er til at skelne fra en blot udtonet solid ring. Bredere
+       stiplemønster + højere opacity-bund løser det uden at ændre selve
+       tre-trins-logikken (se colorRbuByOwnRisk()). */
+    stroke-dasharray: 6 4;
     pointer-events: none;
   }
 
@@ -7298,7 +7306,10 @@ function colorRbuByOwnRisk() {
     const ring = L.circleMarker(marker.getLatLng(), {
       radius: marker.getRadius() + 3,
       color: isCso ? RBU_KLOAK_FILL : RBU_REGN_FILL,
-      weight: 2.5,
+      // "I risiko" er en stiplet ring (se .outlet-watch-ring) — en tykkere
+      // streg er nødvendig for at de 6px/4px-stiplerne rent faktisk kan
+      // skelnes fra hinanden ved normalt kortzoom, ikke kun kosmetisk.
+      weight: tier === 'watch' ? 3.5 : 2.5,
       fillOpacity: 0,
       className,
       interactive: false,
