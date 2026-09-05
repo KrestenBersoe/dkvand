@@ -2844,6 +2844,37 @@ let   apiCallCount   = 0;
 let   cacheHitCount  = 0;
 const fetchErrors    = [];   // ring buffer — last 5 errors from fetchOpenMeteo
 
+// RETTET (produktionshændelse 2026-09-05 — bruger-krav: "alle eksterne
+// datahentninger skal persisteres lokalt og kun genhentes når deres eget
+// timeout udløses"): dette var den ENESTE eksterne datakilde uden disk-
+// persistens tilbage (currents-cache.json/dmi-rain-history.json/water-
+// flags-cache.json har alle fået det samme i denne hændelse) — hver
+// eneste genstart tømte weatherCache fuldstændigt, uanset at den
+// eksisterende data typisk stadig var langt inden for WEATHER_TTL_MS's 3
+// timer, og tvang warmCache() til at genhente samtlige ~171 celler fra
+// Open-Meteo fra bunden. Bidrog direkte til de observerede "Open-Meteo
+// HTTP 429"-fejl samme aften — samme genhentnings-byrde gentaget ved
+// hver genstart udløste ganske enkelt Open-Metos egen hastighedsgrænse
+// igen og igen. Samme mønster/løsning som de tre øvrige caches.
+const WEATHER_CACHE_FILE = path.join(DATA_DIR, 'weather-cache.json');
+function loadPersistedWeatherCache() {
+  try {
+    const raw    = fs.readFileSync(WEATHER_CACHE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    for (const [key, entry] of parsed) weatherCache.set(key, entry);
+    console.log(`weatherCache: ${weatherCache.size} celler indlæst fra disk-cache`);
+  } catch (e) {
+    // Helt normalt ved allerførste deploy — ingen disk-cache endnu
+  }
+}
+function persistWeatherCacheToDisk() {
+  fs.writeFile(WEATHER_CACHE_FILE, JSON.stringify([...weatherCache]), (err) => {
+    if (err) console.warn('Kunne ikke skrive weather-cache til disk:', err.message);
+  });
+}
+loadPersistedWeatherCache();
+
 function gridKey(lat, lng) {
   const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
   const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
@@ -3093,6 +3124,7 @@ function warmCache() {
     await Promise.all(Array.from({ length: Math.min(CONC, cells.length) }, (_, i) => worker(i)));
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s — cache: ${weatherCache.size} cells`);
+    if (fetched > 0) persistWeatherCacheToDisk();
     warmRunning = false;
     currentWarmPromise = null;
   })();
