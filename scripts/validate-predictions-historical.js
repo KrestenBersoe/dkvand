@@ -97,6 +97,56 @@ function sampleFailed(sample) {
   return (ecoli != null && ecoli >= ECOLI_THRESHOLD) || (enterokokker != null && enterokokker >= ENTERO_THRESHOLD);
 }
 
+// NYT (bruger-krav 2026-09-05) — kontinuert generalisering af
+// sampleFailed()'s binære tjek: hvor mange gange den lovpligtige
+// grænseværdi blev overskredet, i stedet for blot ja/nej. Bruges KUN til
+// rangkorrelationen nedenfor (Spearman), ALDRIG til selve confusion-
+// matrixen ovenfor — samme tærskler (ECOLI_THRESHOLD/ENTERO_THRESHOLD),
+// blot uden at kollapse til et enkelt bit. max() af de tilstedeværende
+// parametre, samme "enten er nok" logik som sampleFailed()'s ||.
+function sampleExceedanceRatio(sample) {
+  const { ecoli, enterokokker } = sample;
+  const ratios = [];
+  if (ecoli != null) ratios.push(ecoli / ECOLI_THRESHOLD);
+  if (enterokokker != null) ratios.push(enterokokker / ENTERO_THRESHOLD);
+  return ratios.length ? Math.max(...ratios) : null;
+}
+
+// NYT — Spearman rangkorrelation, egen implementering (ingen stats-
+// afhængighed i dette repo). Pearson-korrelation af RANGENE, ikke af de
+// rå værdier — den korrekte måde at håndtere ties (flere prøver med
+// samme koncentration) på, i modsætning til den simplificerede
+// sum-af-kvadreret-rangforskel-formel, som kun er eksakt UDEN ties.
+// Returnerer null hvis en af siderne har nul varians (fx alle bact-scores
+// identiske i en meget lille gruppe) — udefineret korrelation, ikke 0.
+function rankOf(values) {
+  const idx = values.map((_, i) => i).sort((a, b) => values[a] - values[b]);
+  const ranks = new Array(values.length);
+  let i = 0;
+  while (i < idx.length) {
+    let j = i;
+    while (j + 1 < idx.length && values[idx[j + 1]] === values[idx[i]]) j++;
+    const avgRank = (i + j) / 2 + 1; // 1-baseret, gennemsnitlig rang ved ties
+    for (let k = i; k <= j; k++) ranks[idx[k]] = avgRank;
+    i = j + 1;
+  }
+  return ranks;
+}
+function spearman(xs, ys) {
+  const n = xs.length;
+  if (n < 2) return null;
+  const rx = rankOf(xs), ry = rankOf(ys);
+  const meanX = rx.reduce((a, b) => a + b, 0) / n;
+  const meanY = ry.reduce((a, b) => a + b, 0) / n;
+  let cov = 0, varX = 0, varY = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = rx[i] - meanX, dy = ry[i] - meanY;
+    cov += dx * dy; varX += dx * dx; varY += dy * dy;
+  }
+  if (varX === 0 || varY === 0) return null;
+  return cov / Math.sqrt(varX * varY);
+}
+
 // Exact formula from risk-model.js's seasonalTau()/seasonalTauViral(),
 // parameterized by month instead of reading new Date().getMonth() — uses
 // that module's own exported constants, not re-guessed numbers.
@@ -294,6 +344,13 @@ async function main() {
   console.log(`${distinctDates.length} distinct sample dates to backtest (one cascade recompute each).\n`);
 
   let tp = 0, fp = 0, tn = 0, fn = 0, noResult = 0, noPrediction = 0, cascadeErrors = 0;
+  // NYT (bruger-krav 2026-09-05) — rangkorrelations-datapunkter, samlet på
+  // tværs af ALLE datoer (ikke kun de her-og-nu flagged/not-flagged), til
+  // Spearman-rapporten efter løkken. Se sampleExceedanceRatio()/spearman()
+  // ovenfor for hvorfor dette er en RIGERE test end confusion-matrixen:
+  // rangerer scoren korrekt, uafhængigt af FLAG_THRESHOLD's ene, vilkårlige
+  // skæringspunkt?
+  const correlationPairs = [];
   let dateIdx = 0;
   for (const dateIso of distinctDates) {
     dateIdx++;
@@ -332,18 +389,40 @@ async function main() {
       cascadeErrors += samplesByDate.get(dateIso).length;
       continue;
     }
-    const bactBySite = new Map((result.badevand || []).map((b) => [b.id, b.bact]));
+    // RETTET: var bactBySite (kun tallet) — udvidet til hele site-objektet,
+    // så dataConfidence/outlets (og dermed det dominerende udløbs
+    // qualityCode) er tilgængelige nedenfor til rangkorrelations-
+    // stratificeringen, ikke kun til selve confusion-matrixen.
+    const siteResultById = new Map((result.badevand || []).map((b) => [b.id, b]));
 
     for (const sample of samplesByDate.get(dateIso)) {
       const failed = sampleFailed(sample);
       if (failed === null) { noResult++; continue; }
-      const bact = bactBySite.get(sample.siteId);
+      const siteResult = siteResultById.get(sample.siteId);
+      const bact = siteResult?.bact ?? null;
       if (bact == null) { noPrediction++; continue; }
       const flagged = bact >= FLAG_THRESHOLD;
       if (failed && flagged) tp++;
       else if (!failed && flagged) fp++;
       else if (!failed && !flagged) tn++;
       else fn++;
+
+      // NYT — se correlationPairs' filhoved. qualityOk mirrors scripts/
+      // calibrate-overflow-model.js's eget qualityCode-gate (0=reelt
+      // rapporteret, 1=verificeret nul — begge "rigtige" facit; 2=estimeret
+      // fra volumen, 3=ingen data, IKKE inkluderet), læst af det
+      // DOMINERENDE bidragende udløb (outlets[0], allerede sorteret efter
+      // faktisk bidrag — samme konvention badevand-risk.js's
+      // deriveDataConfidence()/deriveRainSource() selv bruger).
+      const exceedance = sampleExceedanceRatio(sample);
+      if (exceedance != null) {
+        const dominant = (siteResult.outlets || [])[0];
+        correlationPairs.push({
+          bact, exceedance,
+          dataConfidence: siteResult.dataConfidence ?? null,
+          qualityOk: dominant ? (dominant.dataQuality === 0 || dominant.dataQuality === 1) : false,
+        });
+      }
     }
   }
 
@@ -364,6 +443,37 @@ async function main() {
     if (totalFailed > 0) console.log(`  Recall (caught real fails):  ${((tp / totalFailed) * 100).toFixed(1)}% (${tp}/${totalFailed})`);
     if (totalPassed > 0) console.log(`  False alarm rate:            ${((fp / totalPassed) * 100).toFixed(1)}% (${fp}/${totalPassed})`);
     console.log(`  Overall accuracy:            ${(((tp + tn) / compared) * 100).toFixed(1)}%`);
+  }
+
+  // NYT (bruger-krav 2026-09-05) — rangkorrelation: ranker bact-scoren
+  // prøverne korrekt (højere score → højere reel forureningsgrad), UDEN at
+  // gå via FLAG_THRESHOLD's ene, vilkårlige skæringspunkt? Stratificeret
+  // efter dataConfidence — hvis modellens afstands-/strøm-/nedstrøms-
+  // antagelser (den del af kaskaden dataConfidence selv måler tilliden
+  // til) reelt bidrager, bør 'hoej' vise STÆRKERE korrelation end 'lav'.
+  // Flad korrelation på tværs af tiers er et signal om at den ekstra
+  // geometri-/strømbevidsthed IKKE reelt forbedrer rangeringen, uanset hvad
+  // dataConfidence selv hævder. qualityOk-varianten gentager det samme,
+  // begrænset til udløb med reelt rapporteret/verificeret PULS-facit (samme
+  // gate som scripts/calibrate-overflow-model.js), for at udelukke støj fra
+  // rent volumen-estimerede udløb.
+  function reportSpearman(label, pairs) {
+    if (pairs.length < 5) { console.log(`  ${label}: n=${pairs.length} (for få til at rapportere)`); return; }
+    const r = spearman(pairs.map((p) => p.bact), pairs.map((p) => p.exceedance));
+    console.log(`  ${label}: n=${pairs.length}, Spearman r=${r == null ? 'udefineret (ingen varians)' : r.toFixed(3)}`);
+  }
+  console.log('');
+  console.log('Rangkorrelation (bact-score vs. rå lab-overskridelsesforhold — se sampleExceedanceRatio()):');
+  console.log('Måler om scoren RANGERER prøverne korrekt, uafhængigt af ét enkelt tærskelvalg.\n');
+  reportSpearman('Alle sammenlignede prøver', correlationPairs);
+  reportSpearman('  — kun qualityCode 0/1-udløb', correlationPairs.filter((p) => p.qualityOk));
+  console.log('\n  Pr. dataConfidence-niveau (alle prøver):');
+  for (const tier of ['hoej', 'middel', 'lav', 'ingen-data']) {
+    reportSpearman(`    ${tier}`, correlationPairs.filter((p) => p.dataConfidence === tier));
+  }
+  console.log('\n  Pr. dataConfidence-niveau (kun qualityCode 0/1-udløb):');
+  for (const tier of ['hoej', 'middel', 'lav', 'ingen-data']) {
+    reportSpearman(`    ${tier}`, correlationPairs.filter((p) => p.dataConfidence === tier && p.qualityOk));
   }
 }
 
