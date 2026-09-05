@@ -243,9 +243,10 @@
 
      Ringens FARVE er altid udløbets egen type-farve (RBU_KLOAK_FILL/
      RBU_REGN_FILL) — den skal aldrig kunne forveksles med en risiko-
-     farveskala. Kun ringens BEVÆGELSE koder status, i tre trin:
+     farveskala. Ringens BEVÆGELSE (eller mangel på samme) koder status, i
+     tre trin:
        - intet overløb:  ingen ring
-       - "i risiko":      .outlet-watch-ring    (rolig, ikke-udvidende halo)
+       - "i risiko":      .outlet-watch-ring    (STATISK — se dens filhoved)
        - aktivt overløb:  .outlet-active-ring   (kloak/CSO — hurtig ping)
                         eller .outlet-active-ring-calm (regnvand — langsommere,
                         dæmpet ping)
@@ -274,23 +275,20 @@
     animation: outlet-ring-pulse-calm 3.2s ease-out infinite;
     pointer-events: none;
   }
-  @keyframes outlet-ring-watch {
-    0%, 100% { transform: scale(1);   opacity: .7; }
-    50%      { transform: scale(1.4); opacity: .35; }
-  }
+  /* RETTET (2026-09-05, anden runde — se bruger-rapporten om stiplede ringe
+     der ikke kunne ses, løst først med et bredere 6px/4px-mønster): efter
+     at have set søster-projektet ukwaters tilsvarende "i risiko"-ring
+     (.outlet-near-threshold-ring) er en STATISK ring den bedre løsning,
+     ikke blot en anden æstetik — den fjerner HELE klassen af problemer en
+     animeret ring har (dash-mønstre der ikke er til at skelne ved
+     normalt kortzoom, en opacity-bund der gør ringen svær at se midt i
+     cyklussen, OG den løbende compositing-omkostning af endnu et sæt
+     uendelige CSS-animationer oven i .outlet-active-ring/-calm — reelt
+     medvirkende til den hængende browser, se renderVisibleRbuRings()'s
+     filhoved). En "i risiko"-ring skal i forvejen ikke kræve samme
+     opmærksomhed som et aktivt overløb; ingen bevægelse er selve signalet
+     for "roligere end aktiv", ikke kun et sparet CPU-cyklus. */
   .outlet-watch-ring {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: outlet-ring-watch 3.6s ease-in-out infinite;
-    /* RETTET (bruger-rapport 2026-09-05 — "ingen stiplede ringe overhovedet
-       på kortet", bekræftet via getComputedStyle at 3px/2px rent faktisk
-       blev anvendt korrekt): på en ~10-13px-radius cirkel giver 3px/2px
-       et dusin+ mikroskopiske streger på en ~65-80px omkreds, som ved
-       normalt kortzoom og med .16-bunden i opacity-animationen herunder
-       ikke er til at skelne fra en blot udtonet solid ring. Bredere
-       stiplemønster + højere opacity-bund løser det uden at ændre selve
-       tre-trins-logikken (se colorRbuByOwnRisk()). */
-    stroke-dasharray: 6 4;
     pointer-events: none;
   }
 
@@ -7347,10 +7345,7 @@ function renderVisibleRbuRings() {
     const ring = L.circleMarker(latlng, {
       radius: marker.getRadius() + 3,
       color: isCso ? RBU_KLOAK_FILL : RBU_REGN_FILL,
-      // "I risiko" er en stiplet ring (se .outlet-watch-ring) — en tykkere
-      // streg er nødvendig for at de 6px/4px-stiplerne rent faktisk kan
-      // skelnes fra hinanden ved normalt kortzoom, ikke kun kosmetisk.
-      weight: tier === 'watch' ? 3.5 : 2.5,
+      weight: 2.5,
       fillOpacity: 0,
       className,
       interactive: false,
