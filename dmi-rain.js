@@ -47,10 +47,42 @@
 'use strict';
 
 const https      = require('https');
+const fs         = require('fs');
+const path       = require('path');
 const riskModel   = require('./risk-model');
 const badevandRisk = require('./badevand-risk');
 
 const DMI_BASE = 'https://opendataapi.dmi.dk/v2/metObs/collections';
+
+// RETTET (produktionshændelse 2026-09-05 — se db.js/server.js's
+// tilsvarende noter samme dag): denne fils stationHistory var IKKE en
+// hukommelseslæk (appendReading() beskærer allerede korrekt ved hvert
+// kald), men manglede disk-persistens — HVER genstart (og denne maskine
+// genstartede hvert 15.-70. minut, se produktionsloggen) genkørte derfor
+// backfillHistory()'s fulde 8-samtidige HTTP+JSON-byrde på tværs af
+// ~90-170 stationer FRA BUNDEN, hver eneste gang. To målte konsekvenser:
+// (1) gentagne "DMI HTTP 429"-fejl i loggen — DMI selv begrænser den
+// hastighed, samme byrde gentaget ved hver genstart udløser den derfor
+// igen og igen; (2) et helt nyt RSS-højvandsmærke pr. genstart, målt
+// direkte (VmHWM ~1,42GB kun 6 min efter en frisk boot, VmRSS ~1,32GB
+// samme øjeblik) — Node/glibc'ens allokator returnerer typisk ikke
+// hukommelse fra en stor forbigående byrde til OS'et bagefter, så et nyt
+// højvandsmærke pr. genstart lægger sig oveni en i forvejen kun ca. 2GB
+// stor maskine. Samme mønster og samme fil-baserede løsning som
+// currents-cache.json (se server.js's loadPersistedCurrents()/
+// persistCurrentsToDisk()): gem stationHistory på Volumen, indlæs den ved
+// opstart, og lad backfillHistory() SPRINGE stationer over der allerede
+// har tilstrækkelig dybde i den indlæste cache i stedet for at genhente
+// hele 7-dages-vinduet blindt hver gang.
+const DATA_DIR = fs.existsSync('/data') ? '/data' : __dirname;
+const HISTORY_CACHE_FILE = path.join(DATA_DIR, 'dmi-rain-history.json');
+// Under denne dybde (ud af HISTORY_HOURS mulige) anses en stations
+// persisterede historik for util­strækkelig til at spare backfill'en for
+// den — fx en helt ny station, eller én der har været nede/umatchet så
+// længe at appendReading()'s egen beskæring for længst har tømt det
+// meste af dens vindue. 80% tillader almindelige, spredte rapporterings-
+// huller uden at udløse en unødvendig genhentning for dem.
+const BACKFILL_SKIP_DEPTH_RATIO = 0.8;
 
 // Ud over dette: stationen er for langt væk til at være repræsentativ for
 // cellen — fald tilbage til Open-Meteo-modeldata. 25km er et forsigtigt
@@ -125,6 +157,7 @@ async function refreshLatest() {
     appendReading(p.stationId, floorToHour(p.observed), Math.max(Number(p.value) || 0, 0));
     updated++;
   }
+  if (updated > 0) persistHistoryToDisk();
   return updated;
 }
 
@@ -160,6 +193,34 @@ function matchedStationIds() {
 // regnemodellens implicitte "1 indeks = 1 time"-antagelse i
 // accumulateDecayed()/estimateLastEventAge()).
 let stationHistory = new Map();
+
+// ── Disk-persistens ───────────────────────────────────────────────────────
+// Samme begrundelse/mønster som server.js's currents-cache (se filhovedets
+// note ovenfor): gemmes som almindeligt JSON — Map understøttes ikke af
+// JSON.stringify direkte, serialiseres derfor til [stationId, [[hourTs,mm],...]]-par.
+function loadPersistedHistory() {
+  try {
+    const raw    = fs.readFileSync(HISTORY_CACHE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Array.isArray(parsed.stations)) return;
+    let hours = 0;
+    for (const [stationId, entries] of parsed.stations) {
+      const h = new Map(entries);
+      stationHistory.set(stationId, h);
+      hours += h.size;
+    }
+    console.log(`dmi-rain: ${stationHistory.size} stationers historik indlæst fra disk-cache (${hours} timeaflæsninger, alder: ${Math.round((Date.now() - (parsed.ts || 0)) / 60000)} min)`);
+  } catch (e) {
+    // Helt normalt ved allerførste deploy — ingen disk-cache endnu
+  }
+}
+
+function persistHistoryToDisk() {
+  const stations = [...stationHistory].map(([stationId, h]) => [stationId, [...h]]);
+  fs.writeFile(HISTORY_CACHE_FILE, JSON.stringify({ ts: Date.now(), stations }), (err) => {
+    if (err) console.warn('Kunne ikke skrive dmi-rain-historik til disk:', err.message);
+  });
+}
 
 function floorToHour(iso) {
   return Math.floor(new Date(iso).getTime() / 3600000) * 3600000;
@@ -204,9 +265,16 @@ async function backfillHistory(stationIds) {
   const now   = Date.now();
   const start = new Date(now - HISTORY_HOURS * 3600000).toISOString();
   const end   = new Date(now).toISOString();
-  const ids   = [...stationIds];
+  const minDepth = HISTORY_HOURS * BACKFILL_SKIP_DEPTH_RATIO;
+  const ids   = [...stationIds].filter(id => (stationHistory.get(id)?.size || 0) < minDepth);
+  const skipped = stationIds.size - ids.length;
   const CONC  = 8;
   let idx = 0, ok = 0, failed = 0;
+
+  if (skipped > 0) {
+    console.info(`dmi-rain: ${skipped} station(er) har allerede tilstrækkelig historik fra disk-cache — springer backfill over for dem`);
+  }
+  if (ids.length === 0) return;
 
   async function worker() {
     while (idx < ids.length) {
@@ -229,6 +297,7 @@ async function backfillHistory(stationIds) {
   }
   await Promise.all(Array.from({ length: Math.min(CONC, ids.length) }, worker));
   console.info(`dmi-rain: historisk opbakning færdig — ${ok} stationer ok, ${failed} fejlet`);
+  if (ok > 0) persistHistoryToDisk();
 }
 
 // ── Offentlig opslagsfunktion — kaldt fra server.js's risikoløkke, ét kald
@@ -266,5 +335,5 @@ function stats() {
 
 module.exports = {
   rebuildCellIndex, matchedStationIds, backfillHistory, refreshLatest,
-  getMeasuredForCell, stats,
+  getMeasuredForCell, stats, loadPersistedHistory,
 };

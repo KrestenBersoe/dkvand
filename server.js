@@ -3940,6 +3940,14 @@ setInterval(() => warmCache()
 const DMI_RAIN_CELL_REMATCH_MS = 24 * 3600 * 1000; // gen-match celler mod evt. nye/forsvundne stationer ~dagligt
 (async () => {
   try {
+    // RETTET (produktionshændelse 2026-09-05): indlæses FØR
+    // backfillHistory() kaldes, så dennes egen dybde-tjek (se dmi-rain.js's
+    // BACKFILL_SKIP_DEPTH_RATIO) har noget at sammenligne med — uden dette
+    // ville hver eneste genstart (denne maskine genstarter hvert 15.-70.
+    // minut, se produktionsloggen) blindt gentage den fulde 8-samtidige
+    // backfill-byrde på tværs af ALLE stationer, uanset hvor frisk
+    // disk-cachen allerede er.
+    dmiRain.loadPersistedHistory();
     await dmiRain.refreshLatest();
     dmiRain.rebuildCellIndex(buildPulsGrid());
     await dmiRain.backfillHistory(dmiRain.matchedStationIds());
