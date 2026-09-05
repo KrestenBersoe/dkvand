@@ -215,9 +215,26 @@ function loadPersistedHistory() {
   }
 }
 
+// RETTET (produktionshændelse 2026-09-05, opdaget ved genlæsning af egen
+// kode samme dag): kaldt fra refreshLatest() HVER GANG mindst én station
+// havde en ny aflæsning — reelt næsten hver eneste kørsel, dvs. 2 sek. og
+// 10 sek. efter hver opstart OG hvert 15. minut derefter for evigt, ikke
+// blot lejlighedsvist. Da DMI-stationer typisk kun rapporterer én gang i
+// timen, opdaterer langt de fleste af disse kald blot SAMME times allerede
+// kendte værdi (appendReading()'s h.set(hourTs, mm) overskriver, ændrer
+// ikke historikkens reelle dybde) — men serialiserer og skriver alligevel
+// hele historikken (op til ~170 stationer × 168 timer) til disk hver gang.
+// Reel, undgåelig, ny belastning indført samme dag som selve disk-
+// persistensen — throttlet her til højst ét reelt skriv hvert 10. minut,
+// uanset hvor ofte refreshLatest() selv kalder ind.
+const PERSIST_MIN_INTERVAL_MS = 10 * 60 * 1000;
+let _lastPersistTs = 0;
 function persistHistoryToDisk() {
+  const now = Date.now();
+  if (now - _lastPersistTs < PERSIST_MIN_INTERVAL_MS) return;
+  _lastPersistTs = now;
   const stations = [...stationHistory].map(([stationId, h]) => [stationId, [...h]]);
-  fs.writeFile(HISTORY_CACHE_FILE, JSON.stringify({ ts: Date.now(), stations }), (err) => {
+  fs.writeFile(HISTORY_CACHE_FILE, JSON.stringify({ ts: now, stations }), (err) => {
     if (err) console.warn('Kunne ikke skrive dmi-rain-historik til disk:', err.message);
   });
 }
