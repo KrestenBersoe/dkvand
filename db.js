@@ -35,23 +35,40 @@ if (!process.env.DATABASE_URL) {
 // unexpectedly"): pg's egne standardværdier er idleTimeoutMillis=10000 (10
 // sek.) og connectionTimeoutMillis=0 (ALDRIG timeout ved forsøg på at åbne
 // en ny forbindelse — et hængende forsøg venter derfor uendeligt i stedet
-// for at fejle hurtigt og tydeligt). Sat eksplicit her:
-//  - idleTimeoutMillis: 30000 — poolen lukker selv en ledig forbindelse
-//    efter 30 sek., FØR den risikerer at blive ramt af Fly Managed
-//    Postgres' egen proxy/forbindelses-oprydning i baggrunden. Den præcise
-//    grænse på Fly-siden er ikke dokumenteret her i koden og BØR
-//    verificeres/justeres ud fra faktisk observeret adfærd efter denne
-//    ændring (se punkt 5 i den tilhørende fejlrettelse) — 30 sek. er en
-//    forsigtig, konservativ start, ikke en bekræftet nøjagtig værdi.
+// for at fejle hurtigt og tydeligt).
 //  - connectionTimeoutMillis: 5000 — et forsøg på at hente en forbindelse
 //    fejler nu hurtigt (5 sek.) i stedet for evigt, hvis Postgres/proxyen
 //    er utilgængelig — fejlen rammer da den almindelige try/catch om det
 //    pågældende kald i stedet for at lade requesten hænge på ubestemt tid.
+//
+// RETTET (2026-09-05, produktionshændelse — poolStats() i query()'s
+// filhoved viste PRÆCIS mekanismen): idleTimeoutMillis blev dengang sat til
+// 30000 med en eksplicit note om at værdien var en ubekræftet gætning, der
+// "BØR verificeres/justeres ud fra faktisk observeret adfærd" — denne
+// hændelse ER den verifikation. Logget poolStats() viste gentagne gange en
+// forespørgsel fejle med "Connection terminated due to connection timeout"
+// PÅ TRODS af at poolen selv rapporterede raske idle-forbindelser lige
+// forinden (fx total:5/idle:4 fulgt af en fejl sekunder efter) — Fly
+// Managed Postgres kører med "Pooling: Enabled" (bekræftet i dashboardet,
+// en PgBouncer-lignende mellemlagspulje), som tilsyneladende lukker en
+// ledig forbindelse HURTIGERE end vores egne 30 sek., så vores pulje blev
+// ved med at tilbyde forbindelser der allerede var døde i den anden ende —
+// opdaget først når en forespørgsel rent faktisk forsøgte at bruge dem.
+// To uafhængige rettelser mod netop dette:
+//  - idleTimeoutMillis sænket til 8000 — vores egen pulje resirkulerer nu
+//    en ledig forbindelse FØR Fly-siden når at gøre det for os, uanset
+//    hvor kort dens eget vindue reelt er.
+//  - keepAlive: true — TCP-keepalive-pakker holder en ellers stille
+//    forbindelse synligt i live over for NAT/proxy/mellemled undervejs, så
+//    den slet ikke bliver anset for "død og kan smides væk" i første
+//    omgang, i stedet for kun at opdage det bagefter ved fejl.
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 20,
-  idleTimeoutMillis: 30000,
+  idleTimeoutMillis: 8000,
   connectionTimeoutMillis: 5000,
+  keepAlive: true,
+  keepAliveInitialDelayMillis: 5000,
 });
 
 pool.on('error', (err) => {
