@@ -3406,6 +3406,52 @@ async function applyLiveOverridesToCache() {
 // her (ikke pr. opdateringscyklus som vejr/risiko — geometrien ændrer sig
 // praktisk talt aldrig, kun ved en manuel VP3-dataopdatering), og slås op
 // pr. punkt, når /api/risk-scores bygges nedenfor.
+//
+// RETTET (produktionshændelse 2026-09-05 — samme "ingen disk-persistens"-
+// mønster som currents-cache.json/dmi-rain-history.json, blot CPU- i
+// stedet for netværks-tungt): denne "ÉN GANG"-beregning manglede disk-
+// persistens, og manglede den HELE tiden — koden er uændret i denne
+// hændelses regressionsvindue. Med en maskine der genstarter hvert
+// 15.-25. minut (målt direkte, se Grafana-grafen samme dag) blev "ÉN
+// GANG pr. proceslevetid" reelt til "hver eneste genstart": ~19,7 MB rå
+// JSON (domineret af vp3_vandlob.geojson's 14,6 MB) parset og
+// bounding-box-beregnet for hver eneste feature, igen og igen. Ren CPU
+// (ikke netværk som dmi-rain-byrden), derfor en direkte bidragyder til
+// den observerede vedvarende ~80-100% CPU/200-400% load, ikke kun til
+// RSS-højvandsmærket. Kildegeometrien ændres i praksis kun ved en manuel
+// VP3-dataopdatering (se water-classification.js's filhoved) — cachens
+// gyldighed bindes derfor til kildefilernes mtime, IKKE til en tidsbaseret
+// TTL: så længe ingen af filerne er rørt siden sidste vellykkede
+// beregning, er den persisterede cache lige så gyldig som en frisk.
+const WATER_FLAGS_CACHE_FILE = path.join(DATA_DIR, 'water-flags-cache.json');
+const WATER_FLAGS_SOURCE_FILES = ['vp3_kystvande_simplified.geojson', 'vp3_soeer.geojson', 'vp3_vandlob.geojson', 'puls-data.json'];
+
+function waterFlagsSourceSignature() {
+  return WATER_FLAGS_SOURCE_FILES.map(f => {
+    try { return `${f}:${fs.statSync(path.join(STATIC_DIR, f)).mtimeMs}`; }
+    catch (e) { return `${f}:missing`; }
+  }).join('|');
+}
+
+function loadPersistedWaterFlags() {
+  try {
+    const raw    = fs.readFileSync(WATER_FLAGS_CACHE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.signature === waterFlagsSourceSignature() && Array.isArray(parsed.flags) && parsed.flags.length > 0) {
+      waterFlagsCache = new Map(parsed.flags);
+      console.log(`water-classification: ${waterFlagsCache.size} isWater-flag(s) indlæst fra disk-cache (kildefiler uændrede siden)`);
+    }
+  } catch (e) {
+    // Helt normalt ved allerførste deploy, eller efter en manuel VP3-dataopdatering
+  }
+}
+
+function persistWaterFlagsToDisk() {
+  fs.writeFile(WATER_FLAGS_CACHE_FILE, JSON.stringify({ signature: waterFlagsSourceSignature(), flags: [...waterFlagsCache] }), (err) => {
+    if (err) console.warn('Kunne ikke skrive water-flags-cache til disk:', err.message);
+  });
+}
+
 let waterFlagsCache = null;
 async function ensureWaterFlagsCache() {
   // NYT: kun EGENTLIGT vellykkede resultater "låser" cachen (undgår
@@ -3416,6 +3462,8 @@ async function ensureWaterFlagsCache() {
   // fejl (kortvarig filsystem-hikke) rette sig selv i stedet for at
   // fastfryse en tom cache resten af serverens levetid.
   if (waterFlagsCache && waterFlagsCache.size > 0) return;
+  loadPersistedWaterFlags();
+  if (waterFlagsCache && waterFlagsCache.size > 0) return;
   try {
     const points = loadPulsPointsFull().map(p => ({ id: p.id, lat: p.lat, lng: p.lng }));
     // RETTET (forårsagede fuld serverfrysning — se water-classification.js
@@ -3425,6 +3473,7 @@ async function ensureWaterFlagsCache() {
     // ikke-blokerende, portionsvise udgave, der løbende giver kontrollen
     // tilbage til event loopet.
     waterFlagsCache = await waterClass.computeWaterFlagsAsync(points, STATIC_DIR);
+    if (waterFlagsCache.size > 0) persistWaterFlagsToDisk();
   } catch (e) {
     console.warn('ensureWaterFlagsCache fejlede:', e.message);
     waterFlagsCache = new Map(); // tomt kort — isWater falder tilbage til undefined, klienten falder videre tilbage til lokal beregning
