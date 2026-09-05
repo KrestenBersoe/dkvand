@@ -3799,7 +3799,9 @@ function updateRbuRadii(layer) {
 }
 map.on('zoomend', () => {
   updateRbuRadii(vp3OverloebLayer);
-  syncRbuRingRadii();   // efter updateRbuRadii() — læser markørernes NYE radius
+  // Ring-laget genopbygges IKKE længere her — map.on('moveend', renderVisibleRbuRings)
+  // (se colorRbuByOwnRisk()'s filhoved) fyrer altid EFTER zoomend og læser
+  // markørernes friske radius fra updateRbuRadii() ovenfor.
   updateBadevandRadii();
   updatePointsLayerRadii();
 });
@@ -5771,7 +5773,7 @@ const VP3_LAYERS = {
   badevand:   { getShow: () => showVP3Bade,    getLayer: () => vp3BadevandLayer, onShown: () => refreshBadevandMarkers() },
   // Ét fælles Overløb-lag (blå = regnvand, brun = kloak i samme lag, se
   // currentRbuStyle()) — se vp3OverloebLayer's filhoved.
-  overloeb:     { getShow: () => showVP3Overloeb, getLayer: () => vp3OverloebLayer,     onShown: () => updateRbuRadii(vp3OverloebLayer) },
+  overloeb:     { getShow: () => showVP3Overloeb, getLayer: () => vp3OverloebLayer,     onShown: () => { updateRbuRadii(vp3OverloebLayer); renderVisibleRbuRings(); } },
   // Samme show-state som hoved-laget ovenfor — ringen tændes/slukkes altid
   // sammen med Overløb, aldrig uafhængigt.
   overloebRing: { getShow: () => showVP3Overloeb, getLayer: () => vp3OverloebRingLayer },
@@ -7260,18 +7262,31 @@ let _rbuOutfallIndexRef = null;   // overflowPoints-referencen indekset er bygge
 // 2 er en dokumenteret Canvas-specifik fejl, ikke en generel Leaflet-regel).
 let sharedRingRenderer = null;
 
+// RETTET (bruger-rapport 2026-09-05 — "op til et minuts hang ved
+// panorering/zoom af Overløb-laget"): denne funktion beregnede TIDLIGERE
+// tilstand OG byggede selve DOM-ring-elementerne i samme gennemløb, for
+// SAMTLIGE ~14.625 matchede udløb, HVER GANG den blev kaldt — inklusive
+// den 168-trins henfaldsberegning (computeThresholdCrossing()) for hver
+// ét. Opdelt i to nu:
+//   1) colorRbuByOwnRisk() — beregner tilstanden (uændret logik/tærskler)
+//      og gemmer den DIREKTE på markøren (marker._ringTier/._ringIsCso).
+//      Kører kun ved datafornyelse (se renderMap()), ligesom før.
+//   2) renderVisibleRbuRings() — bygger de faktiske DOM-ring-elementer,
+//      men KUN for udløb inden for kortets nuværende viewport, og uden at
+//      gentage nogen risikoberegning (den er allerede gjort af #1). Billig
+//      nok til at køre ved hver eneste pan/zoom (se map.on('moveend', …)
+//      nedenfor) — typisk snesevis-hundredvis af ringe i stedet for op til
+//      ~8.600 animerede SVG-elementer på tværs af hele Danmark ad gangen,
+//      hvoraf langt de fleste alligevel var uden for skærmen.
 function colorRbuByOwnRisk() {
   if (!vp3OverloebLayer || !vp3OverloebRingLayer) return;
   if (!overflowPoints || overflowPoints.length === 0) return;
-  if (!sharedRingRenderer) sharedRingRenderer = L.svg({ pane: 'pointsPane' });
 
   if (_rbuOutfallIndexRef !== overflowPoints) {
     _rbuOutfallIndex = new Map();
     for (const pt of overflowPoints) { if (pt.outfallId) _rbuOutfallIndex.set(pt.outfallId, pt); }
     _rbuOutfallIndexRef = overflowPoints;
   }
-
-  vp3OverloebRingLayer.clearLayers();
 
   // Samme 70%-af-tærskel-grænse som "Nedbør vs. overløbstærskel"-panelets
   // gule barColor (se showUdlobPanel()) — "i risiko" er defineret ÉT sted,
@@ -7280,9 +7295,8 @@ function colorRbuByOwnRisk() {
 
   vp3OverloebLayer.eachLayer(marker => {
     const pktId = marker.feature?.properties?.pkt_id;
-    if (!pktId) return;
-    const pt = _rbuOutfallIndex.get(pktId);
-    if (!pt) return;
+    const pt = pktId ? _rbuOutfallIndex.get(pktId) : null;
+    if (!pt) { marker._ringTier = null; return; }
 
     const isCso = isRbuWastewater(marker.feature?.properties);
     const crossing = computeThresholdCrossing(pt.hourlyWeek, pt.thresholdMm);
@@ -7297,13 +7311,40 @@ function colorRbuByOwnRisk() {
     } else if (pt.riskScore !== null && pt.riskScore >= 0.6) {
       tier = 'active'; // fallback, se filhovedets kommentar: intet hourlyWeek → intet "i risiko"-trin
     }
-    if (!tier) return;
+    marker._ringTier  = tier;
+    marker._ringIsCso = isCso;
+  });
 
+  renderVisibleRbuRings();
+}
+
+// Se colorRbuByOwnRisk()'s filhoved. Læser KUN allerede-beregnet tilstand
+// (marker._ringTier/._ringIsCso) — ingen risikoberegning her — og bygger
+// ringe for udløb inden for viewport'en + en fast bufferzone (.pad(0.25)),
+// så en ring ikke popper synligt ind/ud af syne ved en lille panorering
+// helt ude i kanten af skærmen. Kaldes ved hver pan/zoom (se
+// map.on('moveend', …)) OG efter hvert kald til colorRbuByOwnRisk().
+function renderVisibleRbuRings() {
+  if (!vp3OverloebLayer || !vp3OverloebRingLayer) return;
+  if (!sharedRingRenderer) sharedRingRenderer = L.svg({ pane: 'pointsPane' });
+
+  vp3OverloebRingLayer.clearLayers();
+  if (!showVP3Overloeb) return;   // intet synligt lag → intet at bygge ringe til
+
+  const bounds = map.getBounds().pad(0.25);
+
+  vp3OverloebLayer.eachLayer(marker => {
+    const tier = marker._ringTier;
+    if (!tier) return;
+    const latlng = marker.getLatLng();
+    if (!bounds.contains(latlng)) return;
+
+    const isCso = marker._ringIsCso;
     const className = tier === 'watch'
       ? 'outlet-watch-ring'
       : (isCso ? 'outlet-active-ring' : 'outlet-active-ring-calm');
 
-    const ring = L.circleMarker(marker.getLatLng(), {
+    const ring = L.circleMarker(latlng, {
       radius: marker.getRadius() + 3,
       color: isCso ? RBU_KLOAK_FILL : RBU_REGN_FILL,
       // "I risiko" er en stiplet ring (se .outlet-watch-ring) — en tykkere
@@ -7316,20 +7357,10 @@ function colorRbuByOwnRisk() {
       pane: 'pointsPane',
       renderer: sharedRingRenderer,
     });
-    ring._sourceMarker = marker;   // se syncRbuRingRadii() — O(1) opslag ved zoom, ikke en lat/lng-søgning
     vp3OverloebRingLayer.addLayer(ring);
   });
 }
-
-// Ringens radius følger kilde-markørens EGEN, allerede zoom-skalerede
-// radius (+3) — kaldes derfor efter updateRbuRadii() i samme
-// zoomend-håndtering (se map.on('zoomend', ...) ved currentRbuStyle()),
-// ikke uafhængigt, ellers ville den læse den GAMLE radius. O(1) pr. ring
-// (direkte objektreference, se _sourceMarker i colorRbuByOwnRisk()) —
-// ingen lat/lng-søgning gennem hele hoved-laget.
-function syncRbuRingRadii() {
-  vp3OverloebRingLayer?.eachLayer(ring => { if (ring._sourceMarker) ring.setRadius(ring._sourceMarker.getRadius() + 3); });
-}
+map.on('moveend', renderVisibleRbuRings);
 
 // RETTET: fjernelses-loopet nedenfor gør genkald sikkert i SEKVENS, men ikke
 // ved OVERLAP — kaldes loadVP3Layers() igen mens et forrige kald stadig
