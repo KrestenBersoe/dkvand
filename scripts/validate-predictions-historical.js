@@ -31,14 +31,7 @@
 //      code the live app runs — to get each badested's aggregate bact
 //      score, exactly as production does.
 //
-// Two deliberate, documented deviations from the live formula:
-//   - getCurrentAt is passed as null (no CMEMS current data), so coastal
-//     matching uses the ISOTROPIC (distance-only) fallback throughout —
-//     this is not an invented shortcut, it's the exact same fallback path
-//     computeBadevandRiskCascade() already takes live whenever current
-//     data is unavailable for a cell (see its own getCurrentAt comment).
-//     Historical CMEMS reanalysis data exists but integrating it is a
-//     separate, much larger undertaking, out of scope here.
+// One remaining, documented deviation from the live formula:
 //   - seasonalTau()/seasonalTauViral() read the CURRENT real-world month
 //     internally (no override hook) — this script reimplements their
 //     exact formula (using risk-model.js's own exported DK_WATER_TEMP/
@@ -53,14 +46,33 @@
 // also keeps the Open-Meteo archive call count tractable (one call per
 // distinct grid cell covering Denmark, not per cell per date).
 //
+// NYT (bruger-krav 2026-09-05 — "we have no current information, so only
+// downstream locations should show elevated coli"): getCurrentAt is no
+// longer unconditionally null. scripts/fetch_currents_historical.py
+// fetches real historical CMEMS current direction per weather-grid cell
+// (same "once per cell, sliced per date" pattern as the rainfall archive
+// above) — but CMEMS' reanalysis products only cover up to ~1-1.5 years
+// before today (see that script's filehead), so this run FURTHER narrows
+// the sample comparison window to whatever date range actually came back
+// with current data for every cell (see earliestCommonDate below) —
+// smaller sample count than the full WINDOW_DAYS, but every compared
+// sample now gets a real, direction-aware downstream check instead of the
+// isotropic (distance-only) fallback. A cell with no current data for a
+// given date still falls back to isotropic for just that lookup, same
+// fallback path computeBadevandRiskCascade() already takes live.
+//
 // Manual/occasional, not a live server code path. No DATABASE_URL needed
 // — everything here is badevand-proeve-historik.json, puls-data.json, the
-// static geometry files computeBadevandRiskCascade() already reads, and
-// live Open-Meteo archive calls.
+// static geometry files computeBadevandRiskCascade() already reads, live
+// Open-Meteo archive calls, and live CMEMS reanalysis subset() calls
+// (requires CMEMS_USERNAME/CMEMS_PASSWORD — same Fly secrets fetch_currents.py
+// uses live, see fetch_currents_historical.py's filehead for the currently
+// UNVERIFIED dataset_id's it assumes).
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
+const { execFile } = require('child_process');
 const riskModel = require('../risk-model');
 const badevandRisk = require('../badevand-risk');
 
@@ -101,6 +113,37 @@ function seasonalTauViralForMonth(month) {
   const tempFactor = Math.pow(riskModel.Q10_VIRAL, (20 - T) / 10);
   const lightFactor = T >= 12 ? (12 / Math.max(light, 4)) : 1.0;
   return riskModel.TAU_VIRAL_BASE * tempFactor * lightFactor;
+}
+
+// NYT (bruger-krav 2026-09-05 — "kun nedstrøms lokationer bør vise højere
+// coli"): historisk strømretning pr. celle, til at erstatte getCurrentAt's
+// hidtidige `null` (isotropisk fallback for ALLE kystvande, uanset reel
+// strømretning — se computeBadevandRiskCascade()'s egen getCurrentAt-
+// kommentar for hvorfor det matcher HVER retning som "muligvis nedstrøms").
+// Se scripts/fetch_currents_historical.py's filhoved for datakilde/
+// dataset_id-forbehold og hvorfor det er ét kald pr. celle (parallelt med
+// fetchArchive() ovenfor), ikke ét fladt gitter.
+const PYTHON_BIN = process.env.PYTHON_BIN || 'python3';
+const CURRENTS_SCRIPT = path.join(__dirname, 'fetch_currents_historical.py');
+const CURRENTS_TIMEOUT_MS = 150 * 1000; // matcher fetch_currents.py's egen HARD_TIMEOUT_SECONDS
+
+function fetchHistoricalCurrentsForCell(lat, lng, startDate) {
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      PYTHON_BIN, [CURRENTS_SCRIPT],
+      { timeout: CURRENTS_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
+      (err, stdout, stderr) => {
+        if (stderr && stderr.trim()) console.warn(`  [currents ${lat},${lng}] stderr:`, stderr.trim().slice(0, 300));
+        let parsed;
+        try { parsed = JSON.parse((stdout || '').trim()); }
+        catch (parseErr) { return reject(new Error(`fetch_currents_historical.py gav ugyldig JSON: ${parseErr.message}`)); }
+        if (parsed.error) return reject(new Error(parsed.error));
+        resolve(parsed);
+      },
+    );
+    child.stdin.write(JSON.stringify({ lat, lng, start: startDate }));
+    child.stdin.end();
+  });
 }
 
 async function fetchArchive(lat, lng, startDate, endDate, attempt = 0) {
@@ -199,8 +242,51 @@ async function main() {
   if (cellFailures.length > 0) console.warn(`⚠ ${cellFailures.length}/${cellEntries.length} cells failed to fetch — outlets in those cells get no risk score (treated as no-data, not as zero risk).`);
   const cellSeriesByKey = new Map(cellResults.filter((r) => !r.error).map((r) => [r.key, r.series]));
 
+  // NYT (bruger-krav 2026-09-05 — "kun nedstrøms lokationer bør vise højere
+  // coli"): historisk strømretning pr. celle, samme "ét kald pr. celle,
+  // hele intervallet i ét hug"-mønster som nedbøren ovenfor. CMEMS'
+  // reanalyse-produkter dækker typisk kun til et sted mellem 1-1,5 år før
+  // i dag (se fetch_currents_historical.py's filhoved) — den FAKTISKE
+  // grænse er derfor kun kendt EFTER dette kald, ikke en konstant her.
+  const CURRENTS_CONCURRENCY = 3; // lavere end CELL_CONCURRENCY — CMEMS subset()-kald er tungere end Open-Meteo
+  console.log(`\nFetching historical current direction for ${cellEntries.length} cells (this can take a while — one CMEMS subset() call per cell)...`);
+  const currentResults = await mapWithConcurrency(
+    cellEntries, CURRENTS_CONCURRENCY,
+    async ([key, { lat, lng }]) => ({ key, series: await fetchHistoricalCurrentsForCell(lat, lng, fetchStart) }),
+    500,
+    (done, total) => { if (done % 20 === 0 || done === total) console.log(`  ...${done}/${total} cells' current history fetched`); },
+  );
+  const currentFailures = currentResults.filter((r) => r.error);
+  if (currentFailures.length > 0) console.warn(`⚠ ${currentFailures.length}/${cellEntries.length} cells failed to fetch current data — those cells fall back to isotropic matching, same as before this change.`);
+
+  // Pr.-celle Map<dateIso, {uo, vo}> — O(1) opslag i selve backtest-løkken.
+  const currentSeriesByKey = new Map();
+  let earliestCommonDate = null; // SENESTE af hver celles EGEN tidligste dato — garanterer alle celler-med-data har fuld dækning fra dette punkt og frem
+  for (const r of currentResults) {
+    if (r.error || !r.series || r.series.dates.length === 0) continue;
+    const byDate = new Map();
+    for (let i = 0; i < r.series.dates.length; i++) byDate.set(r.series.dates[i], { uo: r.series.uo[i], vo: r.series.vo[i] });
+    currentSeriesByKey.set(r.key, byDate);
+    const cellEarliest = r.series.dates[0]; // kronologisk (ældste først), se fetch_currents_historical.py
+    if (earliestCommonDate === null || cellEarliest > earliestCommonDate) earliestCommonDate = cellEarliest;
+  }
+  console.log(`${currentSeriesByKey.size}/${cellEntries.length} celler har historisk strømdata.`);
+
+  // Selve vinduesindsnævringen — ethvert prøvedato ÆLDRE end den fælles
+  // reelle CMEMS-dækning droppes helt (IKKE blot isotropisk fallback for
+  // dem): formålet er at HVER sammenlignet prøve i den endelige matrix får
+  // en reel, retningsbevidst nedstrøms-vurdering, ikke en blanding af to
+  // metoder, der ville gøre confusion-matrixen svær at fortolke.
+  let windowedSamples = samples;
+  if (earliestCommonDate) {
+    windowedSamples = samples.filter((s) => s.dateIso >= earliestCommonDate);
+    console.log(`Indsnævrer til CMEMS' faktiske dækning: ${earliestCommonDate}..${maxDate} — ${windowedSamples.length}/${samples.length} prøver tilbage.\n`);
+  } else {
+    console.warn('⚠ Ingen celler fik nogen historisk strømdata — fortsætter med FULD isotropisk fallback (som før denne ændring), ingen prøver droppet. Tjek dataset_id\'erne i fetch_currents_historical.py (se dens filhoved) hvis dette er uventet.\n');
+  }
+
   const samplesByDate = new Map();
-  for (const s of samples) {
+  for (const s of windowedSamples) {
     if (!samplesByDate.has(s.dateIso)) samplesByDate.set(s.dateIso, []);
     samplesByDate.get(s.dateIso).push(s);
   }
@@ -231,9 +317,17 @@ async function main() {
       return { ...o, riskScore: risk };
     });
 
+    // NYT (bruger-krav 2026-09-05) — reel, dato-specifik strømretning i
+    // stedet for den hidtidige `null` (som tvang isotropisk/afstands-kun
+    // matching for ALLE kystvande, se computeBadevandRiskCascade()'s egen
+    // getCurrentAt-kommentar). null for en celle uden strømdata for netop
+    // denne dato er BEVIDST — kalderen falder da selv tilbage til
+    // isotropisk for lige dét opslag, ingen særskilt håndtering nødvendig.
+    const getCurrentAtForDate = (lat, lng) => currentSeriesByKey.get(riskModel.cellKey(lat, lng))?.get(dateIso) ?? null;
+
     let result;
     try {
-      result = await badevandRisk.computeBadevandRiskCascade(points, () => tau, () => tauV, STATIC_DIR, 200, null);
+      result = await badevandRisk.computeBadevandRiskCascade(points, () => tau, () => tauV, STATIC_DIR, 200, getCurrentAtForDate);
     } catch (err) {
       cascadeErrors += samplesByDate.get(dateIso).length;
       continue;
