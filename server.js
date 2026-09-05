@@ -4297,6 +4297,11 @@ app.get('/api/debug-status', async (req, res) => {
       punkter: currentsCache.grid ? currentsCache.grid.size : 0,
       genhentningIGang: currentsRefreshInFlight,
       sidsteFejl: currentsCache.error || null,
+      fejlITræk: currentsConsecutiveFailures,
+      backoffAktiv: currentsInBackoff(),
+      næsteForsøgOmSek: currentsConsecutiveFailures > 0
+        ? Math.max(0, Math.round((currentsRetryDelayMs() - (now - currentsLastAttemptTs)) / 1000))
+        : 0,
     },
     puls: {
       filAlderTimer: pulsFileAgeHours,
@@ -5177,6 +5182,34 @@ let currentsCache          = { ts: 0, grid: null, error: null };
 let currentsRefreshInFlight = false;
 let currentsRefreshPromise  = null;
 
+// RETTET (produktionshændelse 2026-09-05, gentaget fra dagen før — "samme
+// mønster som i går"): refreshCurrentsNow() beholdt tidligere den forældede
+// cache ved fejl UDEN at spore fejlet forsøg noget sted — currentsCache.ts
+// (kun opdateret ved SUCCES) forblev derfor for evigt "forældet" i
+// selvkorrigerings-tjekket nedenfor, som derfor udløste et NYT, fuldt
+// Python-genopstart (xarray/zarr/dask/netCDF4-imports + reelt netværkskald
+// mod Copernicus Marine) i samme øjeblik det forrige fejlede — ingen
+// pause, uanset hvor mange gange i træk det allerede var slået fejl. Da
+// Copernicus-tjenesten begyndte at give vedvarende timeouts/connection-
+// resets (se logs: "script overskred 150s intern timeout" hvert forsøg),
+// endte serveren i en reel evighedsløkke af tunge Python-processer, ~100%
+// af tiden, på en delt Fly-vCPU — deraf den observerede, dag-til-dag-
+// tilbagevendende belastning/uresponsivitet, HELT uafhængig af trafik.
+// Eksponentiel backoff efter fejl (nulstillet ved næste succes) sikrer nu
+// at et vedvarende eksternt udfald giver stadigt LÆNGERE pauser i stedet
+// for at hamre videre for evigt.
+let currentsConsecutiveFailures = 0;
+let currentsLastAttemptTs       = 0;
+const CURRENTS_RETRY_BASE_MS = 60 * 1000;       // uændret takt efter 1. fejl
+const CURRENTS_RETRY_MAX_MS  = 30 * 60 * 1000;  // loft, uanset antal fejl i træk
+function currentsRetryDelayMs() {
+  if (currentsConsecutiveFailures === 0) return 0;
+  return Math.min(CURRENTS_RETRY_MAX_MS, CURRENTS_RETRY_BASE_MS * (2 ** currentsConsecutiveFailures));
+}
+function currentsInBackoff() {
+  return currentsConsecutiveFailures > 0 && (Date.now() - currentsLastAttemptTs) < currentsRetryDelayMs();
+}
+
 // ── Disk-persistens ───────────────────────────────────────────────────────
 // Fly.io autostopper maskinen ved inaktivitet og genstarter den ved næste
 // request. Uden persistens ville HVER genstart tvinge den første bruger til
@@ -5261,16 +5294,20 @@ const { buildCurrentGrid, getCurrentAtServer } = require('./current-grid');
 // Selve netværkskaldet — altid asynkront, opdaterer cache + disk ved succes,
 // beholder eksisterende (forældede) cache ved fejl i stedet for at nulstille.
 async function refreshCurrentsNow() {
+  currentsLastAttemptTs = Date.now();
   try {
     const result = await runPythonFetch();
     if (!result.points || !result.points.length) throw new Error('Ingen strømpunkter modtaget');
 
     const ts = Date.now();
     currentsCache = { ts, grid: buildCurrentGrid(result.points), error: null };
+    currentsConsecutiveFailures = 0;
     persistCurrentsToDisk(result.points, ts);
     console.log(`CMEMS currents: ${result.points.length} punkter hentet via Python (${result.ts})`);
   } catch (e) {
-    console.warn('CMEMS currents fetch failed:', e.message);
+    currentsConsecutiveFailures++;
+    console.warn(`CMEMS currents fetch failed (${currentsConsecutiveFailures}. fejl i træk):`, e.message);
+    console.warn(`Prøver igen tidligst om ${Math.round(currentsRetryDelayMs() / 1000)}s`);
     if (currentsCache.grid) {
       console.warn('Beholder forældet strøm-cache pga. fejlet opdatering');
     } else {
@@ -5291,6 +5328,7 @@ function startCurrentsRefresh() {
 
 function triggerBackgroundRefresh() {
   if (currentsRefreshInFlight) return;
+  if (currentsInBackoff()) return;
   startCurrentsRefresh();
 }
 
@@ -5313,6 +5351,10 @@ async function fetchCMEMSCurrents() {
   // stedet for hver at starte deres egen Python-proces. Genbruger samme
   // in-flight-lås som triggerBackgroundRefresh().
   if (currentsRefreshInFlight) return currentsRefreshPromise;
+  // Samme backoff som triggerBackgroundRefresh() — uden denne ville gentagne
+  // kald (fx flere brugere, der rammer siden mens CMEMS er nede) hver
+  // udløse et nyt forsøg, så snart det forrige fejlede, se filhovedets note.
+  if (currentsInBackoff()) return currentsCache.grid;
   return startCurrentsRefresh();
 }
 
