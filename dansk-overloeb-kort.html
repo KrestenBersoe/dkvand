@@ -233,13 +233,27 @@
     50%      { opacity: .2; }
   }
 
-  /* Animeret "aktiv overløb"-ring på Overløb-punkter (se
-     colorRbuByOwnRisk()) — radar-ping udvidende-og-udtonende ring om et
-     RBU-punkt hvis PRÆCIS samme fysiske udløb (matchet på outfallId===
-     pkt_id, ingen nabo-baseret gæt) har nået "høj" risiko (≥60%) i PULS'
-     egen, udløbsspecifikke tærskelmodel (thresholdMm). Rigtige SVG-
-     circleMarkers (ikke Canvas — sharedInteractiveRenderer bruges IKKE her),
-     da Canvas-figurer ikke kan CSS-animeres. */
+  /* Animeret overløbs-ring på Overløb-punkter (se colorRbuByOwnRisk()) —
+     radar-ping udvidende-og-udtonende ring om et RBU-punkt hvis PRÆCIS
+     samme fysiske udløb (matchet på outfallId===pkt_id, ingen nabo-baseret
+     gæt) har krydset SIN EGEN tærskel (thresholdMm, se
+     computeThresholdCrossing()). Rigtige SVG-circleMarkers (ikke Canvas —
+     sharedInteractiveRenderer bruges IKKE her), da Canvas-figurer ikke kan
+     CSS-animeres.
+
+     Ringens FARVE er altid udløbets egen type-farve (RBU_KLOAK_FILL/
+     RBU_REGN_FILL) — den skal aldrig kunne forveksles med en risiko-
+     farveskala. Kun ringens BEVÆGELSE koder status, i tre trin:
+       - intet overløb:  ingen ring
+       - "i risiko":      .outlet-watch-ring    (rolig, ikke-udvidende halo)
+       - aktivt overløb:  .outlet-active-ring   (kloak/CSO — hurtig ping)
+                        eller .outlet-active-ring-calm (regnvand — langsommere,
+                        dæmpet ping)
+     Kloakoverløb (spildevand) er den eneste af de to typer der reelt
+     medfører bakterie-/virusrisiko nedstrøms — derfor får kun kloak-typen
+     den hurtige, "alarmerende" ping; et rent regnvandsudløb i overløb får en
+     synligt roligere version af samme animation, så et udløb uden
+     sundhedsrisiko ikke ser lige så alvorligt ud som ét med. */
   @keyframes outlet-ring-pulse {
     0%   { transform: scale(1); opacity: .85; }
     100% { transform: scale(2.2); opacity: 0; }
@@ -248,6 +262,27 @@
     transform-box: fill-box;
     transform-origin: center;
     animation: outlet-ring-pulse 1.8s ease-out infinite;
+    pointer-events: none;
+  }
+  @keyframes outlet-ring-pulse-calm {
+    0%   { transform: scale(1); opacity: .5; }
+    100% { transform: scale(2.4); opacity: 0; }
+  }
+  .outlet-active-ring-calm {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: outlet-ring-pulse-calm 3.2s ease-out infinite;
+    pointer-events: none;
+  }
+  @keyframes outlet-ring-watch {
+    0%, 100% { transform: scale(1);   opacity: .55; }
+    50%      { transform: scale(1.4); opacity: .16; }
+  }
+  .outlet-watch-ring {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: outlet-ring-watch 3.6s ease-in-out infinite;
+    stroke-dasharray: 3 2;
     pointer-events: none;
   }
 
@@ -7164,20 +7199,40 @@ function colorBadevandByRisk() {
   console.timeEnd('colorBadevandByRisk: 1039 punkters computeBadevandRisk');
 }
 
-// Animeret "aktiv overløb"-ring på Overløb-laget — se
-// vp3OverloebRingLayer's filhoved og .outlet-active-ring/@keyframes
-// outlet-ring-pulse for selve CSS'en.
+// Animeret overløbs-ring på Overløb-laget — se vp3OverloebRingLayer's
+// filhoved og .outlet-active-ring/.outlet-active-ring-calm/
+// .outlet-watch-ring for selve CSS'en.
 //
 // Matcher HVER RBU-punkt til PULS' egen outfallId (r[8] i puls-data.json)
 // via en eksakt ID-sammenligning (pkt_id === outfallId) — IKKE nærmeste-
 // nabo/geografisk gæt. ~68% af RBU-punkterne deler faktisk samme GUID som
 // et PULS-udløb (samme fysiske udløb, registreret i begge officielle
 // datasæt); de resterende ~32% har intet PULS-modstykke og får bevidst
-// INGEN ring — vi opfinder ikke en risiko for dem. Risikoen selv
-// (pt.riskScore) er allerede beregnet ud fra UDLØBETS EGEN empiriske
-// tærskel (pt.thresholdMm, se computeIntensityFactor()) — ingen
-// opstrøms-/naboudløbsvægtning indgår, i modsætning til fx
-// colorBadevandByRisk()'s brug af nærmeste udløb.
+// INGEN ring — vi opfinder ikke en risiko for dem.
+//
+// RETTET (bruger-krav 2026-09-05 — "kun CSO bidrager med bakterier
+// nedstrøms, så de skal behandles anderledes end rene regnvandsudløb"):
+// ringen brugte tidligere pt.riskScore ≥ 0.6 som eneste gate, samme
+// alarmerende ping uanset udløbstype, og ingen mellemtrin for "i risiko,
+// men endnu ikke løbet over". Nu:
+//   1) Status afgøres af computeThresholdCrossing(pt.hourlyWeek,
+//      pt.thresholdMm) — UDLØBETS EGEN tærskelkrydsning, ikke en generisk
+//      risikoscore. "I risiko" genbruger PRÆCIS den 70%-af-tærskel-grænse
+//      udløbssidens "Nedbør vs. overløbstærskel"-panel allerede farvelægger
+//      gult ved (se pct/barColor-beregningen ved computeThresholdCrossing-
+//      kaldet i showUdlobPanel()) — ét sted definerer "tæt på overløb",
+//      ikke to uafhængige tal.
+//   2) Ringens farve er altid udløbets EGEN type-farve (RBU_KLOAK_FILL for
+//      kloak/CSO, RBU_REGN_FILL for regnvand) i stedet for riskColor() —
+//      farve = type, bevægelse = status.
+//   3) Kun kloak/CSO får den hurtige ping (.outlet-active-ring) ved aktivt
+//      overløb; regnvand får en dæmpet, langsommere variant
+//      (.outlet-active-ring-calm), da kun spildevand medfører bakterie-/
+//      virusrisiko nedstrøms.
+// Udløb uden pt.hourlyWeek (ingen PULS-vejrcelle) kan ikke få et
+// tærskelkrydsningssvar og falder tilbage til den gamle riskScore ≥ 0.6-
+// gate som "aktiv" — uden "i risiko"-mellemtrin, da det kræver
+// tærskelkrydsningen.
 let _rbuOutfallIndex    = null;
 let _rbuOutfallIndexRef = null;   // overflowPoints-referencen indekset er bygget fra
 
@@ -7210,17 +7265,42 @@ function colorRbuByOwnRisk() {
 
   vp3OverloebRingLayer.clearLayers();
 
+  // Samme 70%-af-tærskel-grænse som "Nedbør vs. overløbstærskel"-panelets
+  // gule barColor (se showUdlobPanel()) — "i risiko" er defineret ÉT sted,
+  // ikke som et selvstændigt riskScore-bånd.
+  const RBU_RING_WATCH_PCT = 0.7;
+
   vp3OverloebLayer.eachLayer(marker => {
     const pktId = marker.feature?.properties?.pkt_id;
     if (!pktId) return;
     const pt = _rbuOutfallIndex.get(pktId);
-    if (!pt || pt.riskScore === null || pt.riskScore < 0.6) return;
+    if (!pt) return;
+
+    const isCso = isRbuWastewater(marker.feature?.properties);
+    const crossing = computeThresholdCrossing(pt.hourlyWeek, pt.thresholdMm);
+
+    let tier = null; // 'active' | 'watch' | null (ingen ring)
+    if (crossing) {
+      if (crossing.isActive) {
+        tier = 'active';
+      } else if (crossing.currentMM / Math.max(crossing.threshold, 0.01) >= RBU_RING_WATCH_PCT) {
+        tier = 'watch';
+      }
+    } else if (pt.riskScore !== null && pt.riskScore >= 0.6) {
+      tier = 'active'; // fallback, se filhovedets kommentar: intet hourlyWeek → intet "i risiko"-trin
+    }
+    if (!tier) return;
+
+    const className = tier === 'watch'
+      ? 'outlet-watch-ring'
+      : (isCso ? 'outlet-active-ring' : 'outlet-active-ring-calm');
+
     const ring = L.circleMarker(marker.getLatLng(), {
       radius: marker.getRadius() + 3,
-      color: riskColor(pt.riskScore),
+      color: isCso ? RBU_KLOAK_FILL : RBU_REGN_FILL,
       weight: 2.5,
       fillOpacity: 0,
-      className: 'outlet-active-ring',
+      className,
       interactive: false,
       pane: 'pointsPane',
       renderer: sharedRingRenderer,
