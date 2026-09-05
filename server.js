@@ -3842,7 +3842,31 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     // Kører nu i egen worker_thread — se runBadevandRiskCascadeInWorker()
     // og badevand-risk-worker.js. Selve funktionen (badevand-risk.js) er
     // 100% uændret; kun HVOR den kører er ændret.
-    const result = await runBadevandRiskCascadeInWorker(points, STATIC_DIR, currentsCache.grid);
+    //
+    // RETTET (produktionshændelse 2026-09-05 — vedvarende hukommelses-
+    // vækst, ikke forklaret af nogen af dagens øvrige rettelser):
+    // workerData bruger strukturkloning, som kopierer HVERT felt på
+    // HVERT punkt ind i workerens eget, separate isolat — hver 15.
+    // minut, resten af processens levetid. loadPulsPointsFull()'s eget
+    // filhoved (se linje ~3198 ovenfor: "rå stamdata, kun til visning
+    // (indgår ikke i nogen risikoberegning)") dokumenterer EKSPLICIT at
+    // disse 17 felter aldrig indgår i nogen risikoberegning — fjernet
+    // her fra klonen, alt andet (inkl. riskScore/viralScore/algaeScore/
+    // foreRisk m.fl., sat på pt herover, som cascaden RENT FAKTISK
+    // læser) bevaret uændret via spread. Kun selve klonens størrelse
+    // pr. cyklus reduceres; badevand-risk.js selv er fortsat urørt.
+    const DISPLAY_ONLY_POINT_FIELDS = new Set([
+      'volumeM3', 'eventsPerYear', 'reducedArea', 'type', 'sewerStructure',
+      'latestDischargeYear', 'cod', 'bod', 'nitrogen', 'phosphor',
+      'normalYear', 'normalVol', 'normalEv', 'normalCod', 'normalBod',
+      'normalNitrogen', 'normalPhosphor',
+    ]);
+    const slimPointsForWorker = points.map(pt => {
+      const slim = {};
+      for (const key in pt) { if (!DISPLAY_ONLY_POINT_FIELDS.has(key)) slim[key] = pt[key]; }
+      return slim;
+    });
+    const result = await runBadevandRiskCascadeInWorker(slimPointsForWorker, STATIC_DIR, currentsCache.grid);
     // NYT (Kommunepakke, modul 6): _rawBadevandCascade gemmer det UPATCHEDE
     // resultat — se dens egen filhoveds-kommentar for hvorfor dette SKAL
     // holdes adskilt fra den patchede udgave (uden en ren kilde at patche
