@@ -7,7 +7,14 @@
 //
 // Kør fra repo-roden:
 //   node scripts/validate-badevand-model.js [--workers N] [--window-days N]
-//     [--with-currents] [--out-dir DIR]
+//     [--with-currents] [--out-dir DIR] [--cache-dir DIR] [--no-weather-cache]
+//
+// Nedbørsarkivet (Open-Meteo, ét kald pr. 0,25°-celle) caches lokalt i
+// --cache-dir (standard scripts/cache/, gitignoret) på tværs af kørsler —
+// gentagne kørsler under afprøvning (andre --workers/--flag-threshold osv.)
+// genhenter IKKE de samme celler, kun celler hvis cachede datointerval ikke
+// dækker den aktuelle kørsels behov (fx et senere WINDOW_DAYS). Slå fra med
+// --no-weather-cache for altid at hente friskt.
 //
 // Forudsætter, i denne rækkefølge:
 //   1. badevand-proeve-historik.json — genereres af
@@ -116,6 +123,9 @@ const NUM_WORKERS = Math.max(1, parseInt(argVal('--workers', String(DEFAULT_WORK
 const WINDOW_DAYS = parseInt(argVal('--window-days', '730'), 10);
 const WITH_CURRENTS = process.argv.includes('--with-currents');
 const OUT_DIR = path.resolve(argVal('--out-dir', path.join(__dirname, 'validation-output')));
+const CACHE_DIR = path.resolve(argVal('--cache-dir', path.join(__dirname, 'cache')));
+const WEATHER_CACHE_FILE = path.join(CACHE_DIR, 'weather-archive-cache.json');
+const NO_WEATHER_CACHE = process.argv.includes('--no-weather-cache');
 const FLAG_THRESHOLD = parseFloat(argVal('--flag-threshold', '0.2'));
 const BASELINE_MM = parseFloat(argVal('--baseline-mm', String(riskModel.DEFAULT_THRESHOLD_MM)));
 const MIN_POSITIVES_FOR_CI = 5; // under dette: rapporter tallet, men flag eksplicit som statistisk ubrugeligt
@@ -144,6 +154,41 @@ function fetchHistoricalCurrentsForCell(lat, lng, startDate) {
     child.stdin.write(JSON.stringify({ lat, lng, start: startDate }));
     child.stdin.end();
   });
+}
+
+// ── Lokal cache af Open-Meteo-arkivsvar pr. celle ───────────────────────
+// NYT (bruger-ønske — "don't fetch the historic weather data every time"):
+// samme 171 celler bliver hentet på ny ved HVER kørsel, selvom man bare
+// kører scriptet igen med andre --workers/--flag-threshold osv. under
+// afprøvning — spild af tid og af Open-Meteos gratis rate-limit. Gemmes nu
+// i én lokal JSON-fil (CACHE_DIR, gitignoret — regenereres frit fra en
+// gratis, offentlig API, hører ikke hjemme i versionsstyring), keyed pr.
+// celle, med det FAKTISKE hentede datointerval gemt ved siden af — en
+// celle genbruges kun hvis dens cachede interval FULDT UD DÆKKER det
+// interval, DENNE kørsel har brug for (cached.start <= behov.start &&
+// cached.end >= behov.end). Et bredere cachet interval end nødvendigt er
+// helt fint at genbruge uden beskæring — hourlySeriesEndingAt()
+// (badevand-backtest-utils.js) indekserer på ABSOLUT tidsstempel, ikke på
+// arrayets position, så overskydende timer før/efter det aktuelle behov
+// generes ikke af. Falder tilbage til frisk hentning pr. celle når
+// dækningen IKKE er tilstrækkelig (fx et senere WINDOW_DAYS/nyere
+// maxDate) — aldrig et delvist/forkert resultat, kun mere at hente.
+function loadWeatherCache() {
+  if (NO_WEATHER_CACHE || !fs.existsSync(WEATHER_CACHE_FILE)) return new Map();
+  try {
+    const raw = JSON.parse(fs.readFileSync(WEATHER_CACHE_FILE, 'utf8'));
+    return new Map(Object.entries(raw));
+  } catch (e) {
+    console.warn(`⚠ Kunne ikke læse vejr-cachen (${WEATHER_CACHE_FILE}): ${e.message} — starter med tom cache.`);
+    return new Map();
+  }
+}
+function saveWeatherCache(cache) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+  fs.writeFileSync(WEATHER_CACHE_FILE, JSON.stringify(Object.fromEntries(cache)), 'utf8');
+}
+function cacheCovers(entry, neededStart, neededEnd) {
+  return entry && entry.start <= neededStart && entry.end >= neededEnd;
 }
 
 // ── Kontinuert partitionering af KRONOLOGISK sorterede datoer i N blokke
@@ -225,21 +270,36 @@ async function main() {
 
   const fetchStart = isoDate(new Date(new Date(`${windowStart}T00:00:00Z`).getTime() - BUFFER_DAYS * 86400000));
   const cellEntries = [...cellOf.entries()];
-  console.log('Henter historisk nedbørsarkiv (Open-Meteo)...');
-  const cellResults = await mapWithConcurrency(
-    cellEntries, CELL_CONCURRENCY,
+
+  const weatherCache = loadWeatherCache();
+  const cellsToFetch = cellEntries.filter(([key]) => !cacheCovers(weatherCache.get(key), fetchStart, maxDate));
+  const cellsFromCache = cellEntries.length - cellsToFetch.length;
+  console.log(`Historisk nedbørsarkiv: ${cellsFromCache}/${cellEntries.length} celler dækket af lokal cache (${WEATHER_CACHE_FILE}), henter resten fra Open-Meteo...`);
+  const freshResults = await mapWithConcurrency(
+    cellsToFetch, CELL_CONCURRENCY,
     async ([key, { lat, lng }]) => ({ key, series: await fetchArchive(lat, lng, fetchStart, maxDate) }),
     300,
-    (done, total) => { if (done % 20 === 0 || done === total) console.log(`  ...${done}/${total} celler hentet`); },
+    (done, total) => { if (total > 0 && (done % 20 === 0 || done === total)) console.log(`  ...${done}/${total} celler hentet`); },
   );
-  const cellFailures = cellResults.filter((r) => r.error);
-  if (cellFailures.length > 0) console.warn(`⚠ ${cellFailures.length}/${cellEntries.length} celler fejlede — udløb i disse celler får ingen scoring (behandlet som manglende data, ikke nul-risiko).`);
+  const cellFailures = freshResults.filter((r) => r.error);
+  if (cellFailures.length > 0) console.warn(`⚠ ${cellFailures.length}/${cellsToFetch.length} celler fejlede — udløb i disse celler får ingen scoring (behandlet som manglende data, ikke nul-risiko).`);
+  if (!NO_WEATHER_CACHE) {
+    for (const r of freshResults) {
+      if (!r.error) weatherCache.set(r.key, { start: fetchStart, end: maxDate, series: r.series });
+    }
+    saveWeatherCache(weatherCache);
+    console.log(`Cache opdateret: ${WEATHER_CACHE_FILE}`);
+  }
+  const cellResults = [
+    ...freshResults.filter((r) => !r.error),
+    ...cellEntries.filter(([key]) => cacheCovers(weatherCache.get(key), fetchStart, maxDate)).map(([key]) => ({ key, series: weatherCache.get(key).series })),
+  ];
   // NYT (bruger-rapporteret — 16-tråds kørsel OOM-dræbt): konverteret til
   // SharedArrayBuffer-baseret form HER, ÉN gang, før workerData sendes til
   // nogen tråd — se toSharedCellSeries()'s filhoved i den delte lib for
   // hvorfor (strukturkloning ville ellers kopiere hele nedbørsarkivet, ISO-
   // strenge og alt, ind i HVER ENESTE af N worker-tråde).
-  const cellSeriesByKey = new Map(cellResults.filter((r) => !r.error).map((r) => [r.key, toSharedCellSeries(r.series)]));
+  const cellSeriesByKey = new Map(cellResults.map((r) => [r.key, toSharedCellSeries(r.series)]));
 
   let currentSeriesByKey = new Map();
   if (WITH_CURRENTS) {

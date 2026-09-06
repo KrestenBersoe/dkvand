@@ -36,6 +36,11 @@ puls_vBadevandsstationResultater_csv.zip
 # sektion.
 scripts/validation-output/
 
+# Lokal Open-Meteo-arkivcache for scripts/validate-badevand-model.js — frit
+# regenerérbar fra en gratis, offentlig API, kan blive stor (hele Danmarks
+# nedbørshistorik pr. 0,25°-celle), hører ikke hjemme i versionsstyring.
+scripts/cache/
+
 # Lokale miljøvariabler/hemmeligheder (DATABASE_URL, VAPID-nøgler m.fl. —
 # sættes via `fly secrets`, ikke committet).
 .env
