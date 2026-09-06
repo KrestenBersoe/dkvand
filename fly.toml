@@ -54,7 +54,14 @@ primary_region = 'arn'
   # Sat tilbage til 2048mb (2026-07-29, bruger-beslutning) — se cpu_kind
   # nedenfor: performance-kravet om minimum 4096 MiB bortfalder nu appen
   # er tilbage på 'shared'.
-  memory = '2048mb'
+  # OPGRADERET til 4096mb (2026-09-05, produktionshændelse — gentagne
+  # OOM-kills/restart-loop hele dagen, se db.js/dmi-rain.js/server.js's
+  # egne noter samme dag for de underliggende, siden rettede årsager).
+  # En manuel `fly scale memory 4096` tidligere samme dag blev stille
+  # overskrevet af næste `fly deploy`, netop fordi denne fil stadig sagde
+  # 2048mb — samme drift-fælde filen selv advarer om nedenfor. Rettet her
+  # denne gang også, ikke kun via CLI'en.
+  memory = '4096mb'
   # Skiftet fra 'shared' til 'performance' (2026-07-25) — målt direkte via
   # /proc/stat på maskinen: op til ~1.359 CPU-sekunder "steal time" over 21
   # minutters oppetid (mere end selve idle-tiden!), og ~40% steal målt live
@@ -67,7 +74,19 @@ primary_region = 'arn'
   # Sat tilbage til 'shared' (2026-07-29, bruger-beslutning) — bevidst
   # accept af risikoen for CPU-steal beskrevet ovenfor, til fordel for
   # lavere omkostning. cpus=2 holdes uændret.
-  cpu_kind = 'shared'
+  # Skiftet TILBAGE til 'performance' (2026-09-05, produktionshændelse —
+  # samme symptom som 2026-07-25, denne gang bekræftet langt værre: målt
+  # direkte via /proc/stat under en aktiv hændelse, to snapshots 5 sek.
+  # fra hinanden, steal udgjorde ~85% af AL CPU-tid i vinduet (kun ~7%
+  # reelt arbejde, ~7,5% reel idle) — værre end julis ~40%. Faldt sammen
+  # med en reel, samtidig regnhændelse (bekræftet: reelle nedbørsværdier
+  # 6,5-12,7 mm i /api/debug's sample), som isoleret set var legitim,
+  # forventet belastning — men på en maskine der reelt kun havde ~15% af
+  # sin tildelte CPU-tid til rådighed, var selv normal drift nok til at
+  # gøre appen ubrugelig. Samme "bevidst omkostnings-vs-robusthed"-
+  # afvejning som juli, men nu genovervejet efter et helt produktionsdøgn
+  # med gentagne, svært diagnosticerbare ustabilitetshændelser.
+  cpu_kind = 'performance'
   # Opgraderet fra 1 til 2 (2026-07-25, manuel maskin-opgradering) — samme
   # drift-fælde som memory ovenfor: skal holdes i sync her, ellers
   # nedgraderer næste `fly deploy` maskinen tilbage til 1 vCPU.

@@ -276,13 +276,32 @@ async function flushPushQueue() {
     const { rows: subRows } = await query(`SELECT * FROM push_subscriptions WHERE endpoint = ANY($1)`, [endpoints]);
     const subsByEndpoint = new Map(subRows.map(r => [r.endpoint, mapSubscriptionRow(r)]));
 
-    // NYT: SAMTIDIG afsendelse — Promise.all i stedet for en sekventiel
-    // for-await-løkke. Ved den nuværende, beskedne abonnenttal (typisk
-    // få-til-nogle-og-tyve) er der ingen grund til en kunstig
-    // samtidigheds-grænse (p-limit-lignende); bliver abonnenttallet
-    // markant større (hundreder+), er det værd at genoverveje for ikke at
-    // ramme push-tjenesternes egne rate-grænser.
-    const results = await Promise.all(jobs.map(job => sendOnePushJob(job, subsByEndpoint)));
+    // RETTET (produktionshændelse 2026-09-05): denne kommentar sagde
+    // tidligere "ved den nuværende, beskedne abonnenttal (typisk få-til-
+    // nogle-og-tyve) er der ingen grund til en kunstig samtidigheds-
+    // grænse... bliver abonnenttallet markant større (hundreder+), er det
+    // værd at genoverveje" — abonnenttallet ER nu markant større (516,
+    // bekræftet direkte i produktionslogs), men grænsen blev aldrig
+    // indført. Et enkelt bredt regnvejr kunne derfor sætte alle ~516
+    // jobs i kø til ÉN flush, som affyrede alle 516 samtidige udgående
+    // HTTPS-kald til push-tjenesterne (FCM/APNs/Mozilla) i ét
+    // Promise.all — ingen ekstern trafik involveret, men målte ALLIGEVEL
+    // som en "App Concurrency"-spids i Fly's egne metrics, fejlagtigt
+    // tolket som brugertrafik. Samme afgrænsede worker-pool-mønster som
+    // dmi-rain.js's backfillHistory() allerede bruger mod eksterne
+    // tjenester — bevarer downstream-koden (for-loopet over `results`)
+    // helt uændret, da rækkefølgen af resultater aldrig har haft
+    // betydning der.
+    const PUSH_SEND_CONCURRENCY = 20;
+    const results = [];
+    let _pushIdx = 0;
+    async function pushWorker() {
+      while (_pushIdx < jobs.length) {
+        const job = jobs[_pushIdx++];
+        results.push(await sendOnePushJob(job, subsByEndpoint));
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(PUSH_SEND_CONCURRENCY, jobs.length) }, pushWorker));
 
     let sent = 0, failed = 0;
     const expiredEndpoints = [];
@@ -2825,6 +2844,37 @@ let   apiCallCount   = 0;
 let   cacheHitCount  = 0;
 const fetchErrors    = [];   // ring buffer — last 5 errors from fetchOpenMeteo
 
+// RETTET (produktionshændelse 2026-09-05 — bruger-krav: "alle eksterne
+// datahentninger skal persisteres lokalt og kun genhentes når deres eget
+// timeout udløses"): dette var den ENESTE eksterne datakilde uden disk-
+// persistens tilbage (currents-cache.json/dmi-rain-history.json/water-
+// flags-cache.json har alle fået det samme i denne hændelse) — hver
+// eneste genstart tømte weatherCache fuldstændigt, uanset at den
+// eksisterende data typisk stadig var langt inden for WEATHER_TTL_MS's 3
+// timer, og tvang warmCache() til at genhente samtlige ~171 celler fra
+// Open-Meteo fra bunden. Bidrog direkte til de observerede "Open-Meteo
+// HTTP 429"-fejl samme aften — samme genhentnings-byrde gentaget ved
+// hver genstart udløste ganske enkelt Open-Metos egen hastighedsgrænse
+// igen og igen. Samme mønster/løsning som de tre øvrige caches.
+const WEATHER_CACHE_FILE = path.join(DATA_DIR, 'weather-cache.json');
+function loadPersistedWeatherCache() {
+  try {
+    const raw    = fs.readFileSync(WEATHER_CACHE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+    for (const [key, entry] of parsed) weatherCache.set(key, entry);
+    console.log(`weatherCache: ${weatherCache.size} celler indlæst fra disk-cache`);
+  } catch (e) {
+    // Helt normalt ved allerførste deploy — ingen disk-cache endnu
+  }
+}
+function persistWeatherCacheToDisk() {
+  fs.writeFile(WEATHER_CACHE_FILE, JSON.stringify([...weatherCache]), (err) => {
+    if (err) console.warn('Kunne ikke skrive weather-cache til disk:', err.message);
+  });
+}
+loadPersistedWeatherCache();
+
 function gridKey(lat, lng) {
   const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
   const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
@@ -3074,6 +3124,7 @@ function warmCache() {
     await Promise.all(Array.from({ length: Math.min(CONC, cells.length) }, (_, i) => worker(i)));
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s — cache: ${weatherCache.size} cells`);
+    if (fetched > 0) persistWeatherCacheToDisk();
     warmRunning = false;
     currentWarmPromise = null;
   })();
@@ -3406,6 +3457,52 @@ async function applyLiveOverridesToCache() {
 // her (ikke pr. opdateringscyklus som vejr/risiko — geometrien ændrer sig
 // praktisk talt aldrig, kun ved en manuel VP3-dataopdatering), og slås op
 // pr. punkt, når /api/risk-scores bygges nedenfor.
+//
+// RETTET (produktionshændelse 2026-09-05 — samme "ingen disk-persistens"-
+// mønster som currents-cache.json/dmi-rain-history.json, blot CPU- i
+// stedet for netværks-tungt): denne "ÉN GANG"-beregning manglede disk-
+// persistens, og manglede den HELE tiden — koden er uændret i denne
+// hændelses regressionsvindue. Med en maskine der genstarter hvert
+// 15.-25. minut (målt direkte, se Grafana-grafen samme dag) blev "ÉN
+// GANG pr. proceslevetid" reelt til "hver eneste genstart": ~19,7 MB rå
+// JSON (domineret af vp3_vandlob.geojson's 14,6 MB) parset og
+// bounding-box-beregnet for hver eneste feature, igen og igen. Ren CPU
+// (ikke netværk som dmi-rain-byrden), derfor en direkte bidragyder til
+// den observerede vedvarende ~80-100% CPU/200-400% load, ikke kun til
+// RSS-højvandsmærket. Kildegeometrien ændres i praksis kun ved en manuel
+// VP3-dataopdatering (se water-classification.js's filhoved) — cachens
+// gyldighed bindes derfor til kildefilernes mtime, IKKE til en tidsbaseret
+// TTL: så længe ingen af filerne er rørt siden sidste vellykkede
+// beregning, er den persisterede cache lige så gyldig som en frisk.
+const WATER_FLAGS_CACHE_FILE = path.join(DATA_DIR, 'water-flags-cache.json');
+const WATER_FLAGS_SOURCE_FILES = ['vp3_kystvande_simplified.geojson', 'vp3_soeer.geojson', 'vp3_vandlob.geojson', 'puls-data.json'];
+
+function waterFlagsSourceSignature() {
+  return WATER_FLAGS_SOURCE_FILES.map(f => {
+    try { return `${f}:${fs.statSync(path.join(STATIC_DIR, f)).mtimeMs}`; }
+    catch (e) { return `${f}:missing`; }
+  }).join('|');
+}
+
+function loadPersistedWaterFlags() {
+  try {
+    const raw    = fs.readFileSync(WATER_FLAGS_CACHE_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.signature === waterFlagsSourceSignature() && Array.isArray(parsed.flags) && parsed.flags.length > 0) {
+      waterFlagsCache = new Map(parsed.flags);
+      console.log(`water-classification: ${waterFlagsCache.size} isWater-flag(s) indlæst fra disk-cache (kildefiler uændrede siden)`);
+    }
+  } catch (e) {
+    // Helt normalt ved allerførste deploy, eller efter en manuel VP3-dataopdatering
+  }
+}
+
+function persistWaterFlagsToDisk() {
+  fs.writeFile(WATER_FLAGS_CACHE_FILE, JSON.stringify({ signature: waterFlagsSourceSignature(), flags: [...waterFlagsCache] }), (err) => {
+    if (err) console.warn('Kunne ikke skrive water-flags-cache til disk:', err.message);
+  });
+}
+
 let waterFlagsCache = null;
 async function ensureWaterFlagsCache() {
   // NYT: kun EGENTLIGT vellykkede resultater "låser" cachen (undgår
@@ -3416,6 +3513,8 @@ async function ensureWaterFlagsCache() {
   // fejl (kortvarig filsystem-hikke) rette sig selv i stedet for at
   // fastfryse en tom cache resten af serverens levetid.
   if (waterFlagsCache && waterFlagsCache.size > 0) return;
+  loadPersistedWaterFlags();
+  if (waterFlagsCache && waterFlagsCache.size > 0) return;
   try {
     const points = loadPulsPointsFull().map(p => ({ id: p.id, lat: p.lat, lng: p.lng }));
     // RETTET (forårsagede fuld serverfrysning — se water-classification.js
@@ -3425,6 +3524,7 @@ async function ensureWaterFlagsCache() {
     // ikke-blokerende, portionsvise udgave, der løbende giver kontrollen
     // tilbage til event loopet.
     waterFlagsCache = await waterClass.computeWaterFlagsAsync(points, STATIC_DIR);
+    if (waterFlagsCache.size > 0) persistWaterFlagsToDisk();
   } catch (e) {
     console.warn('ensureWaterFlagsCache fejlede:', e.message);
     waterFlagsCache = new Map(); // tomt kort — isWater falder tilbage til undefined, klienten falder videre tilbage til lokal beregning
@@ -3774,7 +3874,31 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     // Kører nu i egen worker_thread — se runBadevandRiskCascadeInWorker()
     // og badevand-risk-worker.js. Selve funktionen (badevand-risk.js) er
     // 100% uændret; kun HVOR den kører er ændret.
-    const result = await runBadevandRiskCascadeInWorker(points, STATIC_DIR, currentsCache.grid);
+    //
+    // RETTET (produktionshændelse 2026-09-05 — vedvarende hukommelses-
+    // vækst, ikke forklaret af nogen af dagens øvrige rettelser):
+    // workerData bruger strukturkloning, som kopierer HVERT felt på
+    // HVERT punkt ind i workerens eget, separate isolat — hver 15.
+    // minut, resten af processens levetid. loadPulsPointsFull()'s eget
+    // filhoved (se linje ~3198 ovenfor: "rå stamdata, kun til visning
+    // (indgår ikke i nogen risikoberegning)") dokumenterer EKSPLICIT at
+    // disse 17 felter aldrig indgår i nogen risikoberegning — fjernet
+    // her fra klonen, alt andet (inkl. riskScore/viralScore/algaeScore/
+    // foreRisk m.fl., sat på pt herover, som cascaden RENT FAKTISK
+    // læser) bevaret uændret via spread. Kun selve klonens størrelse
+    // pr. cyklus reduceres; badevand-risk.js selv er fortsat urørt.
+    const DISPLAY_ONLY_POINT_FIELDS = new Set([
+      'volumeM3', 'eventsPerYear', 'reducedArea', 'type', 'sewerStructure',
+      'latestDischargeYear', 'cod', 'bod', 'nitrogen', 'phosphor',
+      'normalYear', 'normalVol', 'normalEv', 'normalCod', 'normalBod',
+      'normalNitrogen', 'normalPhosphor',
+    ]);
+    const slimPointsForWorker = points.map(pt => {
+      const slim = {};
+      for (const key in pt) { if (!DISPLAY_ONLY_POINT_FIELDS.has(key)) slim[key] = pt[key]; }
+      return slim;
+    });
+    const result = await runBadevandRiskCascadeInWorker(slimPointsForWorker, STATIC_DIR, currentsCache.grid);
     // NYT (Kommunepakke, modul 6): _rawBadevandCascade gemmer det UPATCHEDE
     // resultat — se dens egen filhoveds-kommentar for hvorfor dette SKAL
     // holdes adskilt fra den patchede udgave (uden en ren kilde at patche
@@ -3940,6 +4064,14 @@ setInterval(() => warmCache()
 const DMI_RAIN_CELL_REMATCH_MS = 24 * 3600 * 1000; // gen-match celler mod evt. nye/forsvundne stationer ~dagligt
 (async () => {
   try {
+    // RETTET (produktionshændelse 2026-09-05): indlæses FØR
+    // backfillHistory() kaldes, så dennes egen dybde-tjek (se dmi-rain.js's
+    // BACKFILL_SKIP_DEPTH_RATIO) har noget at sammenligne med — uden dette
+    // ville hver eneste genstart (denne maskine genstarter hvert 15.-70.
+    // minut, se produktionsloggen) blindt gentage den fulde 8-samtidige
+    // backfill-byrde på tværs af ALLE stationer, uanset hvor frisk
+    // disk-cachen allerede er.
+    dmiRain.loadPersistedHistory();
     await dmiRain.refreshLatest();
     dmiRain.rebuildCellIndex(buildPulsGrid());
     await dmiRain.backfillHistory(dmiRain.matchedStationIds());
