@@ -205,6 +205,78 @@ function loadJson(p, fallback) {
   catch (e) { console.warn(`badevand-risk: kunne ikke indlæse ${p} — ${e.message}`); return fallback; }
 }
 
+// ── loadStaticCascadeData — udtrukket af computeBadevandRiskCascade() ──────
+// NYT (validerings-arbejde, se scripts/validate-badevand-model.js): denne
+// bundt af filer (~10-15 MB rå JSON i alt) og deres afledte indeks
+// (vandlobEntries/allDirectionSegments — O(5.227) bbox-beregninger,
+// allLakeGeoms/allKystvandGeoms — O(985+109)) afhænger UDELUKKENDE af
+// `staticDir`'s indhold, ALDRIG af `points`/`getCurrentAt` — men blev
+// tidligere genindlæst og genopbygget fra bunden VED HVER ENESTE kald til
+// computeBadevandRiskCascade(), selv når den samme staticDir blev brugt
+// hundredvis af gange i træk (præcis situationen i en historisk backtest,
+// én genberegning pr. dato). Udtrukket hertil som sin egen, eksporteret
+// funktion, så en kalder, der ved den vil kalde cascaden mange gange med
+// UÆNDREDE statiske filer, kan indlæse den ÉN gang og genbruge den — se
+// `staticCache`-parameteren nedenfor. BEMÆRK: den langt større del af en
+// enkelt cascade-kørsels tid (se badevand-risk-worker.js's filhoved: 45-57
+// sek. pr. kald, MÅLT EFTER en tidligere delvis O(1)-strømopslagsrettelse)
+// er selve O(udløb × geometrier)-matchingen i lakes/kystvande-løkkerne
+// nedenfor, IKKE denne indlæsning — den afhænger reelt af `points` (deres
+// riskScore/viralScore) og kan derfor IKKE caches på samme måde uden en
+// langt større omstrukturering af selve matchingen (uden for scope her).
+// Denne cache fjerner altså kun én, mindre — men reel og gratis — kilde til
+// gentaget arbejde, ikke hele flaskehalsen.
+function loadStaticCascadeData(staticDir) {
+  const rbuLakeLinks       = loadJson(path.join(staticDir, 'rbu-lake-links.json'), {});
+  const id15LakeMatches    = loadJson(path.join(staticDir, 'id15-lake-matches.json'), {});
+  const id15KystvandMatches = loadJson(path.join(staticDir, 'id15-kystvand-matches.json'), {});
+  const soeerGeojson       = loadJson(path.join(staticDir, 'vp3_soeer.geojson'), { features: [] });
+  const kystvandGeojson    = loadJson(path.join(staticDir, 'vp3_kystvande_simplified.geojson'), { features: [] });
+  const badevandGeojson    = loadJson(path.join(staticDir, 'vp3_badevand.geojson'), { features: [] });
+  const vandlobDisplay     = loadJson(path.join(staticDir, 'vandlob-display.json'), []);
+  const vandlobUpstream    = loadJson(path.join(staticDir, 'vandlob-upstream-matches.json'), []);
+  const vandlobDirections  = loadJson(path.join(staticDir, 'vandlob-directions.json'), []);
+  const vandlobUpstreamByIndex = {};
+  for (const entry of vandlobUpstream) vandlobUpstreamByIndex[entry.index] = entry;
+  const vandlobDirectionByIndex = {};
+  for (const entry of vandlobDirections) vandlobDirectionByIndex[entry.index] = entry;
+
+  const vandlobEntries = [];
+  for (const entry of vandlobDisplay) {
+    const match = vandlobUpstreamByIndex[entry.index];
+    if (!match || !match.pulsPointIds || match.pulsPointIds.length === 0) continue;
+    const geometry = { type: 'LineString', coordinates: entry.coords.map(([lat, lng]) => [lng, lat]) };
+    vandlobEntries.push({
+      index: entry.index, geometry, bbox: waterClass.computeGeometryBbox(geometry), match,
+      coordsRaw: entry.coords, direction: vandlobDirectionByIndex[entry.index] || null,
+    });
+  }
+  const allDirectionSegments = [];
+  for (const entry of vandlobDisplay) {
+    const direction = vandlobDirectionByIndex[entry.index];
+    if (!direction || direction.confidence !== 'sikker' || !direction.direction) continue;
+    const geometry = { type: 'LineString', coordinates: entry.coords.map(([lat, lng]) => [lng, lat]) };
+    allDirectionSegments.push({
+      index: entry.index, geometry, bbox: waterClass.computeGeometryBbox(geometry),
+      coordsRaw: entry.coords, direction,
+    });
+  }
+  const allLakeGeoms = (soeerGeojson.features || []).map(f => ({
+    navn: f.properties?.ov_navn || f.properties?.navn || 'Sø',
+    geometry: f.geometry, bbox: waterClass.computeGeometryBbox(f.geometry),
+  }));
+  const allKystvandGeoms = (kystvandGeojson.features || []).map(f => ({
+    navn: f.properties?.ov_navn || f.properties?.ov_id || 'Kystvand',
+    geometry: f.geometry, bbox: waterClass.computeGeometryBbox(f.geometry),
+  }));
+
+  return {
+    rbuLakeLinks, id15LakeMatches, id15KystvandMatches,
+    soeerGeojson, kystvandGeojson, badevandGeojson,
+    vandlobEntries, allDirectionSegments, allLakeGeoms, allKystvandGeoms,
+  };
+}
+
 /**
  * Beregner søers, kystvandes og badesteders bakteriel/viral risiko —
  * fuld server-side gengivelse af klientens Trin 0/0,5/1/2-kaskade.
@@ -233,7 +305,17 @@ function loadJson(p, fallback) {
 // Valgfri (kan udelades/være null) for bagudkompatibilitet med
 // eksisterende tests/kald uden strømdata — falder da tilbage til den
 // hidtidige, retningsblinde model for ALLE kystvands-udløb.
-async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral, staticDir, batchSize = 100, getCurrentAt = null) {
+//
+// staticCache (valgfri, standard null): en tidligere returværdi af
+// loadStaticCascadeData(staticDir) ovenfor — hvis givet, SPRINGES al
+// disk-indlæsning/geometri-indeksopbygning for statiske filer over, og
+// denne cache bruges i stedet. Udelades den (som ALLE eksisterende
+// kaldesteder i denne kodebase fortsat gør — server.js/badevand-risk-
+// worker.js), er adfærden 100% uændret: staticDir læses friskt fra disk,
+// præcis som før denne parameter fandtes. Kun en kalder, der VED at den
+// vil køre cascaden mange gange i træk med uændrede statiske filer (fx en
+// historisk backtest), har grund til at bruge den.
+async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral, staticDir, batchSize = 100, getCurrentAt = null, staticCache = null) {
   const t0 = Date.now();
 
   // RETTET (bruger-ønske 2026-07-25/26): bekræftede rene regnvandsudløb (se
@@ -277,61 +359,12 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
     return result;
   } : null;
 
-  const rbuLakeLinks       = loadJson(path.join(staticDir, 'rbu-lake-links.json'), {});
-  const id15LakeMatches    = loadJson(path.join(staticDir, 'id15-lake-matches.json'), {});
-  const id15KystvandMatches = loadJson(path.join(staticDir, 'id15-kystvand-matches.json'), {});
-  const soeerGeojson       = loadJson(path.join(staticDir, 'vp3_soeer.geojson'), { features: [] });
-  const kystvandGeojson    = loadJson(path.join(staticDir, 'vp3_kystvande_simplified.geojson'), { features: [] });
-  const badevandGeojson    = loadJson(path.join(staticDir, 'vp3_badevand.geojson'), { features: [] });
-  const vandlobDisplay     = loadJson(path.join(staticDir, 'vandlob-display.json'), []);
-  const vandlobUpstream    = loadJson(path.join(staticDir, 'vandlob-upstream-matches.json'), []);
-  const vandlobDirections  = loadJson(path.join(staticDir, 'vandlob-directions.json'), []);
-  const vandlobUpstreamByIndex = {};
-  for (const entry of vandlobUpstream) vandlobUpstreamByIndex[entry.index] = entry;
-  const vandlobDirectionByIndex = {};
-  for (const entry of vandlobDirections) vandlobDirectionByIndex[entry.index] = entry;
-
-  // ── Vandløb-cache (kun linjer med mindst ét matchet udløb) — flyttet op
-  // hertil (var tidligere bygget lige før badevand-løkken) fordi den nye
-  // sø-indløbstier nedenfor skal bruge den. `coordsRaw` beholder [lat,lng]
-  // i original rækkefølge (A=først, B=sidst) — nødvendigt for at afgøre
-  // hvilken ende der rører søen og matche mod vandlob-directions.json's
-  // 'AtilB'/'BtilA'-værdier, som er relative til DENNE rækkefølge. ─────────
-  const vandlobEntries = [];
-  // RETTET (rodårsag til at VD-U57/52/53 stadig ikke blev udelukket, trods
-  // korrekt retningslogik): denne liste indeholder KUN segmenter med mindst
-  // ét matchet pulsPointIds i vandlob-upstream-matches.json — men vi
-  // bekræftede tidligere i samtalen (direkte filanalyse) at VD-U52/57/53
-  // slet ikke findes i NOGET segments pulsPointIds, ud af alle 5.227.
-  // outflow-detektion kan derfor IKKE bruge denne liste eller dens
-  // pulsPointIds — se allDirectionSegments nedenfor, som i stedet tester
-  // hvert udløbs EGNE koordinater direkte mod segmentgeometrien.
-  for (const entry of vandlobDisplay) {
-    const match = vandlobUpstreamByIndex[entry.index];
-    if (!match || !match.pulsPointIds || match.pulsPointIds.length === 0) continue;
-    const geometry = { type: 'LineString', coordinates: entry.coords.map(([lat, lng]) => [lng, lat]) };
-    vandlobEntries.push({
-      index: entry.index, geometry, bbox: waterClass.computeGeometryBbox(geometry), match,
-      coordsRaw: entry.coords, direction: vandlobDirectionByIndex[entry.index] || null,
-    });
-  }
-  // NYT: ALLE segmenter med retningsdata, UANSET om de har nogen
-  // pulsPointIds-kobling i vandlob-upstream-matches.json. Bruges
-  // UDELUKKENDE til at finde bekræftede AFLØBSSEGMENTER (touching en given
-  // sø) — selve udelukkelsen af et specifikt udløb sker ved at teste
-  // UDLØBETS EGNE koordinater mod segmentets geometri (pointNearLine),
-  // ikke via en forudberegnet punkt-til-segment-kobling, som VD-U57/52/53
-  // beviseligt mangler.
-  const allDirectionSegments = [];
-  for (const entry of vandlobDisplay) {
-    const direction = vandlobDirectionByIndex[entry.index];
-    if (!direction || direction.confidence !== 'sikker' || !direction.direction) continue;
-    const geometry = { type: 'LineString', coordinates: entry.coords.map(([lat, lng]) => [lng, lat]) };
-    allDirectionSegments.push({
-      index: entry.index, geometry, bbox: waterClass.computeGeometryBbox(geometry),
-      coordsRaw: entry.coords, direction,
-    });
-  }
+  const staticData = staticCache || loadStaticCascadeData(staticDir);
+  const {
+    rbuLakeLinks, id15LakeMatches, id15KystvandMatches,
+    soeerGeojson, kystvandGeojson, badevandGeojson,
+    vandlobEntries, allDirectionSegments, allLakeGeoms, allKystvandGeoms,
+  } = staticData;
 
   const pointsById = {};
   for (const p of points) pointsById[p.id] = p;
@@ -1113,15 +1146,9 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
   // indeholder kun vandområder MED data (bevidst, af `continue` i deres
   // respektive løkker) — disse to lister er ALLE geometrier, uanset data,
   // brugt UDELUKKENDE til denne sekundære "matchede geometrien, men har
-  // ingen data"-besked når det primære match fejler.
-  const allLakeGeoms = (soeerGeojson.features || []).map(f => ({
-    navn: f.properties?.ov_navn || f.properties?.navn || 'Sø',
-    geometry: f.geometry, bbox: waterClass.computeGeometryBbox(f.geometry),
-  }));
-  const allKystvandGeoms = (kystvandGeojson.features || []).map(f => ({
-    navn: f.properties?.ov_navn || f.properties?.ov_id || 'Kystvand',
-    geometry: f.geometry, bbox: waterClass.computeGeometryBbox(f.geometry),
-  }));
+  // ingen data"-besked når det primære match fejler. (allLakeGeoms/
+  // allKystvandGeoms kommer nu fra staticData, se loadStaticCascadeData()
+  // ovenfor — samme indhold, blot ikke genberegnet her hvert kald.)
 
   // NYT (intern sø-cirkulation — Doktorens Bugt/VD-U52/53-eftervirkningen):
   // lakes[navn] har hidtil givet ÉN fælles maks-score til HELE søens
@@ -1819,4 +1846,4 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
   return { lakes, kystvande, badevand };
 }
 
-module.exports = { computeBadevandRiskCascade, haversineM };
+module.exports = { computeBadevandRiskCascade, haversineM, loadStaticCascadeData };

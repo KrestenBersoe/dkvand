@@ -29,6 +29,13 @@ badevand-proeve-historik.json
 *.csv
 puls_vBadevandsstationResultater_csv.zip
 
+# Output af scripts/validate-badevand-model.js — afhænger af den
+# gitignorede badevand-proeve-historik.json ovenfor (selv afledt af en
+# privat, lokal PULS-CSV-eksport), varierer pr. kørsel/maskine, hører
+# derfor ikke hjemme i versionsstyring, samme princip som resten af denne
+# sektion.
+scripts/validation-output/
+
 # Lokale miljøvariabler/hemmeligheder (DATABASE_URL, VAPID-nøgler m.fl. —
 # sættes via `fly secrets`, ikke committet).
 .env
