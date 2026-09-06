@@ -95,7 +95,24 @@ function argVal(flag, fallback) {
   const i = process.argv.indexOf(flag);
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
-const NUM_WORKERS = Math.max(1, parseInt(argVal('--workers', String(os.cpus().length)), 10));
+// NYT (bruger-rapporteret — OOM-dræbt selv EFTER SharedArrayBuffer-rettelsen
+// og en separat, reel scoreDateCache-lækage-rettelse i worker-filen):
+// hver tråds STEADY-STATE RSS blev empirisk målt til ~550-600 MB, ÉN gang
+// cachen er fuldt "opvarmet" (bekræftet ved direkte instrumentering —
+// scoreDateCache.size forblev 1 gennem hele kørslen, INGEN akkumulering).
+// Dette er ikke en lækage — det er V8's normale opførsel: dens heap vokser
+// til at rumme det STØRSTE enkeltkalds transiente forbrug (selve
+// O(udløb × geometrier)-cascade-beregningen er reelt hukommelsestung, ikke
+// kun CPU-tung) og giver den sjældent tilbage til OS'et bagefter. 16 tråde
+// × ~600 MB ≈ 9,6 GB er derfor helt reelt, forventet forbrug — ikke en bug
+// at rette i koden, men en hardware-grænse. Standardantallet af tråde
+// vælges derfor nu ud fra LEDIG hukommelse (os.freemem()) på
+// beregningstidspunktet, ikke blindt efter CPU-kernetal — --workers
+// overstyrer stadig eksplicit, hvis brugeren selv vil presse grænsen.
+const MB_PER_WORKER_ESTIMATE = 700; // ~600 MB målt steady-state + margen
+const memSafeWorkers = Math.max(1, Math.floor(os.freemem() / (1024 * 1024) / MB_PER_WORKER_ESTIMATE));
+const DEFAULT_WORKERS = Math.max(1, Math.min(os.cpus().length, memSafeWorkers));
+const NUM_WORKERS = Math.max(1, parseInt(argVal('--workers', String(DEFAULT_WORKERS)), 10));
 const WINDOW_DAYS = parseInt(argVal('--window-days', '730'), 10);
 const WITH_CURRENTS = process.argv.includes('--with-currents');
 const OUT_DIR = path.resolve(argVal('--out-dir', path.join(__dirname, 'validation-output')));
@@ -181,7 +198,7 @@ async function main() {
     process.exit(1);
   }
 
-  console.log(`Tråde: ${NUM_WORKERS} (os.cpus().length=${os.cpus().length}), vindue: ${WINDOW_DAYS} dage, valgt lag: samme-dag/T-1/max-48t, strøm-data: ${WITH_CURRENTS ? 'TIL' : 'FRA (isotropisk fallback for kystvande)'}`);
+  console.log(`Tråde: ${NUM_WORKERS} (${os.cpus().length} CPU-kerner, ${Math.round(os.freemem() / 1024 / 1024)}MB ledig hukommelse lige nu — auto-valgt til at holde forbruget under ~${MB_PER_WORKER_ESTIMATE}MB/tråd, se --workers for at overstyre), vindue: ${WINDOW_DAYS} dage, valgt lag: samme-dag/T-1/max-48t, strøm-data: ${WITH_CURRENTS ? 'TIL' : 'FRA (isotropisk fallback for kystvande)'}`);
 
   const samplesData = JSON.parse(fs.readFileSync(SAMPLES_FILE, 'utf8'));
   const allSamples = samplesData.samples;

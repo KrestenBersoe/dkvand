@@ -169,6 +169,27 @@ const BASELINE_WINDOW_HOURS = 48; // se filhoved for scripts/validate-badevand-m
         records.push({ ...common, lag: 'max48h', bact: bactMax48h === -Infinity ? null : bactMax48h, baselineMm: baselineMax48h === -Infinity ? null : baselineMax48h });
       }
 
+      // NYT (bruger-rapporteret — stadig OOM-dræbt, nu efter ~19-20/23-24
+      // datoer pr. tråd i stedet for næsten øjeblikkeligt): scoreDateCache
+      // ovenfor blev ALDRIG ryddet — hver af de op til ~48 unikke datoer
+      // (dagens + i-går, for hver af de ~23-24 datoer i dette trådskår)
+      // forblev i hukommelsen for HELE trådens levetid, hver med sit eget
+      // fulde badevand-resultat (~1.039 badesteder, hver med sin egen
+      // outlets-liste — op til 300+ for store polygoner, se badevand-
+      // risk.js's egen kommentar om Øresund). Det var den REELLE resterende
+      // lækage, IKKE noget SharedArrayBuffer-rettelsen kunne løse (den
+      // adresserede kun den READ-ONLY nedbørsarkiv-duplikering, ikke denne
+      // per-dato-cache af cascade-RESULTATER, som er noget helt andet).
+      // Da dateShard behandles KRONOLOGISK, kan en dato kun genbruges som
+      // "i går" for den NÆSTE dato i skåret — alt andet end selve dateIso
+      // kan derfor trygt fjernes med det samme, ingen fremtidig iteration
+      // vil nogensinde slå det op igen. Begrænser cachen til højst ÉT
+      // levende element ad gangen (i stedet for at vokse med hele skårets
+      // længde), uden at ofre selve genbrugs-optimeringen for nabo-datoer.
+      for (const key of scoreDateCache.keys()) {
+        if (key !== dateIso) scoreDateCache.delete(key);
+      }
+
       processed++;
       parentPort.postMessage({ type: 'progress', processed, total: dateShard.length });
     }
