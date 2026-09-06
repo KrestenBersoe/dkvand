@@ -17,9 +17,9 @@ cd "$(dirname "$0")"
 APP_NAME="dkvand"
 BRANCH="main"
 
-if [ -n "$(git status --porcelain)" ]; then
-  echo "Uncommitted local changes — commit, stash, or discard them first:"
-  git status --short
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "Uncommitted changes to tracked files — commit, stash, or discard them first:"
+  git status --short --untracked-files=no
   exit 1
 fi
 
