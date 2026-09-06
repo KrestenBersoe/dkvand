@@ -7,7 +7,8 @@
 //
 // Kør fra repo-roden:
 //   node scripts/validate-badevand-model.js [--workers N] [--window-days N]
-//     [--with-currents] [--out-dir DIR] [--cache-dir DIR] [--no-weather-cache]
+//     [--with-currents] [--out-dir DIR] [--cache-dir DIR]
+//     [--no-weather-cache] [--no-currents-cache]
 //
 // Nedbørsarkivet (Open-Meteo, ét kald pr. 0,25°-celle) caches lokalt i
 // --cache-dir (standard scripts/cache/, gitignoret) på tværs af kørsler —
@@ -15,6 +16,10 @@
 // genhenter IKKE de samme celler, kun celler hvis cachede datointerval ikke
 // dækker den aktuelle kørsels behov (fx et senere WINDOW_DAYS). Slå fra med
 // --no-weather-cache for altid at hente friskt.
+//
+// Samme cache-princip gælder --with-currents' CMEMS-strømretningskald
+// (langsommere og kræver credentials, se dens egen sektion i filhovedet
+// nedenfor) — --no-currents-cache for altid at hente friskt.
 //
 // Forudsætter, i denne rækkefølge:
 //   1. badevand-proeve-historik.json — genereres af
@@ -126,6 +131,8 @@ const OUT_DIR = path.resolve(argVal('--out-dir', path.join(__dirname, 'validatio
 const CACHE_DIR = path.resolve(argVal('--cache-dir', path.join(__dirname, 'cache')));
 const WEATHER_CACHE_FILE = path.join(CACHE_DIR, 'weather-archive-cache.json');
 const NO_WEATHER_CACHE = process.argv.includes('--no-weather-cache');
+const CURRENTS_CACHE_FILE = path.join(CACHE_DIR, 'currents-cache.json');
+const NO_CURRENTS_CACHE = process.argv.includes('--no-currents-cache');
 const FLAG_THRESHOLD = parseFloat(argVal('--flag-threshold', '0.2'));
 const BASELINE_MM = parseFloat(argVal('--baseline-mm', String(riskModel.DEFAULT_THRESHOLD_MM)));
 const MIN_POSITIVES_FOR_CI = 5; // under dette: rapporter tallet, men flag eksplicit som statistisk ubrugeligt
@@ -189,6 +196,37 @@ function saveWeatherCache(cache) {
 }
 function cacheCovers(entry, neededStart, neededEnd) {
   return entry && entry.start <= neededStart && entry.end >= neededEnd;
+}
+
+// ── Lokal cache af CMEMS-strømretningssvar pr. celle ────────────────────
+// NYT (bruger-ønske — "save the historic current data on disk/cache so we
+// should not fetch it again"): samme begrundelse/mønster som vejr-cachen
+// ovenfor, men CMEMS-kald (copernicusmarine.subset() via
+// fetch_currents_historical.py) er MÅLBART langsommere end Open-Meteo (ét
+// Python-underprocess-opstart + NetCDF-download pr. celle, "kan tage lang
+// tid" — se filhovedets kommentar) og kræver credentials, så genbrug her
+// er endnu mere værdifuldt end for vejret. CMEMS' reanalyse-produkter
+// opdateres uregelmæssigt og langt fra dagligt (se fetch_currents_
+// historical.py's filhoved: dækningen slutter typisk 1-1,5 år før i dag) —
+// en cellecache er derfor kun forældet, hvis DENNE kørsels behov (fetchStart)
+// rækker LÆNGERE tilbage end sidst cachet, ikke bare fordi tid er gået.
+// entry.start er det ØNSKEDE starttidspunkt sidste kørsel bad om (ikke det
+// FAKTISK returnerede — CMEMS bestemmer selv sin egen slutdato, se
+// fetch_currents_historical.py's egen start/end-håndtering), så en celle
+// genbruges hvis entry.start <= denne kørsels fetchStart.
+function loadCurrentsCache() {
+  if (NO_CURRENTS_CACHE || !fs.existsSync(CURRENTS_CACHE_FILE)) return new Map();
+  try {
+    const raw = JSON.parse(fs.readFileSync(CURRENTS_CACHE_FILE, 'utf8'));
+    return new Map(Object.entries(raw));
+  } catch (e) {
+    console.warn(`⚠ Kunne ikke læse strøm-cachen (${CURRENTS_CACHE_FILE}): ${e.message} — starter med tom cache.`);
+    return new Map();
+  }
+}
+function saveCurrentsCache(cache) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+  fs.writeFileSync(CURRENTS_CACHE_FILE, JSON.stringify(Object.fromEntries(cache)), 'utf8');
 }
 
 // ── Kontinuert partitionering af KRONOLOGISK sorterede datoer i N blokke
@@ -329,13 +367,33 @@ async function main() {
 
   let currentSeriesByKey = new Map();
   if (WITH_CURRENTS) {
-    console.log(`Henter historisk strømretning for ${cellEntries.length} celler (CMEMS, kan tage lang tid)...`);
-    const currentResults = await mapWithConcurrency(
-      cellEntries, CURRENTS_CONCURRENCY,
+    const currentsCache = loadCurrentsCache();
+    const cellsNeedingCurrents = cellEntries.filter(([key]) => {
+      const cached = currentsCache.get(key);
+      return !(cached && cached.start <= fetchStart);
+    });
+    console.log(`Historisk strømretning: ${cellEntries.length - cellsNeedingCurrents.length}/${cellEntries.length} celler dækket af lokal cache (${CURRENTS_CACHE_FILE}), henter resten fra CMEMS (kan tage lang tid)...`);
+    const freshCurrentResults = await mapWithConcurrency(
+      cellsNeedingCurrents, CURRENTS_CONCURRENCY,
       async ([key, { lat, lng }]) => ({ key, series: await fetchHistoricalCurrentsForCell(lat, lng, fetchStart) }),
       500,
-      (done, total) => { if (done % 20 === 0 || done === total) console.log(`  ...${done}/${total} celler`); },
+      (done, total) => { if (total > 0 && (done % 20 === 0 || done === total)) console.log(`  ...${done}/${total} celler`); },
     );
+    if (!NO_CURRENTS_CACHE) {
+      for (const r of freshCurrentResults) {
+        if (!r.error && r.series) currentsCache.set(r.key, { start: fetchStart, series: r.series });
+      }
+      saveCurrentsCache(currentsCache);
+      console.log(`Strøm-cache opdateret: ${CURRENTS_CACHE_FILE}`);
+    }
+    // cellsNeedingCurrents er defineret som "IKKE dækket af cache" ovenfor
+    // — komplementet af den mængde er derfor præcis de celler, der trygt
+    // kan genbruges fra cachen, ingen ekstra dækningstjek nødvendigt her.
+    const cellsNeedingCurrentsKeys = new Set(cellsNeedingCurrents.map(([key]) => key));
+    const currentResults = [
+      ...freshCurrentResults.filter((r) => !r.error),
+      ...cellEntries.filter(([key]) => !cellsNeedingCurrentsKeys.has(key)).map(([key]) => ({ key, series: currentsCache.get(key).series })),
+    ];
     let earliestCommonDate = null;
     for (const r of currentResults) {
       if (r.error || !r.series || r.series.dates.length === 0) continue;
@@ -462,6 +520,20 @@ function analyzeAndReport(records, allSamplesInWindow) {
     const subset = records.filter((r) => r.thresholdTier === tier);
     if (subset.length === 0) continue;
     segments.push(summarizeSegment(subset, segmentLabel('thresholdTier', tier)));
+  }
+
+  // dataQualityCode: PULS' EGEN datakvalitetskode for det dominerende
+  // udløb — 0=reelt rapporteret hændelsestal, 1=verificeret nul, 2=alene
+  // estimeret fra årsvolumen (INTET reelt hændelsestal), 3=ingen data. Se
+  // worker-filens kommentar for hvorfor dette er uafhængigt af
+  // thresholdTier: et 'high'-tillidsgrad-udløb er stadig kun så godt som
+  // det qualityCode=0-tal, tærsklen blev udledt fra. Direkte test af
+  // "er selve overløbsfrekvens-informationen fra forsyningsselskaberne
+  // troværdig" — adskilt fra "blev den udledte tærskel beregnet robust".
+  for (const code of [0, 1, 2, 3, null]) {
+    const subset = records.filter((r) => r.dataQualityCode === code);
+    if (subset.length === 0) continue;
+    segments.push(summarizeSegment(subset, segmentLabel('dataQualityCode', code)));
   }
 
   // ── Kalibreringskurve (kun modellen — baseline's rå mm-tal har ingen

@@ -172,15 +172,26 @@ const BASELINE_WINDOW_HOURS = 48; // se filhoved for scripts/validate-badevand-m
         // udløb findes (fx en 'ingen-bekraeftet'-konklusion, se
         // dataConfidence's egen kommentar) ELLER det ikke findes i
         // puls-udloeb-taerskler.json.
-        const dominantOutfallId = (todaySite?.outlets ?? yestSite?.outlets ?? [])[0]?.outfallId ?? null;
+        const dominantOutlet = (todaySite?.outlets ?? yestSite?.outlets ?? [])[0] ?? null;
+        const dominantOutfallId = dominantOutlet?.outfallId ?? null;
         const thresholdTier = dominantOutfallId ? (thresholdConfidenceByOutfallId.get(dominantOutfallId) ?? 'none') : 'none';
+        // NYT (bruger-ønske — "is the core information about overflow
+        // frequency simply not accurate?"): PULS' egen qualityCode for det
+        // dominerende udløb, uafhængig af thresholdTier ovenfor — 0=reelt
+        // rapporteret hændelsestal, 1=verificeret nul, 2=estimeret alene fra
+        // årsvolumen (IKKE et reelt hændelsestal), 3=ingen data. Adskilt fra
+        // thresholdTier: et udløb kan have en 'high'-tillidsgrad tærskel,
+        // men den er stadig kun så god som selve qualityCode=0-tallet, den
+        // blev udledt fra — dette segment tester DEN antagelse direkte,
+        // uafhængigt af hvor "sikker" selve tærskel-udledningen ser ud.
+        const dataQualityCode = dominantOutlet?.dataQuality ?? null;
 
         const common = {
           siteId: sample.siteId, dateIso, failed,
           exceedanceRatio: sampleExceedanceRatio(sample),
           waterType: todaySite?.waterType ?? yestSite?.waterType ?? null,
           dataConfidence: todaySite?.dataConfidence ?? yestSite?.dataConfidence ?? null,
-          thresholdTier,
+          thresholdTier, dataQualityCode,
           month, bathingSeason: isBathingSeasonMonth(month),
         };
         records.push({ ...common, lag: 'sameDay', bact: bactToday, baselineMm: baselineToday });
