@@ -256,10 +256,36 @@ async function main() {
 
   const pulsRaw = JSON.parse(fs.readFileSync(PULS_DATA_FILE, 'utf8'));
   const rows = pulsRaw.d || pulsRaw;
+  // NYT (bruger-ønske — "look into the hoej-confidence gap"): outfallId
+  // (row[8], samme udtræk som server.js's egen point-opbygning, se dens
+  // "RETTET af ustabil-id-fejlen"-kommentar) manglede her — uden den kan et
+  // badesteds dominerende bidragende udløb ALDRIG matches tilbage til dets
+  // EGEN PULS-tærskel-tillidsgrad (puls-udloeb-taerskler.json's high/medium/
+  // low/borrowed) — se THRESHOLD_CONFIDENCE_BY_OUTFALL_ID nedenfor for
+  // hvorfor dette er en HELT ANDEN akse end badevand-risk.js's egen
+  // `dataConfidence`-felt (site-niveau strøm-/geometri-bekræftelse, IKKE
+  // udløbets statistiske tærskel-sikkerhed — de to genbruger blot de samme
+  // danske ord 'hoej'/'middel'/'lav' for begrebsmæssigt forskellige ting).
   const outlets = rows
-    .map((row, i) => ({ id: String(i), ...riskModel.derivePulsFields(row), viralScore: null, algaeScore: null, foreRisk: null }))
+    .map((row, i) => ({
+      id: String(i), ...riskModel.derivePulsFields(row),
+      outfallId: (row[8] != null && row[8] !== '') ? String(row[8]) : null,
+      viralScore: null, algaeScore: null, foreRisk: null,
+    }))
     .filter((o) => o.lat != null && o.lng != null);
   console.log(`${outlets.length} udløb indlæst.`);
+
+  // ── Udløbets EGEN PULS-tærskel-tillidsgrad (high/medium/low/borrowed) —
+  // se compute-puls-udloeb-taerskler.js/PULS-TAERSKLER-RAPPORT.md. Udløb
+  // der slet ikke findes her (ekskluderet, se meta.excludedOutlets deri,
+  // eller aldrig et regnbetinget udløb overhovedet) får tier 'none' i
+  // workeren nedenfor — en reel, rapporteret kategori, ikke en fejl. ──────
+  const THRESHOLDS_FILE = path.join(STATIC_DIR, 'puls-udloeb-taerskler.json');
+  const thresholdConfidenceEntries = fs.existsSync(THRESHOLDS_FILE)
+    ? JSON.parse(fs.readFileSync(THRESHOLDS_FILE, 'utf8')).outlets.map((o) => [o.outfallId, o.confidence])
+    : [];
+  if (thresholdConfidenceEntries.length === 0) console.warn(`⚠ ${THRESHOLDS_FILE} ikke fundet/tom — thresholdTier-segmentering vil vise 'none' for alle.`);
+  console.log(`${thresholdConfidenceEntries.length} udløb har en kendt tærskel-tillidsgrad (high/medium/low/borrowed).`);
 
   const cellOf = new Map();
   for (const o of outlets) {
@@ -344,6 +370,7 @@ async function main() {
   const t0 = Date.now();
   const workerPromises = dateChunks.map((chunk, i) => runWorker({
     workerIndex: i, staticDir: STATIC_DIR, outlets, cellSeriesEntries, currentSeriesEntries,
+    thresholdConfidenceEntries,
     dateShard: chunk.map((dateIso) => ({ dateIso, samples: samplesByDate.get(dateIso) })),
   }));
   const perWorkerRecords = await Promise.all(workerPromises);
@@ -409,10 +436,32 @@ function analyzeAndReport(records, allSamplesInWindow) {
     if (subsetBathing.length > 0) segments.push(summarizeSegment(subsetBathing, segmentLabel('waterType(badesæson)', wt)));
   }
 
+  // dataConfidence: badevand-risk.js's SITE-niveau strøm-/geometri-
+  // bekræftelse (er der en bekræftet kilde, og hvor tæt/strøm-bekræftet er
+  // den?) — 'hoej' her betyder "bekræftet INGEN aktuel kilde" og har derfor
+  // per konstruktion ALTID bact:null (se badevand-risk.js's
+  // deriveDataConfidence()/'ingen-bekraeftet'-grene) — det er IKKE en fejl
+  // eller et hul at rette, det er den korrekte, positive konklusion for den
+  // kategori. Se thresholdTier nedenfor for den akse, der rent faktisk
+  // svarer til opgavens "outlet calibration confidence tier".
   for (const tier of ['hoej', 'middel', 'lav', 'ingen-data', null]) {
     const subset = records.filter((r) => r.dataConfidence === tier);
     if (subset.length === 0) continue;
     segments.push(summarizeSegment(subset, segmentLabel('dataConfidence', tier)));
+  }
+
+  // thresholdTier: udløbets EGEN PULS-tærskel-tillidsgrad (high=direkte
+  // udledt fra ≥10 reelle årlige hændelser, medium=5-9, low=3-4, borrowed=
+  // lånt fra nærmeste high-tillids-udløb, none=ekskluderet/intet udløb
+  // matchet) — se scripts/compute-puls-udloeb-taerskler.js. DETTE er
+  // opgavens efterspurgte "direct vs. borrowed/low-confidence threshold"-
+  // akse, opslået via det dominerende bidragende udløbs outfallId (se
+  // worker-filens kommentar for hvorfor dette er en helt anden ting end
+  // dataConfidence ovenfor).
+  for (const tier of ['high', 'medium', 'low', 'borrowed', 'none']) {
+    const subset = records.filter((r) => r.thresholdTier === tier);
+    if (subset.length === 0) continue;
+    segments.push(summarizeSegment(subset, segmentLabel('thresholdTier', tier)));
   }
 
   // ── Kalibreringskurve (kun modellen — baseline's rå mm-tal har ingen

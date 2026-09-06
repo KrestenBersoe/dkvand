@@ -49,8 +49,16 @@ const BASELINE_WINDOW_HOURS = 48; // se filhoved for scripts/validate-badevand-m
   try {
     const {
       staticDir, outlets, cellSeriesEntries, currentSeriesEntries,
+      thresholdConfidenceEntries,
       dateShard, // [{ dateIso, samples: [...] }]
     } = workerData;
+    // NYT (bruger-ønske — "look into the hoej-confidence gap"): udløbets
+    // EGEN PULS-tærskel-tillidsgrad (high/medium/low/borrowed), opslået via
+    // dets outfallId — en HELT ANDEN akse end nedenstående dataConfidence
+    // (site-niveau strøm-/geometri-bekræftelse). 'none' for udløb der ikke
+    // findes i puls-udloeb-taerskler.json (ekskluderede/ikke-regnbetingede
+    // udløb) — en reel, rapporteret kategori.
+    const thresholdConfidenceByOutfallId = new Map(thresholdConfidenceEntries);
 
     // NYT: cellSeriesEntries' values er nu {tsBuf,mmBuf,length}-wrappere om
     // SharedArrayBuffer'e (se toSharedCellSeries() i den delte lib) — DELT
@@ -157,11 +165,22 @@ const BASELINE_WINDOW_HOURS = 48; // se filhoved for scripts/validate-badevand-m
         const baselineMax48h = (baselineToday == null && baselineYesterday == null) ? null
           : Math.max(baselineToday ?? -Infinity, baselineYesterday ?? -Infinity);
 
+        // NYT: udløbets EGEN tærskel-tillidsgrad, opslået via det
+        // DOMINERENDE bidragende udløbs outfallId (samme "outlets[0],
+        // allerede sorteret efter faktisk bidrag"-konvention som
+        // baselineRawMm() ovenfor bruger) — 'none' hvis intet dominerende
+        // udløb findes (fx en 'ingen-bekraeftet'-konklusion, se
+        // dataConfidence's egen kommentar) ELLER det ikke findes i
+        // puls-udloeb-taerskler.json.
+        const dominantOutfallId = (todaySite?.outlets ?? yestSite?.outlets ?? [])[0]?.outfallId ?? null;
+        const thresholdTier = dominantOutfallId ? (thresholdConfidenceByOutfallId.get(dominantOutfallId) ?? 'none') : 'none';
+
         const common = {
           siteId: sample.siteId, dateIso, failed,
           exceedanceRatio: sampleExceedanceRatio(sample),
           waterType: todaySite?.waterType ?? yestSite?.waterType ?? null,
           dataConfidence: todaySite?.dataConfidence ?? yestSite?.dataConfidence ?? null,
+          thresholdTier,
           month, bathingSeason: isBathingSeasonMonth(month),
         };
         records.push({ ...common, lag: 'sameDay', bact: bactToday, baselineMm: baselineToday });
