@@ -82,7 +82,7 @@ const { Worker } = require('worker_threads');
 const { execFile } = require('child_process');
 const riskModel = require('../risk-model');
 const {
-  isoDate, mapWithConcurrency, fetchArchive,
+  isoDate, mapWithConcurrency, fetchArchive, toSharedCellSeries,
   wilsonInterval, confusionStats, precisionRecallCurve, calibrationCurve,
 } = require('./lib/badevand-backtest-utils');
 
@@ -217,7 +217,12 @@ async function main() {
   );
   const cellFailures = cellResults.filter((r) => r.error);
   if (cellFailures.length > 0) console.warn(`⚠ ${cellFailures.length}/${cellEntries.length} celler fejlede — udløb i disse celler får ingen scoring (behandlet som manglende data, ikke nul-risiko).`);
-  const cellSeriesByKey = new Map(cellResults.filter((r) => !r.error).map((r) => [r.key, r.series]));
+  // NYT (bruger-rapporteret — 16-tråds kørsel OOM-dræbt): konverteret til
+  // SharedArrayBuffer-baseret form HER, ÉN gang, før workerData sendes til
+  // nogen tråd — se toSharedCellSeries()'s filhoved i den delte lib for
+  // hvorfor (strukturkloning ville ellers kopiere hele nedbørsarkivet, ISO-
+  // strenge og alt, ind i HVER ENESTE af N worker-tråde).
+  const cellSeriesByKey = new Map(cellResults.filter((r) => !r.error).map((r) => [r.key, toSharedCellSeries(r.series)]));
 
   let currentSeriesByKey = new Map();
   if (WITH_CURRENTS) {

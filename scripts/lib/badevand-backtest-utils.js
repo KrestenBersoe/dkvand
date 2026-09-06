@@ -184,17 +184,77 @@ async function mapWithConcurrency(items, limit, fn, pacingMs, onProgress) {
   return results;
 }
 
+// ── toSharedCellSeries — konverterer Open-Meteo's rå {time:[ISO-strenge],
+// mm:[tal]}-svar til en form der kan DELES (ikke kopieres) på tværs af
+// worker_threads ────────────────────────────────────────────────────────
+// NYT (bruger-rapporteret — 16-tråds kørsel blev OOM-dræbt af kernen):
+// workerData/postMessage bruger strukturkloning — hver af N worker-tråde
+// fik tidligere sin EGEN FULDE KOPI af hver celles ~730 dages/17.712
+// times ISO-tidsstempel-STRENGE (dyrt i V8, langt mere end de rå tal de
+// repræsenterer). Med 171 celler × 16 tråde blev det flere GB rent
+// redundant duplikeret data, samme information genskrevet 16 gange.
+//
+// SharedArrayBuffer er den rigtige løsning: dens underliggende hukommelse
+// DELES på tværs af tråde (ingen kopiering ved workerData/postMessage,
+// kun en lille reference), IKKE et Node/browser-specifikt sikkerheds-
+// forbehold her (det gælder kun cross-origin-isolation i browseren) — i
+// Node's worker_threads er det den tilsigtede, dokumenterede måde at dele
+// store, skrivebeskyttede datasæt mellem tråde uden at duplikere dem.
+// Tidsstemplerne konverteres ÉN GANG her (millisekunder siden epoch,
+// Float64Array — eksakt for heltal < 2^53, rigeligt for dette formål) i
+// stedet for at parses PR. OPSLAG i hourlySeriesEndingAt() nedenfor, som
+// den tidligere, streng-baserede udgave gjorde — en ekstra CPU-gevinst
+// oveni selve hukommelsesbesparelsen.
+function toSharedCellSeries(rawSeries) {
+  const n = rawSeries.time.length;
+  const tsBuf = new SharedArrayBuffer(n * 8);
+  const ts = new Float64Array(tsBuf);
+  const mmBuf = new SharedArrayBuffer(n * 4);
+  const mm = new Float32Array(mmBuf);
+  for (let i = 0; i < n; i++) {
+    const raw = rawSeries.time[i];
+    ts[i] = new Date(raw.endsWith('Z') ? raw : `${raw}Z`).getTime();
+    mm[i] = Math.max(rawSeries.mm[i] || 0, 0);
+  }
+  return { tsBuf, mmBuf, length: n };
+}
+// Genopbygger de delte buffere til brugbare typed arrays i EN worker-tråd
+// (Float64Array/Float32Array-wrapperen er billig — selve bufferen bag den
+// er den delte hukommelse, ikke noget der kopieres her).
+function fromSharedCellSeries(shared) {
+  return { ts: new Float64Array(shared.tsBuf), mm: new Float32Array(shared.mmBuf), length: shared.length };
+}
+
 // Skærer en cellens fulde time-serie til vinduet [endDate - windowHours,
 // endDate] (UTC-middag-konvention, se filhoved) — chronological (ældste
-// først), samme brug som server.js' hourlyWeek.
+// først), samme brug som server.js' hourlyWeek. Antager PRÆCIS 1-times
+// mellemrum mellem punkter (Open-Meteo's hourly-endpoint, ubrudt) —
+// indeks kan derfor beregnes direkte (O(1)) i stedet for at scanne hele
+// cellens ~17.712-punkts serie for hvert eneste opslag, som den tidligere
+// streng-parsende udgave gjorde. Falder trygt tilbage til at klemme
+// indekset ind i [0,length) hvis antagelsen nogensinde skulle glippe
+// (fx et hul i kildedataen) — giver da et for kort/skævt, men ALDRIG et
+// out-of-bounds, vindue.
 function hourlySeriesEndingAt(cellSeries, endDate, windowHours) {
+  const { ts, mm, length } = cellSeries;
+  if (length === 0) return [];
   const endMs = new Date(`${endDate}T12:00:00Z`).getTime();
   const startMs = endMs - windowHours * 3600 * 1000;
+  const hourMs = 3600 * 1000;
+  const clamp = (i) => Math.min(Math.max(i, 0), length - 1);
+  let startIdx = clamp(Math.round((startMs - ts[0]) / hourMs));
+  let endIdx = clamp(Math.round((endMs - ts[0]) / hourMs));
+  // Sikkerhedsnet: hvis arithmetikken (pga. et uventet hul i seriens
+  // tidsstempler) rammer forkert, udvid/indsnævr til de faktiske
+  // tidsstempler ligger i [startMs,endMs] — stadig O(vindue), ikke
+  // O(hele serien).
+  while (startIdx > 0 && ts[startIdx] > startMs) startIdx--;
+  while (startIdx < length - 1 && ts[startIdx] < startMs) startIdx++;
+  while (endIdx < length - 1 && ts[endIdx] < endMs) endIdx++;
+  while (endIdx > 0 && ts[endIdx] > endMs) endIdx--;
   const out = [];
-  for (let i = 0; i < cellSeries.time.length; i++) {
-    const raw = cellSeries.time[i];
-    const tMs = new Date(raw.endsWith('Z') ? raw : `${raw}Z`).getTime();
-    if (tMs >= startMs && tMs <= endMs) out.push(Math.max(cellSeries.mm[i] || 0, 0));
+  for (let i = startIdx; i <= endIdx; i++) {
+    if (ts[i] >= startMs && ts[i] <= endMs) out.push(mm[i]);
   }
   return out;
 }
@@ -234,6 +294,7 @@ module.exports = {
   rankOf, spearman,
   wilsonInterval, confusionStats, precisionRecallCurve, calibrationCurve,
   fetchArchive, mapWithConcurrency,
+  toSharedCellSeries, fromSharedCellSeries,
   hourlySeriesEndingAt, rawRainSumWindow,
   seasonalTauForMonth, seasonalTauViralForMonth, isBathingSeasonMonth,
 };

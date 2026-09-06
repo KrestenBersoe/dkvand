@@ -39,6 +39,7 @@ const badevandRisk = require('../badevand-risk');
 const {
   sampleFailed, sampleExceedanceRatio, hourlySeriesEndingAt, rawRainSumWindow,
   seasonalTauForMonth, seasonalTauViralForMonth, isBathingSeasonMonth,
+  fromSharedCellSeries,
 } = require('./lib/badevand-backtest-utils');
 
 const HOURLY_WEEK_HOURS = 7 * 24;
@@ -51,7 +52,12 @@ const BASELINE_WINDOW_HOURS = 48; // se filhoved for scripts/validate-badevand-m
       dateShard, // [{ dateIso, samples: [...] }]
     } = workerData;
 
-    const cellSeriesByKey = new Map(cellSeriesEntries);
+    // NYT: cellSeriesEntries' values er nu {tsBuf,mmBuf,length}-wrappere om
+    // SharedArrayBuffer'e (se toSharedCellSeries() i den delte lib) — DELT
+    // hukommelse på tværs af ALLE worker-tråde, ikke en kopi pr. tråd.
+    // fromSharedCellSeries() er billig (kun Float64Array/Float32Array-
+    // wrappere om den allerede-delte underliggende hukommelse).
+    const cellSeriesByKey = new Map(cellSeriesEntries.map(([k, shared]) => [k, fromSharedCellSeries(shared)]));
     const currentSeriesByKey = new Map(currentSeriesEntries.map(([k, arr]) => [k, new Map(arr)]));
     const getCurrentAtForDate = (dateIso) => (lat, lng) => {
       const key = riskModel.cellKey(lat, lng);
