@@ -7,8 +7,8 @@ Genereret: 2026-07-20T18:27:20.411Z
 - **Akkumuleringsmodel**: samme rullende, eksponentielt henfald som resten af
   appen (τ=3 dage, `riskModel.accumulateDecayed()`, delt med `server.js`'
   `antecedentMM`).
-- **Hændelseskollaps**: 5 timer (Miljøstyrelsen/IDA
-  Spildevandskomitéen 2022-materiale), anvendt direkte på den akkumulerede serie.
+- **Hændelseskollaps**: 5 timer, anvendt direkte på den akkumulerede serie.
+  ANTAGELSE, ikke en myndighedsstandard — se RETTELSE 2026-09-07 nedenfor.
 - **Datavindue**: 2023-01-01 – 2026-07-15.
 
 ## Faktiske gruppeandele (21.600 udløb i alt)
@@ -79,3 +79,27 @@ median afvigelse 7 hændelser (n=530).
    selvstændig "ny" peak mere end 5 timer
    efter selve hændelsen — se kommentar i toppen af
    `compute-puls-udloeb-taerskler.js`.
+5. **Ingen kodificeret hændelsesdefinition findes at kalibrere de 5 timer
+   imod** — bekræftet ved direkte gennemlæsning af DP02 "Datateknisk
+   Anvisning for Regnbetingede Udløb", version 5 (gyldig fra 1.1.2025,
+   forfatter Bo Skovmark/SGAV), den aktuelle bindende tekniske anvisning
+   forsyningsselskaberne følger ved PULS-indberetning: dens eneste krav til
+   feltet "Antal overløb (antal/år)" er "Målt eller modelberegnet antal" —
+   intet varigheds- eller adskillelseskriterie er specificeret i NOGEN af
+   dokumentets 5 versioner (2014-2025). Et Miljøstyrelsen-oplæg fra 2023
+   ("Ny definition på overløbshændelser") foreslog netop dette som
+   fremtidigt arbejde — "mere end 5 timer" og "mere end 24 timer" imellem
+   overløbene var begge til overvejelse, plus et separat 5-minutters
+   varighedskriterie — men er ikke efterfølgende kodificeret i DP02.
+   Konsekvens: de årlige hændelsestal, denne fils kalibrering hviler på, er
+   højst sandsynligt opgjort af forskellige forsyningsselskaber efter
+   forskellige, ikke-standardiserede interne konventioner. Ingen enkelt
+   værdi af `DP02_COLLAPSE_HOURS` (5, 24 eller andet) kan rette dette, da
+   der ikke findes ét facit at ramme.
+
+_RETTELSE (2026-09-07): begrundelse #5 ovenfor og "Hændelseskollaps"-linjen
+under Metode blev tilføjet/opdateret efter direkte gennemlæsning af DP02 v5
+under scripts/validate-badevand-model.js's arbejde — den tidligere
+"Miljøstyrelsen/IDA Spildevandskomitéen 2022"-kildehenvisning kunne ikke
+bekræftes mod noget faktisk dokument og er fjernet. Tallene i tabellerne
+ovenfor er uændrede._

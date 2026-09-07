@@ -33,6 +33,27 @@
 //     ingen anden dag samme år har en højere værdi i den periode. Ikke
 //     korrigeret her, da opgaven eksplicit foreskriver kollaps på netop
 //     denne (den akkumulerede) serie.
+//   - DP02_COLLAPSE_HOURS (5 timer) er en ANTAGELSE, IKKE en kodificeret
+//     myndighedsstandard — bekræftet ved direkte gennemlæsning af DP02
+//     "Datateknisk Anvisning for Regnbetingede Udløb", version 5 (gyldig
+//     fra 1.1.2025, forfatter Bo Skovmark/SGAV), den AKTUELLE, bindende
+//     tekniske anvisning forsyningsselskaberne følger ved PULS-
+//     indberetning: dens eneste krav til feltet "Antal overløb (antal/år)"
+//     er "Målt eller modelberegnet antal" — INGEN varigheds- eller
+//     adskillelseskriterie er specificeret, i NOGEN af de 5 versioner
+//     (2014-2025, se dokumentets egen versionshistorik). Et separat
+//     Miljøstyrelsen-oplæg fra 2023 ("Ny definition på overløbshænd-
+//     elser") foreslog netop dette som fremtidigt arbejde — to kandidater
+//     var til overvejelse, "mere end 5 timer" ELLER "mere end 24 timer"
+//     imellem overløbene, plus et separat 5-minutters varighedskriterie —
+//     men er IKKE efterfølgende kodificeret i DP02, heller ikke i den
+//     nyeste version. Konsekvens: de årlige hændelsestal, denne fils
+//     kalibrering hviler på, er højst sandsynligt opgjort af forskellige
+//     forsyningsselskaber efter FORSKELLIGE, ikke-standardiserede interne
+//     konventioner — ingen enkelt værdi af DP02_COLLAPSE_HOURS (5, 24
+//     eller andet) kan "rette" dette, fordi der ikke findes ét facit at
+//     ramme. Se scripts/validate-badevand-model.js's filhoved for den
+//     fulde validerings-kontekst, dette blev opdaget i.
 // ═══════════════════════════════════════════════════════════════════════════
 
 'use strict';
@@ -41,7 +62,7 @@ const path      = require('path');
 const riskModel = require('../risk-model');
 
 // ── Konfiguration (alle justerbare) ─────────────────────────────────────────
-const DP02_COLLAPSE_HOURS = 5;    // Miljøstyrelsen/IDA Spildevandskomitéen 2022: "mere end 5 timer imellem overløbene"
+const DP02_COLLAPSE_HOURS = 5;    // ANTAGELSE, IKKE en myndighedsstandard — DP02 v5 (2025-01-01) definerer intet adskillelseskriterie, se filhovedet ovenfor for den fulde begrundelse
 const DECAY_TAU_DAYS      = 3.0;  // matcher risk-model.js/server.js' antecedentMM
 const MIN_EVENTS_HIGH     = 10;   // N >= 10  -> høj tillidsgrad
 const MIN_EVENTS_MEDIUM   = 5;    // N in 5-9 -> medium
@@ -374,8 +395,12 @@ Genereret: ${output.meta.generatedAt}
 - **Akkumuleringsmodel**: samme rullende, eksponentielt henfald som resten af
   appen (τ=${output.meta.decayTauDays} dage, \`riskModel.accumulateDecayed()\`, delt med \`server.js\`'
   \`antecedentMM\`).
-- **Hændelseskollaps**: ${output.meta.dp02CollapseHours} timer (Miljøstyrelsen/IDA
-  Spildevandskomitéen 2022-materiale), anvendt direkte på den akkumulerede serie.
+- **Hændelseskollaps**: ${output.meta.dp02CollapseHours} timer, anvendt direkte på
+  den akkumulerede serie. ANTAGELSE, ikke en myndighedsstandard — DP02
+  "Datateknisk Anvisning for Regnbetingede Udløb" (aktuel version 5,
+  1.1.2025) definerer intet varigheds-/adskillelseskriterie for
+  "Antal overløb"; se DP02_COLLAPSE_HOURS's kommentar i compute-puls-
+  udloeb-taerskler.js for den fulde begrundelse.
 - **Datavindue**: ${output.meta.dataWindow.startDate} – ${output.meta.dataWindow.endDate}.
 
 ## Faktiske gruppeandele (${total.toLocaleString('da')} udløb i alt)
