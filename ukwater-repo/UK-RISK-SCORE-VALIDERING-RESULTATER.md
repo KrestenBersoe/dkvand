@@ -198,9 +198,35 @@ score lower on AUC-PR across the board.
   this a clean refutation: baseline recall there was 0.0% (zero true
   positives flagged even before currents were added, so precision is
   undefined), meaning the far band already had no signal to lose. The grid-
-  resolution theory is disfavored by this test, not ruled out — the honest
-  read is inconclusive-but-unfavorable, and the real degradation driver
-  remains unidentified.
+  resolution theory is disfavored by this test, not ruled out.
+- **RESOLVED: the actual driver is `currentBias.js`'s hard downstream
+  exclusion rule** (`if (dot <= 0) return 0;` — a confirmed-downstream or
+  transverse outlet contributes literally nothing, not a dampened amount).
+  Isolated directly: `coastalContributionFactor()` was monkey-patched
+  (real function, one line changed — `dot<=0` now falls back to the same
+  isotropic decay already used for missing current data, instead of
+  zeroing) and rerun against the exact same currents-only config as the
+  original isolation run (`compare-runs.js`, full 16,855-sample run).
+  Softening that one rule recovered most of the gap versus not using
+  currents at all (combined score, either-determinand, overall):
+
+  | Variant | AUC-PR | Recall @0.2 |
+  |---|---|---|
+  | No currents at all (baseline) | 0.098 | 43.2% |
+  | Currents, hard exclusion (real code) | 0.088 | 26.6% |
+  | Currents, exclusion softened | 0.096 | 38.6% |
+
+  Hard exclusion accounts for 8 of the 10-point AUC-PR gap (80%) and 12 of
+  the 16.6-point recall gap (72%) between "no currents" and "currents,
+  real exclusion rule." A confirmed-downstream outlet being zeroed rather
+  than merely discounted is a defensible modeling choice in principle
+  (a downstream spill genuinely shouldn't reach the site) — but this
+  dataset's own `nearbyOutlets` construction (Southern Water's real
+  assessment history, not the real product's spatial index — see below)
+  combined with day-scale current data means a real spill can plausibly
+  still reach a site the "instantaneous" dot product currently rules out
+  entirely. The remaining ~2-point AUC-PR / ~5-point recall gap (0.096 vs.
+  0.098) is a smaller, still-unidentified secondary effect.
 - **The isotropic-fallback asymmetry in the travel-time correction** — no
   measurable current means no data-supported travel time, so those outlets
   stay unshifted. Not quantified how many outlet-sample pairs this affects
@@ -236,12 +262,16 @@ one using every real input available (calibration, currents, and a verified
 travel-time correction), nothing tested pushed it to a reliable predictor,
 and feeding it more realistic inputs consistently made its ranking quality
 *worse*, not better, while only modestly improving precision at the cost of
-substantially more missed real problems. The current model's directional
-exclusion interacting badly with CMEMS's 7km grid resolution was the leading
-candidate explanation, but a direct test (close-vs-far distance bands,
-above) came out the wrong way for that theory — degradation was slightly
-*larger*, not smaller, for widely-separated sites, though on too thin a
-far-band sample to call it conclusive. The actual cause of the degradation
-is still unidentified. Southern Water's own much simpler published field
-remains at least as good a predictor, by this measure, as any version of
-the fuller risk score tested here.
+substantially more missed real problems. CMEMS's 7km grid resolution was
+the leading candidate explanation for currents reducing AUC-PR, but a
+direct test (close-vs-far distance bands) came out the wrong way for that
+theory. The actual cause has since been found and quantified: the current
+model's hard downstream-exclusion rule (`dot<=0` → contribution zeroed,
+not dampened) accounts for roughly 80% of the AUC-PR loss and 72% of the
+recall loss that currents otherwise cause, isolated by softening that one
+real line of code and rerunning the identical backtest. Southern Water's
+own much simpler published field remains at least as good a predictor, by
+this measure, as any version of the fuller risk score tested here — but
+the path to the risk score actually benefiting from real current data now
+has a concrete, identified fix to evaluate (soften or remove the hard
+exclusion), rather than an open question.
