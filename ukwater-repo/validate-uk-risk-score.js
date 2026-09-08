@@ -387,10 +387,31 @@ async function main() {
     { key: `distance:close`, label: `Nærmeste udløb <${CMEMS_GRID_KM}km (inden for én CMEMS-gittercelle)`, filter: (s) => distanceBandOf(s.siteNotation) === 'close' },
     { key: `distance:far`, label: `Nærmeste udløb ≥${CMEMS_GRID_KM}km (flere CMEMS-gitterceller væk)`, filter: (s) => distanceBandOf(s.siteNotation) === 'far' },
   ];
+  // Excellent-tier thresholds: Bathing Water Regulations 2013 (SI 2013/1675)
+  // Schedule 5, coastal/transitional waters, 95th-percentile "Excellent"
+  // class — confirmed against the legislation text directly (not from
+  // memory), same source already cited for the 500/185 "Sufficient" tier
+  // used elsewhere in this file. Added as EXTRA labelTypes alongside the
+  // existing Sufficient-tier ones, not a replacement — a stricter label
+  // answers a different question ("did this look worse than mild pollution
+  // levels") than the regulatory-failure question the 500/185 label
+  // answers, and the two shouldn't be conflated. Computed directly from
+  // each sample's raw ecoliValue/enterococciValue (unaffected by
+  // --ecoli-threshold/--enterococci-threshold, which only control the
+  // Sufficient-tier ecoliExceeds/enterococciExceeds/eitherExceeds fields
+  // baked in by buildLabeledSampleEvents).
+  const EXCELLENT_ECOLI_THRESHOLD = 250;
+  const EXCELLENT_ENTEROCOCCI_THRESHOLD = 100;
+  const ecoliExcellentExceeds = (s) => (s.ecoliValue != null ? s.ecoliValue > EXCELLENT_ECOLI_THRESHOLD : null);
+  const enterococciExcellentExceeds = (s) => (s.enterococciValue != null ? s.enterococciValue > EXCELLENT_ENTEROCOCCI_THRESHOLD : null);
+
   const labelTypes = [
-    { key: 'ecoli', label: 'E. coli (>500 cfu/100ml)', get: (s) => s.ecoliExceeds },
-    { key: 'enterococci', label: 'Intestinal enterococci (>185 cfu/100ml)', get: (s) => s.enterococciExceeds },
-    { key: 'either', label: 'Enten (kombineret)', get: (s) => s.eitherExceeds },
+    { key: 'ecoli', label: 'E. coli (>500 cfu/100ml, Sufficient-grænsen)', get: (s) => s.ecoliExceeds },
+    { key: 'enterococci', label: 'Intestinal enterococci (>185 cfu/100ml, Sufficient-grænsen)', get: (s) => s.enterococciExceeds },
+    { key: 'either', label: 'Enten (Sufficient-grænsen, kombineret)', get: (s) => s.eitherExceeds },
+    { key: 'ecoli_excellent', label: `E. coli (>${EXCELLENT_ECOLI_THRESHOLD} cfu/100ml, Excellent-grænsen)`, get: ecoliExcellentExceeds },
+    { key: 'enterococci_excellent', label: `Intestinal enterococci (>${EXCELLENT_ENTEROCOCCI_THRESHOLD} cfu/100ml, Excellent-grænsen)`, get: enterococciExcellentExceeds },
+    { key: 'either_excellent', label: 'Enten (Excellent-grænsen, kombineret)', get: (s) => (ecoliExcellentExceeds(s) === true) || (enterococciExcellentExceeds(s) === true) },
   ];
   const scoreFields = [
     { key: 'combined', label: 'Kombineret score (bakteriel/viral MAX — det brugeren reelt ser)', get: (s) => s.riskScore },
@@ -415,12 +436,19 @@ async function main() {
         const confusion = confusionStats({ tp, fp, tn, fn });
         const pr = precisionRecallCurve(points);
         const calib = calibrationCurve(points);
+        const baseRate = pr.totalPositive / rows.length;
+        // AUC-PR's own random-classifier baseline equals the base rate, so
+        // raw AUC-PR isn't comparable across labelTypes with different base
+        // rates (e.g. the 500/185 vs 250/100 thresholds here) — lift-over-
+        // base-rate (aucPr / baseRate) is the fair comparison: 1.0 means "no
+        // better than guessing," regardless of how common the label is.
+        const liftOverBaseRate = pr.aucPr != null && baseRate > 0 ? pr.aucPr / baseRate : null;
         results.push({
           scoreField: sf.key, scoreFieldLabel: sf.label,
           labelType: lt.key, labelDescription: lt.label,
           segment: seg.key, segmentLabel: seg.label,
-          n: rows.length, totalPositive: pr.totalPositive, baseRate: pr.totalPositive / rows.length,
-          confusionAtFlagGt0_2: confusion, aucPr: pr.aucPr,
+          n: rows.length, totalPositive: pr.totalPositive, baseRate,
+          confusionAtFlagGt0_2: confusion, aucPr: pr.aucPr, liftOverBaseRate,
           precisionRecallCurve: pr.curve, calibrationCurve: calib.buckets,
         });
       }
@@ -433,7 +461,9 @@ async function main() {
   fs.writeFileSync(jsonPath, JSON.stringify({
     generatedAt: new Date().toISOString(),
     config: {
-      ecoliThreshold: ECOLI_THRESHOLD, enterococciThreshold: ENTEROCOCCI_THRESHOLD, flagThreshold: FLAG_THRESHOLD,
+      ecoliThreshold: ECOLI_THRESHOLD, enterococciThreshold: ENTEROCOCCI_THRESHOLD,
+      excellentEcoliThreshold: EXCELLENT_ECOLI_THRESHOLD, excellentEnterococciThreshold: EXCELLENT_ENTEROCOCCI_THRESHOLD,
+      flagThreshold: FLAG_THRESHOLD,
       ukwaterRepo: UKWATER_REPO, medianLongTermSpillCount,
       note: 'Scored with the REAL, unmodified scoreSite() from krestenbersoe/ukwater — see this file\'s own header for exactly which cascade layers were exercised vs. gracefully degraded (no CMEMS current data, no flow-network data, live-EDM-status reconstructed from real event start/end timestamps).',
     },
@@ -442,7 +472,7 @@ async function main() {
   }, null, 2), 'utf8');
 
   const csvPath = path.join(OUT_DIR, 'uk-risk-score-summary.csv');
-  const csvHeader = ['scoreField', 'labelType', 'segment', 'n', 'totalPositive', 'baseRate', 'tp', 'fp', 'tn', 'fn', 'precision', 'precisionLo', 'precisionHi', 'recall', 'recallLo', 'recallHi', 'npv', 'npvLo', 'npvHi', 'aucPr'];
+  const csvHeader = ['scoreField', 'labelType', 'segment', 'n', 'totalPositive', 'baseRate', 'tp', 'fp', 'tn', 'fn', 'precision', 'precisionLo', 'precisionHi', 'recall', 'recallLo', 'recallHi', 'npv', 'npvLo', 'npvHi', 'aucPr', 'liftOverBaseRate'];
   const csvRows = [csvHeader.join(',')];
   for (const r of results) {
     const c = r.confusionAtFlagGt0_2;
@@ -453,19 +483,23 @@ async function main() {
       c.recall.p != null ? c.recall.p.toFixed(4) : '', c.recall.lo != null ? c.recall.lo.toFixed(4) : '', c.recall.hi != null ? c.recall.hi.toFixed(4) : '',
       c.npv.p != null ? c.npv.p.toFixed(4) : '', c.npv.lo != null ? c.npv.lo.toFixed(4) : '', c.npv.hi != null ? c.npv.hi.toFixed(4) : '',
       r.aucPr != null ? r.aucPr.toFixed(4) : '',
+      r.liftOverBaseRate != null ? r.liftOverBaseRate.toFixed(3) : '',
     ].join(','));
   }
   fs.writeFileSync(csvPath, csvRows.join('\n') + '\n', 'utf8');
 
-  console.log('\n═══ Resultat (Alle stationer, Enten-determinand) ═══');
+  console.log('\n═══ Resultat (Alle stationer) — Sufficient-grænsen (>500/185, regulatorisk fejl) vs. Excellent-grænsen (>250/100, strengere) ═══');
   console.log(`Tidsforbrug: ${((Date.now() - t0) / 1000).toFixed(1)}s.`);
+  console.log('AUC-PR alene er ikke sammenlignelig mellem de to grænser (forskellig baggrundsrate) — se liftOverBaseRate (aucPr / baseRate; 1.0 = ikke bedre end at gætte).');
   for (const sf of scoreFields) {
-    const r = results.find((x) => x.scoreField === sf.key && x.labelType === 'either' && x.segment === 'overall');
-    if (!r) continue;
-    const c = r.confusionAtFlagGt0_2;
     console.log(`\n${sf.label}:`);
-    console.log(`  n=${r.n}, positive=${r.totalPositive} (${(r.baseRate * 100).toFixed(1)}%), AUC-PR=${r.aucPr != null ? r.aucPr.toFixed(3) : 'n/a'}`);
-    console.log(`  Ved flag-tærskel >${FLAG_THRESHOLD} (appens egen Low/Medium-grænse): precision=${c.precision.p != null ? (c.precision.p * 100).toFixed(1) + '%' : 'n/a'} [${c.precision.lo != null ? (c.precision.lo * 100).toFixed(1) : '?'}-${c.precision.hi != null ? (c.precision.hi * 100).toFixed(1) : '?'}%], recall=${c.recall.p != null ? (c.recall.p * 100).toFixed(1) + '%' : 'n/a'} [${c.recall.lo != null ? (c.recall.lo * 100).toFixed(1) : '?'}-${c.recall.hi != null ? (c.recall.hi * 100).toFixed(1) : '?'}%]`);
+    for (const ltKey of ['either', 'either_excellent']) {
+      const r = results.find((x) => x.scoreField === sf.key && x.labelType === ltKey && x.segment === 'overall');
+      if (!r) continue;
+      const c = r.confusionAtFlagGt0_2;
+      console.log(`  [${ltKey}] n=${r.n}, positive=${r.totalPositive} (${(r.baseRate * 100).toFixed(1)}%), AUC-PR=${r.aucPr != null ? r.aucPr.toFixed(3) : 'n/a'}, lift=${r.liftOverBaseRate != null ? r.liftOverBaseRate.toFixed(2) + 'x' : 'n/a'}`);
+      console.log(`    Ved flag-tærskel >${FLAG_THRESHOLD} (appens egen Low/Medium-grænse): precision=${c.precision.p != null ? (c.precision.p * 100).toFixed(1) + '%' : 'n/a'} [${c.precision.lo != null ? (c.precision.lo * 100).toFixed(1) : '?'}-${c.precision.hi != null ? (c.precision.hi * 100).toFixed(1) : '?'}%], recall=${c.recall.p != null ? (c.recall.p * 100).toFixed(1) + '%' : 'n/a'} [${c.recall.lo != null ? (c.recall.lo * 100).toFixed(1) : '?'}-${c.recall.hi != null ? (c.recall.hi * 100).toFixed(1) : '?'}%]`);
+    }
   }
   console.log(`\nSkrevet: ${jsonPath}`);
   console.log(`Skrevet: ${csvPath}`);
