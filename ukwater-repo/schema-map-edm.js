@@ -55,7 +55,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { Worker } = require('worker_threads');
-const { findRowAlignedSplitPoints } = require('./lib/csv-stream');
+const { findRowAlignedSplitPoints, streamCsvRows } = require('./lib/csv-stream');
 
 function argVal(flag, fallback) {
   const i = process.argv.indexOf(flag);
@@ -82,20 +82,36 @@ const REQUIRED_COLUMNS = [
 
 // En 15-kolonners header kan aldrig nærme sig 1MB — ingen løkke/retry
 // nødvendig, kun én tilstrækkeligt stor engangslæsning.
-function readHeaderLine(filePath) {
+//
+// RETTET (bruger-rapporteret): en tidligere udgave splittede headerlinjen
+// naivt på ',' i stedet for at genbruge den samme citat-bevidste parser
+// (streamCsvRows) som selve rækkerne. Virkede fint på schema-sample-filen
+// (uciteret header: Outfall,Status,...), men den FULDE eksport citerer
+// HVER kolonne ("Outfall","Status",...) — den naive split beholdt da de
+// bogstavelige anførselstegn som en del af hvert kolonnenavn ("Outfall"
+// matchede aldrig Outfall), og "Påkrævede kolonner mangler" udløstes for
+// samtlige 15 kolonner selvom de reelt var til stede. Kører nu headerlinjen
+// gennem PRÆCIS samme parser som rækkerne, så adfærden er identisk uanset
+// om kilden citerer alle felter eller kun dem, der reelt behøver det.
+async function readHeaderLine(filePath) {
   const fd = fs.openSync(filePath, 'r');
+  let text;
   try {
     const buf = Buffer.alloc(1024 * 1024);
     const bytesRead = fs.readSync(fd, buf, 0, buf.length, 0);
-    const text = buf.toString('utf8', 0, bytesRead);
-    const nl = text.indexOf('\n');
-    if (nl === -1) throw new Error('Ingen linjeskift fundet i den første MB — er filen tom eller uden header?');
-    let headerLine = text.slice(0, nl).replace(/\r$/, '');
-    if (headerLine.charCodeAt(0) === 0xFEFF) headerLine = headerLine.slice(1);
-    return headerLine.split(',').map((h) => h.trim());
+    text = buf.toString('utf8', 0, bytesRead);
   } finally {
     fs.closeSync(fd);
   }
+  const nl = text.indexOf('\n');
+  if (nl === -1) throw new Error('Ingen linjeskift fundet i den første MB — er filen tom eller uden header?');
+  const headerLine = text.slice(0, nl + 1); // inkl. linjeskiftet, streamCsvRows forventer det for at afslutte rækken
+
+  async function* single() { yield headerLine; }
+  for await (const fields of streamCsvRows(single(), ',')) {
+    return fields.map((h) => h.trim());
+  }
+  throw new Error('Kunne ikke parse headerlinjen.');
 }
 
 function runWorker(workerData) {
@@ -111,7 +127,7 @@ function runWorker(workerData) {
 
 async function main() {
   console.log(`Læser header fra ${CSV_PATH}...`);
-  const header = readHeaderLine(CSV_PATH);
+  const header = await readHeaderLine(CSV_PATH);
   const missing = REQUIRED_COLUMNS.filter((c) => !header.includes(c));
   if (missing.length > 0) {
     console.error(`Påkrævede kolonner mangler: ${missing.join(', ')}`);
