@@ -36,6 +36,22 @@ function argVal(flag, fallback) {
 const DIR = path.resolve(argVal('--dir', path.join(__dirname, 'output')));
 const UKWATER_REPO = path.resolve(argVal('--ukwater-repo', '/home/user/ukwater'));
 const NONEXISTENT = path.join(DIR, '__does-not-exist__.json');
+// validate-uk-risk-score.js's OWN default for --currents is <output-dir>/currents-history.json,
+// but where that file actually got saved has varied by machine (repo root vs.
+// output/) in earlier runs this session — so try both known locations before
+// giving up, rather than assuming one.
+const CURRENTS_CANDIDATES = [
+  argVal('--currents', null),
+  path.join(DIR, 'currents-history.json'),
+  path.join(__dirname, 'currents-history.json'),
+].filter(Boolean).map((p) => path.resolve(p));
+const CURRENTS_PATH = CURRENTS_CANDIDATES.find((p) => fs.existsSync(p));
+if (!CURRENTS_PATH) {
+  console.error('CMEMS-strømfil ikke fundet. Forsøgte:');
+  for (const p of CURRENTS_CANDIDATES) console.error(`  ${p}`);
+  console.error('Angiv den reelle sti med --currents /sti/til/currents-history.json');
+  process.exit(1);
+}
 
 const RUNS = [
   {
@@ -46,7 +62,7 @@ const RUNS = [
   {
     key: 'currents', label: 'Kun reelle CMEMS-strømme (stadig ingen kalibrering — tier 2)',
     outDir: path.join(DIR, 'isolate-distance-currents'),
-    extraArgs: ['--calibrated-thresholds', NONEXISTENT],
+    extraArgs: ['--currents', CURRENTS_PATH, '--calibrated-thresholds', NONEXISTENT],
   },
 ];
 
