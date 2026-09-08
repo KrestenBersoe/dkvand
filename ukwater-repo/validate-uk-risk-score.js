@@ -355,9 +355,37 @@ async function main() {
   console.log(`${scored.toLocaleString('en')} prøver scoret på ${((Date.now() - scoreT0) / 1000).toFixed(1)}s (${skippedNoRainfall} uden regndata, ${skippedNoTs} uden gyldigt tidsstempel).`);
 
   const areas = [...new Set(sites.map((s) => s.area).filter(Boolean))];
+
+  // NYT: afstandsbånd-segmentering — tester direkte hypotesen fra UK-RISK-
+  // SCORE-VALIDERING-RESULTATER.md's "What's still untested" (bruger-
+  // opfølgning: "Check whether the effect is smaller for widely-separated
+  // sites"). CMEMS' NWSHELF-produkt har 7km nativ gitteropløsning (se
+  // fetch_uk_currents_historical.py's filhoved) — hvis den retningsbestemte
+  // strøm-model gør det VÆRRE for stationer med et NÆRT udløb (samme eller
+  // nabo-gittercelle, hvor 7km-opløsningen umuligt kan opløse lokal
+  // strømretning), men IKKE (eller mindre) for stationer med et FJERNT
+  // udløb (flere gitterceller væk, hvor storskala-strømningsmønstre er
+  // mere sammenhængende og 7km derfor er en rimelig tilnærmelse), er det
+  // reelt gitteropløsningen der er problemet — ikke retningsmodellen selv.
+  // Båndgrænsen er sat PRÆCIS ved 7km, ikke et rundt tal, netop for at
+  // matche den reelle gitterstørrelse.
+  const CMEMS_GRID_KM = 7;
+  const nearestOutletDistanceMBySite = new Map();
+  for (const [siteNotation, list] of nearbyOutletsBySite) {
+    if (list.length === 0) continue;
+    nearestOutletDistanceMBySite.set(siteNotation, Math.min(...list.map((o) => o.distanceM)));
+  }
+  function distanceBandOf(siteNotation) {
+    const d = nearestOutletDistanceMBySite.get(siteNotation);
+    if (d == null) return null;
+    return d < CMEMS_GRID_KM * 1000 ? 'close' : 'far';
+  }
+
   const segments = [
     { key: 'overall', label: 'Alle stationer', filter: () => true },
     ...areas.map((a) => ({ key: `area:${a}`, label: a, filter: (s) => s.area === a })),
+    { key: `distance:close`, label: `Nærmeste udløb <${CMEMS_GRID_KM}km (inden for én CMEMS-gittercelle)`, filter: (s) => distanceBandOf(s.siteNotation) === 'close' },
+    { key: `distance:far`, label: `Nærmeste udløb ≥${CMEMS_GRID_KM}km (flere CMEMS-gitterceller væk)`, filter: (s) => distanceBandOf(s.siteNotation) === 'far' },
   ];
   const labelTypes = [
     { key: 'ecoli', label: 'E. coli (>500 cfu/100ml)', get: (s) => s.ecoliExceeds },
