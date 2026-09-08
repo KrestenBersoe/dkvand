@@ -182,6 +182,95 @@ comparable 8.3% recall to the raw field's 6.0%) — but that comparison uses
 the crude, uncalibrated baseline, not the more realistic variants, which
 score lower on AUC-PR across the board.
 
+## Very High band: is the top alert tier reliable?
+
+The app's own top tier (`RISK_BANDS`, score >0.8 — see `server/risk/scoreSite.js`)
+is presumably the strongest public-facing warning it issues. Precision
+there — of every sample actually flagged Very High, how often was the
+water actually polluted — for the combined score, either-determinand,
+overall, across every variant tested this session:
+
+| Variant | Precision | Recall | Flagged |
+|---|---|---|---|
+| Rainfall alone (no outlets, live-status, distance, or current) | **27.4%** | 8.9% | 314 |
+| Baseline (no currents, no calibration) | 17.5% | 3.7% | 206 |
+| Currents only, hard exclusion (real code) | 18.0% | 3.6% | 194 |
+| Currents only, exclusion softened | 17.7% | 3.7% | 203 |
+| Currents only, graduated trust | 17.3% | 3.6% | 202 |
+| Calibration only | 11.4% | 2.4% | 201 |
+| Both combined (calibration + currents) | 11.3% | 2.4% | 203 |
+| Travel-time corrected | 10.8% | 2.7% | 241 |
+| Sigmoid baseline probability (steepness=4) | 16.3% | 6.7% | 398 |
+
+Two findings worth acting on:
+
+- **The simplest possible signal beats every "smarter" combined variant at
+  this tier.** Rainfall decay alone — no outlets, no live-EDM status, no
+  distance decay, no current bias — gets 27.4% precision, comfortably
+  ahead of every full-cascade variant (10.8–18.0%). This isn't just "the
+  cascade doesn't help" (already established via AUC-PR throughout this
+  document) — at the Very High tier specifically, the added layers are net
+  *harmful*, not neutral. Whatever live-status/distance/current-bias are
+  contributing at the top of the score range, on this dataset it's more
+  noise than signal.
+- **The sigmoid probability-curve fix (previous section) makes this tier
+  WORSE, not better, despite improving precision at the app's Low/Medium
+  boundary (>0.2).** Precision drops (17.5%→16.3% vs. the matched-config
+  baseline) while the number of Very High flags nearly doubles (206→398).
+  Mechanism: the sigmoid saturates faster once past `kMm` than the real
+  exponential does, so more borderline-elevated samples get pushed into
+  "Very High" that the exponential would have left in "High" (0.5–0.8).
+  A curve change validated at ONE threshold moved the OTHER threshold in
+  the wrong direction — the real risk-band boundaries (0.2/0.5/0.8) are
+  not independent of each other, and any future probability-curve change
+  needs to be checked against all three, not just the one it was designed
+  around.
+- The current-bias fixes (soften-exclusion, graduated-trust) are the only
+  tested changes that improve the currents-on numbers broadly (see above)
+  **without** damaging this tier (17.3–17.7% vs. the real code's 18.0% —
+  a rounding-level difference, not a regression).
+
+## Suggestions for improvement
+
+Ranked by strength of evidence gathered this session, not by effort:
+
+1. **Ship the current-bias exclusion fix (soften or graduated) — the most
+   evidence-backed change here.** Recovers ~80% of the AUC-PR and ~72% of
+   the recall that real currents otherwise cost, verified at full scale,
+   and doesn't hurt the Very High tier (unlike the sigmoid change). Between
+   the two: `graduated-current-trust` edges out `soften-exclusion` slightly
+   and is closer to the real code's own logic outside the 500m–7km band,
+   but the difference is small (~0.001 AUC-PR) against real added
+   complexity — soften-exclusion is the simpler, easier-to-defend default
+   unless a future test shows the 500m–7km band specifically mattering.
+2. **Do not ship the sigmoid probability-curve change as tested.** It
+   trades recall for precision at 0.2 and does the reverse at 0.8 — net
+   roughly a wash on AUC-PR, but actively worse at the tier that matters
+   most for public trust. If a shape change is still worth pursuing, it
+   needs its own multi-threshold validation (this document's own
+   extract-veryhigh-precision.js / sweep-sigmoid-steepness.js pattern),
+   not a single-threshold check.
+3. **Investigate why the fuller cascade underperforms rainfall alone at
+   Very High**, not just that it does. A plausible next step: check
+   whether live-status/distance/current contributions are amplifying
+   scores multiplicatively near the top of the range (pushing already-high
+   rainfall-driven scores further up, past 0.8, via `Math.min(1, probability *
+   decayFactor)`) rather than adding independent signal — that would
+   directly explain "more flags, not more correct flags" without needing a
+   new hypothesis.
+4. **Document or derive real justification for RISK_BANDS' 0.2/0.5/0.8
+   boundaries.** Already flagged as unsourced (see below), but the sigmoid
+   result makes this more urgent, not less: this session just demonstrated
+   that a change validated at one boundary can silently move the others in
+   the wrong direction, which is a real risk for a set of thresholds with
+   no documented rationale to check changes against.
+5. **Prioritize this over new input sources.** Given calibration and
+   currents both reduced AUC-PR before their respective fixes, and neither
+   the raw EDM field nor any tested risk-score variant achieves a
+   convincing AUC-PR advantage over the other (0.106–0.115 range across the
+   board), fixing what's already in the cascade has shown a clearer,
+   larger, more reliable return than any input added this session.
+
 ## What's still untested or unresolved
 
 - **The calibration curve was only computed for the baseline variant.**
@@ -257,7 +346,11 @@ score lower on AUC-PR across the board.
 
 Real signal exists in this risk score — the top of its range genuinely
 separates dirtier water from cleaner water, at roughly a 2–2.5x lift over
-chance. But across five variants, from the crude uncalibrated baseline to
+chance. But that signal comes almost entirely from rainfall: at the app's
+own Very High tier, rainfall decay ALONE (27.4% precision) beats every
+tested full-cascade variant (10.8–18.0%) — the live-status, distance, and
+current-bias layers are net harmful at the top of the range on this
+dataset, not just unhelpful. Across five variants, from the crude uncalibrated baseline to
 one using every real input available (calibration, currents, and a verified
 travel-time correction), nothing tested pushed it to a reliable predictor,
 and feeding it more realistic inputs consistently made its ranking quality
