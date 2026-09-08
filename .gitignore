@@ -51,6 +51,15 @@ scripts/cache/
 # kildefil, samme princip som scripts/validation-output/ ovenfor.
 ukwater-repo/output/
 
+# Lokal cache for ukwater-repo/fetch-ea-samples.js's EA Water Quality
+# Explorer-kald — samme "gendan frit fra ekstern API, hør ikke til i
+# versionsstyring"-princip som scripts/cache/ ovenfor, men OBS: i
+# modsætning til Open-Meteo-vejrarkivet er EA's data IKKE strengt
+# uforanderlig (deres egen FAQ nævner en månedlig "complete data refresh
+# which may include corrections to earlier data") — se filhovedet i
+# fetch-ea-samples.js for hvorfor kun tidligere kalenderår caches.
+ukwater-repo/cache/
+
 # Lokale miljøvariabler/hemmeligheder (DATABASE_URL, VAPID-nøgler m.fl. —
 # sættes via `fly secrets`, ikke committet).
 .env
