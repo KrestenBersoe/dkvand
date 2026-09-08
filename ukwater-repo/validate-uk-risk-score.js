@@ -109,6 +109,16 @@ const ENTEROCOCCI_THRESHOLD = parseFloat(argVal('--enterococci-threshold', '185'
 // "the app's own real flag threshold, not an arbitrary one" convention
 // dkvand's Danish validation used for ITS real app's 0.2 threshold.
 const FLAG_THRESHOLD = parseFloat(argVal('--flag-threshold', '0.2'));
+// Isolates ONE internal rule inside the real currentBias.js, not the whole
+// currents module — the "currents on/off" isolation runs already done
+// (--currents pointing at a nonexistent path) test whether real current
+// DATA helps; this tests whether the hard `dot<=0 -> return 0` exclusion
+// rule inside coastalContributionFactor() specifically is what's costing
+// AUC-PR, by softening it to the SAME isotropic fallback already used for
+// "no current data for this cell" (distanceDecayFactor), instead of zeroing
+// the outlet's contribution outright. See the monkey-patch block below for
+// exactly what changed vs. the real source (one line, quoted inline).
+const SOFTEN_CURRENT_EXCLUSION = process.argv.includes('--soften-current-exclusion');
 
 const scoreSitePath = path.join(UKWATER_REPO, 'server', 'risk', 'scoreSite.js');
 if (!fs.existsSync(scoreSitePath)) {
@@ -118,6 +128,48 @@ if (!fs.existsSync(scoreSitePath)) {
   console.error(`  node validate-uk-risk-score.js --ukwater-repo /path/to/ukwater`);
   process.exit(1);
 }
+
+if (SOFTEN_CURRENT_EXCLUSION) {
+  // Monkey-patch: mutate currentBias.js's OWN exports object before
+  // scoreSite.js is required — scoreSite.js does
+  // `const { coastalContributionFactor } = require('./currentBias')`,
+  // and Node's require cache is keyed by resolved absolute path, so
+  // requiring currentBias.js here (same absolute path scoreSite.js's own
+  // relative require resolves to) and overwriting its export BEFORE
+  // scoreSite.js's first require reaches that destructure means
+  // scoreSite.js picks up the patched function, not the real one. Every
+  // other real function (rainfallDecay, baselineProbability, liveOverride,
+  // distanceDecay, flowDecay, staticFrequencyBaseline) stays untouched.
+  const currentBiasPath = path.join(UKWATER_REPO, 'server', 'risk', 'currentBias.js');
+  const { distanceDecayFactor } = require(path.join(UKWATER_REPO, 'server', 'risk', 'distanceDecay.js'));
+  const { DECAY_LAMBDA } = require(path.join(UKWATER_REPO, 'server', 'risk', 'rainfallDecay.js'));
+  const currentBiasModule = require(currentBiasPath);
+  const COASTAL_TYPES = currentBiasModule.COASTAL_TYPES;
+  const ALWAYS_INCLUDE_DISTANCE_M = currentBiasModule.ALWAYS_INCLUDE_DISTANCE_M;
+  // Byte-identical to the real coastalContributionFactor() (server/risk/
+  // currentBias.js) EXCEPT the single flagged line — real source read and
+  // quoted directly, not reconstructed from memory:
+  //   if (dot <= 0) return 0; // confirmed downstream or transverse — excluded, not dampened
+  // becomes:
+  //   if (dot <= 0) return isotropic();
+  currentBiasModule.coastalContributionFactor = function patchedCoastalContributionFactor(outletLonLat, siteLonLat, distanceM, currentVectorAtOutlet, waterBodyType) {
+    const isotropic = () => distanceDecayFactor(distanceM, waterBodyType);
+    if (!COASTAL_TYPES.has(waterBodyType)) return isotropic();
+    if (distanceM <= ALWAYS_INCLUDE_DISTANCE_M) return isotropic();
+    const speed = currentVectorAtOutlet ? Math.hypot(currentVectorAtOutlet.u, currentVectorAtOutlet.v) : 0;
+    if (!currentVectorAtOutlet || speed === 0) return isotropic();
+    const dLon = siteLonLat[0] - outletLonLat[0];
+    const dLat = siteLonLat[1] - outletLonLat[1];
+    const toSiteMag = Math.hypot(dLon, dLat);
+    if (toSiteMag === 0) return isotropic();
+    const dot = dLon * currentVectorAtOutlet.u + dLat * currentVectorAtOutlet.v;
+    if (dot <= 0) return isotropic(); // PATCHED — real code: `return 0;`
+    const travelTimeHours = distanceM / speed / 3600;
+    return Math.exp(-DECAY_LAMBDA * travelTimeHours);
+  };
+  console.log('--soften-current-exclusion: dot<=0 (downstream/transverse) nu isotropisk henfald i stedet for hård udelukkelse (0). Se filens header for det ene ændrede linje, citeret ordret fra den ægte kilde.');
+}
+
 const { scoreSite } = require(scoreSitePath);
 
 for (const [label, p] of [
@@ -342,6 +394,14 @@ async function main() {
     s.riskScore = result.score;
     s.riskScoreBacterial = result.bacterial.score;
     s.riskScoreViral = result.viral.score;
+    // The cascade's rainfall-decay term ALONE — no outlets, no live-EDM
+    // status, no distance/current/flow decay. hazardScore() already
+    // computes and returns this (rainfallBaselineProbability) for both
+    // hazards internally; MAX of the two mirrors scoreSite()'s own
+    // bacterial/viral combination rule (see that file's header comment)
+    // rather than introducing a new combination logic. Answers "how much of
+    // the full cascade's AUC-PR is rainfall alone already getting you."
+    s.riskScoreRainfallOnly = Math.max(result.bacterial.rainfallBaselineProbability, result.viral.rainfallBaselineProbability);
     s.riskLabel = result.label;
     s.anyConfirmedActive = result.anyConfirmedActive;
     scored++;
@@ -416,6 +476,7 @@ async function main() {
   const scoreFields = [
     { key: 'combined', label: 'Kombineret score (bakteriel/viral MAX — det brugeren reelt ser)', get: (s) => s.riskScore },
     { key: 'bacterial', label: 'Kun bakteriel sub-score', get: (s) => s.riskScoreBacterial },
+    { key: 'rainfall_only', label: 'Kun regnhenfald (ingen udløb, live-status, afstand, strøm)', get: (s) => s.riskScoreRainfallOnly },
   ];
 
   const results = [];
@@ -463,7 +524,7 @@ async function main() {
     config: {
       ecoliThreshold: ECOLI_THRESHOLD, enterococciThreshold: ENTEROCOCCI_THRESHOLD,
       excellentEcoliThreshold: EXCELLENT_ECOLI_THRESHOLD, excellentEnterococciThreshold: EXCELLENT_ENTEROCOCCI_THRESHOLD,
-      flagThreshold: FLAG_THRESHOLD,
+      flagThreshold: FLAG_THRESHOLD, softenCurrentExclusion: SOFTEN_CURRENT_EXCLUSION,
       ukwaterRepo: UKWATER_REPO, medianLongTermSpillCount,
       note: 'Scored with the REAL, unmodified scoreSite() from krestenbersoe/ukwater — see this file\'s own header for exactly which cascade layers were exercised vs. gracefully degraded (no CMEMS current data, no flow-network data, live-EDM-status reconstructed from real event start/end timestamps).',
     },
