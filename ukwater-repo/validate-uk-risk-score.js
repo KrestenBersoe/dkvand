@@ -138,6 +138,23 @@ if (SOFTEN_CURRENT_EXCLUSION && GRADUATED_CURRENT_TRUST) {
   console.error('--soften-current-exclusion og --graduated-current-trust er to forskellige, indbyrdes udelukkende currentBias-varianter — vælg én.');
   process.exit(1);
 }
+// Orthogonal to the two currentBias.js variants above — patches a
+// DIFFERENT real file, server/risk/baselineProbability.js. The real
+// rainfallToProbability() is a saturating exponential
+// (1 - exp(-mm/kMm)) — concave everywhere, so it rises FASTEST right at
+// zero rainfall and SLOWEST right around kMm (the calibrated/heuristic
+// "threshold"), the opposite sensitivity profile from a process that only
+// actually spills once sewer capacity is exceeded. This variant replaces
+// it with a logistic sigmoid centered on the SAME kMm (50% probability
+// there, not the exponential's ~63%), with a real inflection point — near-
+// zero well below kMm, a sharp rise around it, near-one above it. STEEPNESS
+// is a new, undocumented, untuned constant (same honesty as the real
+// K_MM=8 comment: "not calibrated against real UK spill/rainfall
+// correlation data") — 4 was picked to give a visibly sharper gate than
+// the exponential without being a literal step function; override with
+// --sigmoid-steepness to try others.
+const SIGMOID_BASELINE_PROBABILITY = process.argv.includes('--sigmoid-baseline-probability');
+const SIGMOID_STEEPNESS = parseFloat(argVal('--sigmoid-steepness', '4'));
 
 const scoreSitePath = path.join(UKWATER_REPO, 'server', 'risk', 'scoreSite.js');
 if (!fs.existsSync(scoreSitePath)) {
@@ -229,6 +246,24 @@ if (GRADUATED_CURRENT_TRUST) {
     return trust * directionalValue + (1 - trust) * isotropic();
   };
   console.log(`--graduated-current-trust: dot<=0/dot>0-beslutningen vægtes nu 0-100% (lineær rampe ${ALWAYS_INCLUDE_DISTANCE_M}m-${CMEMS_GRID_M}m) i stedet for et hårdt spring ved ${ALWAYS_INCLUDE_DISTANCE_M}m. Identisk med den ægte kode under ${ALWAYS_INCLUDE_DISTANCE_M}m og over ${CMEMS_GRID_M}m.`);
+}
+
+if (SIGMOID_BASELINE_PROBABILITY) {
+  // Same monkey-patch mechanism as the currentBias.js variants above:
+  // require baselineProbability.js here (same resolved absolute path
+  // scoreSite.js's own `require('./baselineProbability')` hits), overwrite
+  // its export BEFORE scoreSite.js is required, so scoreSite.js's
+  // destructured `rainfallToProbability` binds to the patched function.
+  // K_MM itself (the real per-call default AND staticFrequencyBaseline.js's
+  // own import of it for deriving per-outlet kMm) is left untouched —
+  // only the CURVE SHAPE changes, not the threshold scale itself.
+  const baselineProbabilityPath = path.join(UKWATER_REPO, 'server', 'risk', 'baselineProbability.js');
+  const baselineProbabilityModule = require(baselineProbabilityPath);
+  const K_MM = baselineProbabilityModule.K_MM;
+  baselineProbabilityModule.rainfallToProbability = function sigmoidRainfallToProbability(decayedAccumulationMm, kMm = K_MM) {
+    return 1 / (1 + Math.exp(-SIGMOID_STEEPNESS * (decayedAccumulationMm - kMm) / kMm));
+  };
+  console.log(`--sigmoid-baseline-probability: rainfallToProbability() er nu en logistisk sigmoid centreret på kMm (50% dér, ikke den ægte kurves ~63%), stejlhed=${SIGMOID_STEEPNESS}, i stedet for den ægte mættende eksponentialkurve. K_MM/kMm-skalaen selv er uændret — kun kurveformen er ændret.`);
 }
 
 const { scoreSite } = require(scoreSitePath);
@@ -586,6 +621,7 @@ async function main() {
       ecoliThreshold: ECOLI_THRESHOLD, enterococciThreshold: ENTEROCOCCI_THRESHOLD,
       excellentEcoliThreshold: EXCELLENT_ECOLI_THRESHOLD, excellentEnterococciThreshold: EXCELLENT_ENTEROCOCCI_THRESHOLD,
       flagThreshold: FLAG_THRESHOLD, softenCurrentExclusion: SOFTEN_CURRENT_EXCLUSION, graduatedCurrentTrust: GRADUATED_CURRENT_TRUST,
+      sigmoidBaselineProbability: SIGMOID_BASELINE_PROBABILITY, sigmoidSteepness: SIGMOID_BASELINE_PROBABILITY ? SIGMOID_STEEPNESS : null,
       ukwaterRepo: UKWATER_REPO, medianLongTermSpillCount,
       note: 'Scored with the REAL, unmodified scoreSite() from krestenbersoe/ukwater — see this file\'s own header for exactly which cascade layers were exercised vs. gracefully degraded (no CMEMS current data, no flow-network data, live-EDM-status reconstructed from real event start/end timestamps).',
     },
