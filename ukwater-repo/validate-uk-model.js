@@ -103,6 +103,7 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 const { confusionStats, precisionRecallCurve, calibrationCurve } = require('./lib/backtest-stats');
+const { buildLabeledSampleEvents } = require('./lib/uk-sample-labels');
 
 function argVal(flag, fallback) {
   const i = process.argv.indexOf(flag);
@@ -118,8 +119,6 @@ const LAG_HOURS = argVal('--lags', '24,48,72').split(',').map((s) => parseFloat(
 // Schedule 5, coastal/transitional "Sufficient" standard — see filehead citation.
 const ECOLI_THRESHOLD = parseFloat(argVal('--ecoli-threshold', '500'));
 const ENTEROCOCCI_THRESHOLD = parseFloat(argVal('--enterococci-threshold', '185'));
-const ECOLI_CODE = '2348'; // Escherichia coli : Confirmed : MF — the ONLY E. coli code present in the real data (verified)
-const ENTEROCOCCI_CODES_PREFERRED = ['3723', '3722']; // Confirmed:MF preferred over Presumptive:MF when both exist (verified: both always co-occur in the real data)
 
 for (const [label, p] of [['ea-samples.ndjson', SAMPLES_PATH], ['joined-impacts.ndjson', IMPACTS_PATH], ['ea-sites.json', SITES_PATH]]) {
   if (!fs.existsSync(p)) {
@@ -135,12 +134,6 @@ async function* ndjsonLines(p) {
     if (!line) continue;
     yield JSON.parse(line);
   }
-}
-
-function effectiveValue(obs) {
-  // See filehead's "Censored lab results" note — verified safe on the real
-  // data's actual bound magnitudes, not assumed safe in general.
-  return obs.numericValue != null ? obs.numericValue : obs.bound;
 }
 
 // Sorted-ascending array of millisecond timestamps -> count of entries in
@@ -165,48 +158,12 @@ async function main() {
   const sites = JSON.parse(fs.readFileSync(SITES_PATH, 'utf8'));
   const siteByNotation = new Map(sites.map((s) => [s.notation, s]));
 
-  // ── 1. Build one labeled record per real physical sample (grouping the
-  // per-determinand observation rows in ea-samples.ndjson back together —
-  // they share a sample id embedded in the source "id" URL,
-  // .../sample/<N>/observation/<determinand>, confirmed against real rows).
+  // ── 1. Build one labeled record per real physical sample — see
+  // lib/uk-sample-labels.js (shared with validate-uk-risk-score.js so both
+  // scripts label the SAME samples identically).
   console.log(`Læser ${SAMPLES_PATH} og grupperer pr. fysisk prøve...`);
-  const sampleGroups = new Map(); // `${siteNotation}|${sampleNumericId}` -> { siteNotation, phenomenonTime, ecoli, enterococciByCode }
-  const SAMPLE_ID_RE = /\/sample\/([^/]+)\/observation\//;
-  let samplesScanned = 0;
-  for await (const obs of ndjsonLines(SAMPLES_PATH)) {
-    samplesScanned++;
-    if (obs.determinandCode !== ECOLI_CODE && !ENTEROCOCCI_CODES_PREFERRED.includes(obs.determinandCode)) continue;
-    const m = SAMPLE_ID_RE.exec(obs.sampleId || '');
-    if (!m) continue;
-    const key = `${obs.siteNotation}|${m[1]}`;
-    let g = sampleGroups.get(key);
-    if (!g) { g = { siteNotation: obs.siteNotation, phenomenonTime: obs.phenomenonTime, ecoli: null, enterococciByCode: {} }; sampleGroups.set(key, g); }
-    if (obs.determinandCode === ECOLI_CODE) g.ecoli = obs;
-    else g.enterococciByCode[obs.determinandCode] = obs;
-  }
-  console.log(`${samplesScanned.toLocaleString('en')} observationsrækker scannet, ${sampleGroups.size.toLocaleString('en')} distinkte fysiske prøver grupperet.`);
-
-  const sampleEvents = [];
-  for (const g of sampleGroups.values()) {
-    const entero = ENTEROCOCCI_CODES_PREFERRED.map((c) => g.enterococciByCode[c]).find((o) => o != null) || null;
-    const ecoliVal = g.ecoli ? effectiveValue(g.ecoli) : null;
-    const enteroVal = entero ? effectiveValue(entero) : null;
-    const ecoliExceeds = ecoliVal != null ? ecoliVal > ECOLI_THRESHOLD : null;
-    const enteroExceeds = enteroVal != null ? enteroVal > ENTEROCOCCI_THRESHOLD : null;
-    if (ecoliExceeds === null && enteroExceeds === null) continue; // neither determinand present — nothing to label
-    const eitherExceeds = (ecoliExceeds === true) || (enteroExceeds === true);
-    const site = siteByNotation.get(g.siteNotation);
-    sampleEvents.push({
-      siteNotation: g.siteNotation,
-      area: site ? site.area : null,
-      phenomenonTime: g.phenomenonTime,
-      tsMs: g.phenomenonTime ? Date.parse(g.phenomenonTime.endsWith('Z') || /[+-]\d\d:\d\d$/.test(g.phenomenonTime) ? g.phenomenonTime : g.phenomenonTime + 'Z') : null,
-      ecoliValue: ecoliVal, ecoliExceeds,
-      enterococciValue: enteroVal, enterococciExceeds: enteroExceeds,
-      eitherExceeds,
-    });
-  }
-  console.log(`${sampleEvents.length.toLocaleString('en')} prøver har mindst én af de to determinander og indgår i backtesten.`);
+  const sampleEvents = await buildLabeledSampleEvents(SAMPLES_PATH, siteByNotation, ECOLI_THRESHOLD, ENTEROCOCCI_THRESHOLD,
+    (scanned, grouped) => console.log(`${scanned.toLocaleString('en')} observationsrækker scannet, ${grouped.toLocaleString('en')} prøver har mindst én af de to determinander og indgår i backtesten.`));
 
   // ── 2. Build per-site sorted event-start arrays from the join, plus one
   // deduplicated (by eventId) region-wide array for the region-any baseline.

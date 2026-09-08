@@ -48,8 +48,12 @@ scripts/cache/
 # "ukwater-repo", muligvis et fremtidigt selvstændigt repo). *.csv ovenfor
 # dækker allerede de rå release-history-eksporter; dette dækker scriptets
 # genererede output (ndjson + diagnostics), som varierer pr. kørsel/
-# kildefil, samme princip som scripts/validation-output/ ovenfor.
+# kildefil, samme princip som scripts/validation-output/ ovenfor. Mønsteret
+# dækker også ad-hoc selvtest-mapper (output-quicktest/, output-refactor-
+# test/ m.fl., brugt undervejs i denne samtale til hurtig verifikation før
+# aflevering) — samme engangs-, ikke-kildekode-princip.
 ukwater-repo/output/
+ukwater-repo/output-*/
 
 # Lokal cache for ukwater-repo/fetch-ea-samples.js's EA Water Quality
 # Explorer-kald — samme "gendan frit fra ekstern API, hør ikke til i
