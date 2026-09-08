@@ -86,6 +86,7 @@ const path = require('path');
 const readline = require('readline');
 const { confusionStats, precisionRecallCurve, calibrationCurve } = require('./lib/backtest-stats');
 const { buildLabeledSampleEvents } = require('./lib/uk-sample-labels');
+const { buildCurrentsIndex } = require('./lib/currents-lookup');
 
 function argVal(flag, fallback) {
   const i = process.argv.indexOf(flag);
@@ -99,6 +100,7 @@ const EVENTS_PATH = path.resolve(argVal('--events', path.join(DIR, 'edm-events.n
 const IMPACTS_PATH = path.resolve(argVal('--joined-impacts', path.join(DIR, 'joined-impacts.ndjson')));
 const SITES_PATH = path.resolve(argVal('--sites', path.join(DIR, 'ea-sites.json')));
 const RAINFALL_DIR = path.resolve(argVal('--rainfall-dir', path.join(DIR, 'rainfall')));
+const CURRENTS_PATH = path.resolve(argVal('--currents', path.join(DIR, 'currents-history.json')));
 const UKWATER_REPO = path.resolve(argVal('--ukwater-repo', '/home/user/ukwater'));
 const ECOLI_THRESHOLD = parseFloat(argVal('--ecoli-threshold', '500'));
 const ENTEROCOCCI_THRESHOLD = parseFloat(argVal('--enterococci-threshold', '185'));
@@ -187,7 +189,11 @@ async function main() {
   for await (const ev of ndjsonLines(EVENTS_PATH)) {
     eventsScanned++;
     if (!ev.outfall) continue;
-    if (ev.lat != null && ev.lng != null && !outletLatLngByName.has(ev.outfall)) outletLatLngByName.set(ev.outfall, { lat: ev.lat, lng: ev.lng });
+    // See fetch-outlet-rainfall-history.js's own comment — a real malformed
+    // coordinate exists in the source EDM export (STAPLEFIELD, lat=51032),
+    // excluded here rather than let it corrupt this outlet's distance-decay
+    // contribution with a bogus, enormous distance.
+    if (ev.lat != null && ev.lng != null && ev.lat >= -90 && ev.lat <= 90 && ev.lng >= -180 && ev.lng <= 180 && !outletLatLngByName.has(ev.outfall)) outletLatLngByName.set(ev.outfall, { lat: ev.lat, lng: ev.lng });
     if (!ev.genuine) continue;
     if (ev.endedStatus !== 'Ended' || ev.endTsMs == null || ev.startTsMs == null) { ongoingExcluded++; continue; } // see filehead — 'Ongoing' events excluded, not guessed at
     if (!outletEventsByName.has(ev.outfall)) outletEventsByName.set(ev.outfall, []);
@@ -196,27 +202,51 @@ async function main() {
   for (const arr of outletEventsByName.values()) arr.sort((a, b) => a.startTsMs - b.startTsMs);
   console.log(`${eventsScanned.toLocaleString('en')} hændelser, ${outletEventsByName.size.toLocaleString('en')} distinkte udløb med mindst én Ended/genuine hændelse (${ongoingExcluded.toLocaleString('en')} Ongoing/ufuldstændige ekskluderet).`);
 
-  // spillFrequency.longTermAverageSpillCount — a real count of this
-  // outfall's own genuine events over the observed period, feeding
-  // staticFrequencyBaseline.js's tier-2 frequency-heuristic fallback
-  // (this project has no PULS-style per-outlet calibrated threshold, so
-  // every outlet correctly falls through to that tier, exactly as the
-  // real code's own designed 3-tier priority intends for "no calibration
-  // available").
+  // spillFrequency.longTermAverageSpillCount MUST be an ANNUAL rate, not a
+  // raw multi-year total — the real staticFrequencyBaseline.js's tier-2
+  // heuristic only uses it as a ratio (unit-independent, a raw total would
+  // have worked too), but compute-outlet-thresholds.js's tier-1 calibration
+  // (deriveThresholdForOutlet(), imported from the real pipeline/14) uses
+  // it directly as N — "the Nth-highest peak WITHIN one calendar year" — so
+  // an inconsistent unit here would silently mismatch the two tiers. Fixed
+  // to total genuine Ended events / distinct calendar years spanned, same
+  // computation compute-outlet-thresholds.js already uses.
   const outlets = [];
   for (const [name, events] of outletEventsByName) {
     const pos = outletLatLngByName.get(name);
+    const years = new Set(events.map((e) => new Date(e.startTsMs).getUTCFullYear()));
+    const yearList = [...years].sort((a, b) => a - b);
+    const yearsSpanned = yearList.length ? yearList[yearList.length - 1] - yearList[0] + 1 : 1;
     outlets.push({
       outletId: name,
       lat: pos ? pos.lat : null,
       lon: pos ? pos.lng : null,
-      spillFrequency: { longTermAverageSpillCount: events.length },
+      spillFrequency: { longTermAverageSpillCount: events.length / Math.max(1, yearsSpanned) },
       calibratedThreshold: null,
       events,
     });
   }
+
+  // Real tier-1 calibrated thresholds, if compute-outlet-thresholds.js has
+  // been run — optional: without it, every outlet falls through to tier 2
+  // (the frequency heuristic above), exactly as before, so this stays a
+  // strict improvement, never a hard requirement.
+  const CALIBRATED_PATH = path.resolve(argVal('--calibrated-thresholds', path.join(DIR, 'outlet-calibrated-thresholds.json')));
+  let calibratedCount = 0;
+  if (fs.existsSync(CALIBRATED_PATH)) {
+    const calibratedData = JSON.parse(fs.readFileSync(CALIBRATED_PATH, 'utf8'));
+    const thresholds = calibratedData.thresholds || {};
+    for (const outlet of outlets) {
+      const t = thresholds[outlet.outletId];
+      if (t) { outlet.calibratedThreshold = t; calibratedCount++; }
+    }
+    console.log(`Læste ${CALIBRATED_PATH}: ${calibratedCount}/${outlets.length} udløb fik en REEL kalibreret tærskel (tier 1); resten falder til frekvens-heuristikken (tier 2).`);
+  } else {
+    console.log(`Ingen kalibrerede tærskler fundet (${CALIBRATED_PATH}) — alle udløb bruger frekvens-heuristikken (tier 2). Kør compute-outlet-thresholds.js først for tier 1.`);
+  }
+
   const medianLongTermSpillCount = median(outlets.map((o) => o.spillFrequency.longTermAverageSpillCount));
-  console.log(`Median langsigtet hændelsesantal pr. udløb: ${medianLongTermSpillCount}.`);
+  console.log(`Median langsigtet årlig hændelsesrate pr. udløb: ${medianLongTermSpillCount != null ? medianLongTermSpillCount.toFixed(2) : 'n/a'}.`);
 
   console.log(`Læser ${IMPACTS_PATH} og bygger nearbyOutlets pr. station...`);
   const nearbyOutletNamesBySite = new Map(); // siteNotation -> Set(outfall name)
@@ -252,6 +282,20 @@ async function main() {
   }
   console.log(`Regndata indlæst for ${rainfallBySite.size}/${sites.length} stationer.`);
 
+  // Real historical CMEMS currents (fetch_uk_currents_historical.py's
+  // output) — optional, matches the rainfall/calibration pattern: if
+  // absent, getCurrentAt stays null and every outlet falls back to the
+  // real code's own designed isotropic-decay path, exactly as the first
+  // run did. currentsIndex.getCurrentAt() takes a date STRING (YYYY-MM-DD,
+  // this dataset's own daily resolution), not a full timestamp.
+  let currentsIndex = null;
+  if (fs.existsSync(CURRENTS_PATH)) {
+    currentsIndex = buildCurrentsIndex(CURRENTS_PATH);
+    console.log(`Læste ${CURRENTS_PATH}: ${currentsIndex.meta.gridPointCount ?? '?'} gitterpunkter, reel dækning ${currentsIndex.meta.actualDateRange ? currentsIndex.meta.actualDateRange.join(' .. ') : '?'}.`);
+  } else {
+    console.log(`Ingen CMEMS-strømdata fundet (${CURRENTS_PATH}) — bruger den isotropiske afstands-henfald-fallback for alle udløb. Kør fetch_uk_currents_historical.py først for reelle strømme.`);
+  }
+
   console.log(`Læser ${SAMPLES_PATH} og bygger etiketter...`);
   const sampleEvents = await buildLabeledSampleEvents(SAMPLES_PATH, siteByNotation, ECOLI_THRESHOLD, ENTEROCOCCI_THRESHOLD,
     (scanned, grouped) => console.log(`${scanned.toLocaleString('en')} observationsrækker scannet, ${grouped.toLocaleString('en')} prøver indgår.`));
@@ -283,7 +327,18 @@ async function main() {
       distanceM,
     }));
     const siteWithType = { siteId: site.notation, lat: site.lat, lon: site.lng, waterBodyType: 'CoastalWater' };
-    const result = scoreSite(siteWithType, nearbyWithLive, rainfall, null, nowDate, medianLongTermSpillCount, null, null);
+    // Looked up per OUTLET (not once per site), exactly as the real
+    // runScoring.js does — currents vary across a bay, see currentBias.js's
+    // own comment. Bound to THIS sample's own historical date, never a
+    // later one — same leakage discipline as buildLiveStatusAt() above.
+    const sampleDateStr = s.phenomenonTime.slice(0, 10);
+    const getCurrentAtForSample = currentsIndex
+      ? (lat, lon) => {
+          const p = currentsIndex.getCurrentAt(lat, lon, sampleDateStr);
+          return p ? { u: p.uo, v: p.vo } : null;
+        }
+      : null;
+    const result = scoreSite(siteWithType, nearbyWithLive, rainfall, getCurrentAtForSample, nowDate, medianLongTermSpillCount, null, null);
     s.riskScore = result.score;
     s.riskScoreBacterial = result.bacterial.score;
     s.riskScoreViral = result.viral.score;
