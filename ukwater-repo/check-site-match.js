@@ -14,18 +14,26 @@
 //   node check-site-match.js --dir DIR --out-report DIR/site-match-report.json
 //
 // ── Why this exists as its own step, not folded into a future join script ─
-// Validated first against a 500-row REAL sample (not synthetic): 37/40
-// (92.5%) of distinct Bathing Water names resolved to exactly one EA site,
-// with genuinely ambiguous cases (Brighton Central, Herne Bay Central,
-// Hove, Littlehampton, Worthing) cleanly broken by the discharge outfall's
-// own lat/lng distance to each candidate. Two names (Chichester Harbour,
-// Langstone Harbour) had NO EA counterpart at all — confirmed against the
-// live API, not a matching bug: those are shellfish-water/estuarine sites
-// (samplingPointType CC/CE), outside the Bathing Water Directive's scope
-// entirely, so no compliance sample will ever exist for them from this
-// source. That 40-name check was necessarily small (the 500-row sample has
-// only 236 distinct events); this script runs the SAME logic against your
-// real, full local file to get the true whole-dataset picture.
+// Validated against a 500-row sample (38/40, 95%), then against the real
+// full 387,789-row file (82/87, 94.3%, run by the repo owner locally) —
+// consistent at both scales. Genuinely ambiguous name collisions (Brighton
+// Central, Herne Bay Central, Hove, Littlehampton, Worthing, Eastbourne)
+// all resolve cleanly via OPEN-status and outfall-distance tiebreaks. Two
+// categories of exception, found real, not hypothesized:
+//   - NO EA counterpart at all: Chichester Harbour, Langstone Harbour —
+//     confirmed against the live API as shellfish-water/estuarine sites
+//     (samplingPointType CC/CE), outside the Bathing Water Directive's
+//     scope entirely. No compliance sample will ever exist for these from
+//     this source — a real coverage gap, not a matching bug.
+//   - Matchable but NOT by substring: the full-file run surfaced 3 more
+//     misses — "ST MARYS BAY (KENT)" (EA's label has no "KENT", Southern
+//     Water added a county qualifier EA doesn't use), "WEST BAY WESTGATE"
+//     (word order transposed vs EA's "WESTGATE BAY..."), and "STOKES LAKE"
+//     (vs EA's "STOKES BAY" — a real semantic mismatch, "lake" ≠ "bay",
+//     left unresolved on purpose, see tier 4 below). The token-overlap
+//     tier added below fixed the first two; the third stayed unresolved
+//     because it should — auto-matching two visibly different feature
+//     types would be a silently wrong join, not a fixed one.
 //
 // ── Matching algorithm ────────────────────────────────────────────────────
 // 1. Normalize both sides: uppercase, strip trailing "(NNNNN)" site-
@@ -34,13 +42,20 @@
 // 2. Exact match against EA's prefLabel OR altLabel.
 // 3. If no exact match: substring match (either direction) against the
 //    same normalized labels.
-// 4. If a name matches more than one EA site: prefer OPEN status over any
+// 4. If still nothing: order-independent word-overlap (tokenOverlapRatio()
+//    below) — catches transposed or qualifier-augmented names substring
+//    matching structurally can't (see "ST MARYS BAY (KENT)"/"WEST BAY
+//    WESTGATE" above), at a tunable minimum overlap ratio
+//    (--min-token-overlap, default 0.6) chosen so "STOKES LAKE" vs "STOKES
+//    BAY" (ratio 0.5, real full-file case) stays BELOW it and is correctly
+//    left unresolved rather than force-matched.
+// 5. If a name matches more than one EA site: prefer OPEN status over any
 //    other status; if that's still tied, prefer the candidate nearest to
 //    the EDM event's own outfall lat/lng (haversine), but only treat it as
 //    RESOLVED if the nearest candidate is meaningfully closer than the
 //    runner-up (--min-distance-gap-km, default 0.3km) — a 0.16km gap (the
 //    real Eastbourne case found during validation) is noise, not signal.
-// 5. No candidate at all: reported as NO MATCH, never silently dropped.
+// 6. No candidate at all: reported as NO MATCH, never silently dropped.
 //
 // ── Output ──────────────────────────────────────────────────────────────
 // Console summary (counts by match category) plus two files:
@@ -75,6 +90,7 @@ const SITES_PATH = path.resolve(argVal('--sites', path.join(DIR, 'ea-sites.json'
 const REPORT_PATH = path.resolve(argVal('--out-report', path.join(DIR, 'site-match-report.json')));
 const LOOKUP_PATH = path.resolve(argVal('--out-lookup', path.join(DIR, 'site-match-lookup.json')));
 const MIN_DISTANCE_GAP_KM = parseFloat(argVal('--min-distance-gap-km', '0.3'));
+const MIN_TOKEN_OVERLAP = parseFloat(argVal('--min-token-overlap', '0.6'));
 
 for (const [label, p] of [['edm-events.ndjson', EVENTS_PATH], ['edm-impacts.ndjson', IMPACTS_PATH], ['ea-sites.json', SITES_PATH]]) {
   if (!fs.existsSync(p)) {
@@ -94,6 +110,23 @@ function normalize(s) {
     .replace(/\bBATHING WATER\b/g, '')
     .replace(/[^A-Z0-9]+/g, ' ')
     .trim();
+}
+
+// Word-set overlap, order-independent: |intersection| / min(|tokensA|,
+// |tokensB|). Added after real full-scale data (see filehead's "token-
+// overlap tier" note) showed substring matching's real blind spot: EDM
+// names that reorder or drop/add words relative to EA's label — "WEST BAY
+// WESTGATE" vs EA's "WESTGATE BAY SAMPLED..." (words transposed), "ST
+// MARYS BAY (KENT)" vs EA's "...BEACH SURVEY STATION" (Southern Water adds
+// a county qualifier EA's label doesn't have) — neither is a substring of
+// the other in either direction, but they clearly share the same place.
+function tokenOverlapRatio(a, b) {
+  const ta = new Set(a.split(' ').filter(Boolean));
+  const tb = new Set(b.split(' ').filter(Boolean));
+  if (ta.size === 0 || tb.size === 0) return 0;
+  let intersection = 0;
+  for (const t of ta) if (tb.has(t)) intersection++;
+  return intersection / Math.min(ta.size, tb.size);
 }
 
 function haversineKm(lat1, lng1, lat2, lng2) {
@@ -178,6 +211,34 @@ async function main() {
       }
     }
 
+    // Third tier: order-independent word-overlap (see tokenOverlapRatio's
+    // comment — catches transposed/qualifier-augmented names substring
+    // matching structurally can't). Deliberately tried LAST, after exact
+    // and substring both fail — it's the weakest signal of the three, so
+    // every candidate it finds is tagged with its own overlap ratio and
+    // carried into the report even when a tiebreak resolves it, unlike the
+    // other two tiers, so a reviewer can see exactly how thin the evidence
+    // was.
+    let tokenOverlaps = null;
+    if (!candidates || candidates.length === 0) {
+      matchKind = 'token-overlap';
+      const seen = new Set();
+      candidates = [];
+      tokenOverlaps = new Map();
+      for (const s of sites) {
+        const np = normalize(s.prefLabel || '');
+        const na = normalize(s.altLabel || '');
+        const ratioP = np ? tokenOverlapRatio(n, np) : 0;
+        const ratioA = na ? tokenOverlapRatio(n, na) : 0;
+        const bestRatio = Math.max(ratioP, ratioA);
+        if (bestRatio >= MIN_TOKEN_OVERLAP && !seen.has(s.notation)) {
+          seen.add(s.notation);
+          candidates.push({ site: s, field: ratioP >= ratioA ? 'prefLabel' : 'altLabel' });
+          tokenOverlaps.set(s.notation, bestRatio);
+        }
+      }
+    }
+
     if (candidates.length === 0) {
       counts.noMatch++;
       report.push({ edmName: name, outfallCount: outfalls.length, matchKind: 'none', resolution: 'no_match', candidates: [] });
@@ -189,6 +250,11 @@ async function main() {
       site: c.site,
       field: c.field,
       distKm: c.site.lat != null && repPt ? haversineKm(repPt.lat, repPt.lng, c.site.lat, c.site.lng) : null,
+      tokenOverlap: tokenOverlaps ? tokenOverlaps.get(c.site.notation) : null,
+    }));
+    const serializeCandidates = (list) => list.map((w) => ({
+      notation: w.site.notation, prefLabel: w.site.prefLabel, status: w.site.status, distanceKm: w.distKm,
+      ...(w.tokenOverlap != null ? { tokenOverlap: w.tokenOverlap } : {}),
     }));
 
     if (uniqueSites.length === 1) {
@@ -199,7 +265,8 @@ async function main() {
         edmName: name, outfallCount: outfalls.length, matchKind, resolution: 'unambiguous',
         matchedSite: c.site.notation, matchedLabel: c.site.prefLabel, matchedField: c.field,
         distanceKm: c.distKm, siteStatus: c.site.status,
-        candidates: withDist.map((w) => ({ notation: w.site.notation, prefLabel: w.site.prefLabel, status: w.site.status, distanceKm: w.distKm })),
+        ...(c.tokenOverlap != null ? { tokenOverlap: c.tokenOverlap } : {}),
+        candidates: serializeCandidates(withDist),
       });
       continue;
     }
@@ -221,7 +288,8 @@ async function main() {
         edmName: name, outfallCount: outfalls.length, matchKind, resolution: 'resolved_by_status',
         matchedSite: nearest.site.notation, matchedLabel: nearest.site.prefLabel, matchedField: nearest.field,
         distanceKm: nearest.distKm, siteStatus: nearest.site.status,
-        candidates: withDist.map((w) => ({ notation: w.site.notation, prefLabel: w.site.prefLabel, status: w.site.status, distanceKm: w.distKm })),
+        ...(nearest.tokenOverlap != null ? { tokenOverlap: nearest.tokenOverlap } : {}),
+        candidates: serializeCandidates(withDist),
       });
     } else if (gapKm != null && gapKm >= MIN_DISTANCE_GAP_KM) {
       counts.resolvedByDistance++;
@@ -230,14 +298,15 @@ async function main() {
         edmName: name, outfallCount: outfalls.length, matchKind, resolution: resolvedBy === 'status' ? 'resolved_by_status_and_distance' : 'resolved_by_distance',
         matchedSite: nearest.site.notation, matchedLabel: nearest.site.prefLabel, matchedField: nearest.field,
         distanceKm: nearest.distKm, distanceGapKm: gapKm, siteStatus: nearest.site.status,
-        candidates: withDist.map((w) => ({ notation: w.site.notation, prefLabel: w.site.prefLabel, status: w.site.status, distanceKm: w.distKm })),
+        ...(nearest.tokenOverlap != null ? { tokenOverlap: nearest.tokenOverlap } : {}),
+        candidates: serializeCandidates(withDist),
       });
     } else {
       counts.unresolvedAmbiguous++;
       report.push({
         edmName: name, outfallCount: outfalls.length, matchKind, resolution: 'unresolved_ambiguous',
         distanceGapKm: gapKm,
-        candidates: withDist.map((w) => ({ notation: w.site.notation, prefLabel: w.site.prefLabel, status: w.site.status, distanceKm: w.distKm })),
+        candidates: serializeCandidates(withDist),
       });
     }
   }
