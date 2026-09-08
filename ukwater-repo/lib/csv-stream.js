@@ -71,21 +71,35 @@ async function* streamCsvRows(input, delimiter = ',') {
 }
 
 // Single sequential BYTE scan (not a full parse — just quote/newline state)
-// over the whole file, recording the byte offset immediately after every
-// Mth row-ending newline that occurs OUTSIDE a quoted field. Returns the
-// header line's byte length plus a list of candidate row-start offsets,
-// evenly spaced in ROW COUNT. STREAMED chunk-by-chunk (fs.createReadStream),
-// deliberately NOT fs.readFileSync — a genuinely large export (this is the
-// one pass that has to touch the whole file) should never require loading
-// the entire CSV into memory just to find split points; peak memory here is
-// one read chunk (64KB default) plus the sparse candidate-offset list, not
-// the file size.
-async function findRowAlignedSplitPoints(filePath, numWorkers, sampleEveryNRows = 2000) {
+// over the whole file, recording the byte offset immediately after EVERY
+// row-ending newline that occurs OUTSIDE a quoted field. Returns the
+// header line's byte length plus the full list of row-start offsets.
+// STREAMED chunk-by-chunk (fs.createReadStream), deliberately NOT
+// fs.readFileSync — a genuinely large export (this is the one pass that
+// has to touch the whole file) should never require loading the entire
+// CSV into memory just to find split points; peak memory here is one read
+// chunk (64KB default) plus one number per row for the offset list — for
+// even ten million rows that's well under 100MB, trivial next to the file
+// itself, and worth spending to get this right.
+//
+// RETTET (bruger-rapporteret — "the script is NOT running multithreaded,
+// it's a single thread"): en tidligere udgave sparsomt SAMPLEDE kun hver
+// 2000. rækkes startoffset ("sampleEveryNRows"), for at holde
+// kandidatlisten lille på meget store filer. Konsekvensen var et skjult
+// loft: med kun `totalRows / 2000` kandidater at vælge N-1 splitpunkter
+// imellem, kunne en fil med færre end `numWorkers × 2000` rækker ALDRIG
+// producere `numWorkers` reelle skår, uanset hvad --workers blev sat til
+// — kollapsede stille til færre tråde (i værste fald 1), uden fejl, kun
+// synligt hvis man lagde mærke til selve "N skår fundet"-linjen i
+// konsollen. Ved at gemme SAMTLIGE rækkestarter i stedet garanteres
+// præcis `numWorkers` skår, når blot filen har mindst så mange rækker —
+// hvilket en fil beskrevet som "large volume of records" altid vil have.
+async function findRowAlignedSplitPoints(filePath, numWorkers) {
   let inQuotes = false;
   let rowCount = 0;
   let headerEndOffset = -1;
   let bytesSeen = 0;
-  const candidates = []; // byte offsets, each exactly at the start of a row
+  const rowStarts = []; // byte offsets, each exactly at the start of a data row (row 1 onward, NOT the header)
 
   const stream = fs.createReadStream(filePath); // raw Buffer chunks, no decoding needed for a byte-level scan
   for await (const chunk of stream) {
@@ -99,11 +113,8 @@ async function findRowAlignedSplitPoints(filePath, numWorkers, sampleEveryNRows 
       } else if (byte === 0x0A /* \n */ && !inQuotes) {
         rowCount++;
         const rowStart = bytesSeen + i + 1;
-        if (headerEndOffset === -1) {
-          headerEndOffset = rowStart; // end of the header line = start of row 1
-        } else if ((rowCount - 1) % sampleEveryNRows === 0) {
-          candidates.push(rowStart);
-        }
+        if (headerEndOffset === -1) headerEndOffset = rowStart; // end of the header line = start of row 1
+        else rowStarts.push(rowStart);
       }
     }
     bytesSeen += chunk.length;
@@ -115,8 +126,8 @@ async function findRowAlignedSplitPoints(filePath, numWorkers, sampleEveryNRows 
   const fileSize = bytesSeen;
   const splits = [headerEndOffset];
   for (let w = 1; w < numWorkers; w++) {
-    const idx = Math.floor((w * candidates.length) / numWorkers);
-    splits.push(candidates[Math.min(idx, candidates.length - 1)] ?? fileSize);
+    const idx = Math.floor((w * rowStarts.length) / numWorkers);
+    splits.push(rowStarts[Math.min(idx, rowStarts.length - 1)] ?? fileSize);
   }
   splits.push(fileSize);
   // Dedupe (a very small file can produce fewer usable splits than workers)
