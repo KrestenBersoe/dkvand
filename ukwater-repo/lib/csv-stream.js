@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // ═══════════════════════════════════════════════════════════════════════════
-// csv-stream.js — shared CSV-streaming helpers for the ukwater EDM pipeline.
+// csv-stream.js — shared CSV-streaming helpers for the ukwater-repo EDM pipeline.
 //
 // Two responsibilities, both needed to safely parallelize a large CSV across
 // worker_threads without ever splitting a logical row (or a quoted field

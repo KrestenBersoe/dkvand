@@ -6,8 +6,8 @@
 // was designed in: compares against dkvand's PULS-based validation, this is
 // the UK equivalent's first stage — ingestion, not the backtest itself).
 //
-// Kør fra repo-roden:
-//   node ukwater/schema-map-edm.js --csv <path-to-release-history.csv> [--workers N] [--out-dir DIR]
+// Kør fra ukwater-repo/ (denne mappe):
+//   node schema-map-edm.js --csv <path-to-release-history.csv> [--workers N] [--out-dir DIR]
 //
 // ── Why this exists as a separate first stage ────────────────────────────
 // The raw export has TWO real shapes tangled into one flat table: an EVENT
@@ -33,7 +33,7 @@
 // independently recomputing outfall-to-bathing-water geometry, rather than
 // trusting Southern Water's own Impact Status column) would need anyway.
 // Implemented as: one fast single-threaded BYTE-level pre-pass finds N
-// row-aligned split points (see ukwater/lib/csv-stream.js's
+// row-aligned split points (see lib/csv-stream.js's
 // findRowAlignedSplitPoints() — never splits a row, quote-aware, streamed
 // rather than loading the whole file into memory), then N worker_threads
 // each independently stream-parse and map their own contiguous byte range

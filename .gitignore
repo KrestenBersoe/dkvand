@@ -43,12 +43,13 @@ scripts/validation-output/
 # hører ikke hjemme i versionsstyring.
 scripts/cache/
 
-# ukwater/ — UK (Southern Water EDM) bathing-water validation, separat fra
-# den danske PULS-baserede model ovenfor. *.csv ovenfor dækker allerede de
-# rå release-history-eksporter; dette dækker scriptets genererede output
-# (ndjson + diagnostics), som varierer pr. kørsel/kildefil, samme princip
-# som scripts/validation-output/ ovenfor.
-ukwater/output/
+# ukwater-repo/ — UK (Southern Water EDM) bathing-water validation, separat
+# fra den danske PULS-baserede model ovenfor (lokalt navngivet
+# "ukwater-repo", muligvis et fremtidigt selvstændigt repo). *.csv ovenfor
+# dækker allerede de rå release-history-eksporter; dette dækker scriptets
+# genererede output (ndjson + diagnostics), som varierer pr. kørsel/
+# kildefil, samme princip som scripts/validation-output/ ovenfor.
+ukwater-repo/output/
 
 # Lokale miljøvariabler/hemmeligheder (DATABASE_URL, VAPID-nøgler m.fl. —
 # sættes via `fly secrets`, ikke committet).
