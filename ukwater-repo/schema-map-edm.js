@@ -114,18 +114,32 @@ async function readHeaderLine(filePath) {
   throw new Error('Kunne ikke parse headerlinjen.');
 }
 
-function runWorker(workerData) {
+// NYT (bruger-rapporteret, to gange i træk — "still only a single thread")
+// — direkte, tidsstemplet bevis for om trådene rent faktisk kører
+// SAMTIDIGT eller ej, i stedet for at gætte ud fra hvordan en task
+// manager SER ud. Logger threadId (Node's egen, adskilt fra OS-tråd-id,
+// men entydig pr. Worker-instans i denne proces) ved både start og
+// afslutning, med forløbet tid siden selve scriptets start. Ægte
+// parallelitet ⇒ alle "startet"-linjer klumper tæt sammen i tid; reel
+// seriel udførelse (som ville modsige selve Worker-API'ets dokumenterede
+// opførsel, men lad os BEVISE det fremfor at antage det) ⇒ hver "startet"
+// ville først komme efter den forrige tråds "færdig".
+function runWorker(workerData, scriptStartMs) {
   return new Promise((resolve, reject) => {
     const worker = new Worker(path.join(__dirname, 'schema-map-edm-worker.js'), { workerData });
+    const elapsed = () => `+${((Date.now() - scriptStartMs) / 1000).toFixed(2)}s`;
+    console.log(`  [tråd ${workerData.workerIndex}] startet (Node threadId=${worker.threadId}) ${elapsed()}`);
     worker.on('message', (msg) => {
-      if (msg.type === 'fatal') reject(new Error(`worker ${msg.workerIndex} fejlede: ${msg.error}\n${msg.stack || ''}`));
-      else resolve(msg);
+      if (msg.type === 'fatal') { reject(new Error(`worker ${msg.workerIndex} fejlede: ${msg.error}\n${msg.stack || ''}`)); return; }
+      console.log(`  [tråd ${workerData.workerIndex}] færdig (${msg.diagnostics.rowCount.toLocaleString('en')} rækker) ${elapsed()}`);
+      resolve(msg);
     });
     worker.on('error', reject);
   });
 }
 
 async function main() {
+  const scriptStartMs = Date.now();
   console.log(`Læser header fra ${CSV_PATH}...`);
   const header = await readHeaderLine(CSV_PATH);
   const missing = REQUIRED_COLUMNS.filter((c) => !header.includes(c));
@@ -142,9 +156,12 @@ async function main() {
   console.log(`${totalDataRows.toLocaleString('en')} datarækker, ${(fileSize / 1024 / 1024).toFixed(1)}MB, ${ranges.length} skår fundet (${((Date.now() - t0) / 1000).toFixed(1)}s).`);
 
   console.log(`Behandler ${ranges.length} skår parallelt...`);
-  const workerPromises = ranges.map((range, i) => runWorker({ filePath: CSV_PATH, range, header, workerIndex: i }));
+  const t1 = Date.now();
+  const workerPromises = ranges.map((range, i) => runWorker({ filePath: CSV_PATH, range, header, workerIndex: i }, scriptStartMs));
   const results = await Promise.all(workerPromises);
+  console.log(`Alle ${ranges.length} tråde færdige på ${((Date.now() - t1) / 1000).toFixed(1)}s (parallel forløbstid — sammenlign med summen af hver tråds egen rækketid, printet ovenfor, for at se om de rent faktisk overlappede).`);
 
+  const t2 = Date.now();
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const eventsPath = path.join(OUT_DIR, 'edm-events.ndjson');
   const impactsPath = path.join(OUT_DIR, 'edm-impacts.ndjson');
@@ -157,8 +174,21 @@ async function main() {
   // ranges if the source export doesn't group them contiguously. Re-dedup
   // here on the merge, keep the first-seen copy (all copies carry identical
   // outfall/start/end/duration fields per the source format).
+  // RETTET (crashede på et 300.000-rækkers testdatasæt, ~150.000
+  // distinkte hændelser): genuineEvents/dateRange blev tidligere beregnet
+  // i EN SEPARAT, EKSTRA gennemløbning EFTER selve fletteløkken —
+  // `results.flatMap(...).filter((e,i,arr) => arr.findIndex(...) === i)`
+  // er O(n²) (findIndex INDE i filter, pr. element), og `Math.min/max
+  // (...startTimes)` spreder hele array'et som funktionsargumenter, hvilket
+  // rammer V8's kald-stak-grænse langt under det, en reel "large volume of
+  // records"-fil vil indeholde ("RangeError: Maximum call stack size
+  // exceeded"). Begge dele er nu del af den ALLEREDE eksisterende
+  // enkelt-gennemløbning nedenfor (som uanset hvad allerede besøger hver
+  // deduplikeret hændelse PRÆCIS én gang) — ingen separat pas, ingen
+  // spredning af store arrays, O(n) i stedet for O(n²).
   const seenEventIds = new Set();
-  let totalRows = 0, totalEvents = 0, totalImpacts = 0;
+  let totalRows = 0, totalEvents = 0, totalImpacts = 0, genuineEvents = 0;
+  let earliestStartMs = null, latestStartMs = null;
   const merged = {
     statusCounts: { Genuine: 0, 'Not Genuine': 0, 'Under Review': 0, other: 0 },
     endedCounts: { Ended: 0, Ongoing: 0, other: 0 },
@@ -177,6 +207,11 @@ async function main() {
       seenEventIds.add(ev.eventId);
       eventsStream.write(JSON.stringify(ev) + '\n');
       totalEvents++;
+      if (ev.genuine) genuineEvents++;
+      if (ev.startTsMs != null) {
+        if (earliestStartMs === null || ev.startTsMs < earliestStartMs) earliestStartMs = ev.startTsMs;
+        if (latestStartMs === null || ev.startTsMs > latestStartMs) latestStartMs = ev.startTsMs;
+      }
     }
     for (const im of r.impacts) {
       impactsStream.write(JSON.stringify(im) + '\n');
@@ -186,12 +221,8 @@ async function main() {
   eventsStream.end();
   impactsStream.end();
 
-  const genuineEvents = [...seenEventIds].length > 0
-    ? results.flatMap((r) => r.events).filter((e, i, arr) => arr.findIndex((x) => x.eventId === e.eventId) === i && e.genuine).length
-    : 0;
-  const startTimes = results.flatMap((r) => r.events).map((e) => e.startTsMs).filter((t) => t != null);
-  const dateRange = startTimes.length
-    ? { earliest: new Date(Math.min(...startTimes)).toISOString(), latest: new Date(Math.max(...startTimes)).toISOString() }
+  const dateRange = earliestStartMs !== null
+    ? { earliest: new Date(earliestStartMs).toISOString(), latest: new Date(latestStartMs).toISOString() }
     : null;
 
   const diagnostics = {
@@ -212,7 +243,10 @@ async function main() {
   };
   fs.writeFileSync(path.join(OUT_DIR, 'edm-diagnostics.json'), JSON.stringify(diagnostics, null, 2), 'utf8');
 
+  console.log(`Sammenlagt/skrevet output på ${((Date.now() - t2) / 1000).toFixed(1)}s (denne del er BEVIDST enkelttrådet — se filhovedet).`);
+
   console.log('\n═══ Resultat ═══');
+  console.log(`Tidsforbrug: header ${((t0 - scriptStartMs) / 1000).toFixed(1)}s, split-punkter ${((t1 - t0) / 1000).toFixed(1)}s, parallel behandling ${((t2 - t1) / 1000).toFixed(1)}s, sammenlægning ${((Date.now() - t2) / 1000).toFixed(1)}s, i alt ${((Date.now() - scriptStartMs) / 1000).toFixed(1)}s.`);
   console.log(`Rækker parset: ${totalRows.toLocaleString('en')} (kilde havde ${totalDataRows.toLocaleString('en')} datarækker — bør matche)`);
   console.log(`Distinkte hændelser: ${totalEvents.toLocaleString('en')} (${genuineEvents.toLocaleString('en')} Genuine, ${(totalEvents - genuineEvents).toLocaleString('en')} Not Genuine/Under Review — IKKE fjernet, kun talt, se edm-diagnostics.json)`);
   console.log(`Impact-vurderinger (hændelse × badevand): ${totalImpacts.toLocaleString('en')}`);
