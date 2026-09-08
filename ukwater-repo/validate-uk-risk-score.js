@@ -119,6 +119,25 @@ const FLAG_THRESHOLD = parseFloat(argVal('--flag-threshold', '0.2'));
 // the outlet's contribution outright. See the monkey-patch block below for
 // exactly what changed vs. the real source (one line, quoted inline).
 const SOFTEN_CURRENT_EXCLUSION = process.argv.includes('--soften-current-exclusion');
+// A second, more sophisticated isolation variant, mutually exclusive with
+// the one above: instead of a hard binary step (isotropic <=500m /
+// fully-current-gated beyond), blend isotropic and directional decay by a
+// TRUST factor that ramps smoothly from 0 at ALWAYS_INCLUDE_DISTANCE_M
+// (500m — current direction unresolvable this close, matches the real
+// code's own justification for that constant) to 1 at the CMEMS grid's own
+// native resolution (7km — beyond that, distinguishing direction is exactly
+// as trustworthy as the real code already assumes it is everywhere beyond
+// 500m). Strictly refines the real logic, not a separate design: identical
+// output below 500m (trust=0 -> pure isotropic, same as real code) and
+// identical output at/beyond 7km (trust=1 -> pure directional, INCLUDING
+// the real hard dot<=0 exclusion at that point) — only the 500m-7km band,
+// where the real code currently jumps straight to full directional trust
+// at 501m, is changed.
+const GRADUATED_CURRENT_TRUST = process.argv.includes('--graduated-current-trust');
+if (SOFTEN_CURRENT_EXCLUSION && GRADUATED_CURRENT_TRUST) {
+  console.error('--soften-current-exclusion og --graduated-current-trust er to forskellige, indbyrdes udelukkende currentBias-varianter — vælg én.');
+  process.exit(1);
+}
 
 const scoreSitePath = path.join(UKWATER_REPO, 'server', 'risk', 'scoreSite.js');
 if (!fs.existsSync(scoreSitePath)) {
@@ -168,6 +187,48 @@ if (SOFTEN_CURRENT_EXCLUSION) {
     return Math.exp(-DECAY_LAMBDA * travelTimeHours);
   };
   console.log('--soften-current-exclusion: dot<=0 (downstream/transverse) nu isotropisk henfald i stedet for hård udelukkelse (0). Se filens header for det ene ændrede linje, citeret ordret fra den ægte kilde.');
+}
+
+if (GRADUATED_CURRENT_TRUST) {
+  const currentBiasPath = path.join(UKWATER_REPO, 'server', 'risk', 'currentBias.js');
+  const { distanceDecayFactor } = require(path.join(UKWATER_REPO, 'server', 'risk', 'distanceDecay.js'));
+  const { DECAY_LAMBDA } = require(path.join(UKWATER_REPO, 'server', 'risk', 'rainfallDecay.js'));
+  const currentBiasModule = require(currentBiasPath);
+  const COASTAL_TYPES = currentBiasModule.COASTAL_TYPES;
+  const ALWAYS_INCLUDE_DISTANCE_M = currentBiasModule.ALWAYS_INCLUDE_DISTANCE_M; // 500 — ramp start
+  const CMEMS_GRID_M = 7000; // ramp end — same real product resolution cited elsewhere (isolate-distance-effect.js, the doc's references)
+
+  function trustFactor(distanceM) {
+    if (distanceM <= ALWAYS_INCLUDE_DISTANCE_M) return 0;
+    if (distanceM >= CMEMS_GRID_M) return 1;
+    return (distanceM - ALWAYS_INCLUDE_DISTANCE_M) / (CMEMS_GRID_M - ALWAYS_INCLUDE_DISTANCE_M);
+  }
+
+  currentBiasModule.coastalContributionFactor = function graduatedCoastalContributionFactor(outletLonLat, siteLonLat, distanceM, currentVectorAtOutlet, waterBodyType) {
+    const isotropic = () => distanceDecayFactor(distanceM, waterBodyType);
+    if (!COASTAL_TYPES.has(waterBodyType)) return isotropic();
+
+    const speed = currentVectorAtOutlet ? Math.hypot(currentVectorAtOutlet.u, currentVectorAtOutlet.v) : 0;
+    if (!currentVectorAtOutlet || speed === 0) return isotropic(); // no data — graceful fallback, same as real code
+
+    const dLon = siteLonLat[0] - outletLonLat[0];
+    const dLat = siteLonLat[1] - outletLonLat[1];
+    const toSiteMag = Math.hypot(dLon, dLat);
+    if (toSiteMag === 0) return isotropic();
+
+    const dot = dLon * currentVectorAtOutlet.u + dLat * currentVectorAtOutlet.v;
+    let directionalValue;
+    if (dot > 0) {
+      const travelTimeHours = distanceM / speed / 3600;
+      directionalValue = Math.exp(-DECAY_LAMBDA * travelTimeHours);
+    } else {
+      directionalValue = 0; // current suggests downstream/transverse — same signal the real code uses, just not applied at full weight below the grid's own resolution
+    }
+
+    const trust = trustFactor(distanceM);
+    return trust * directionalValue + (1 - trust) * isotropic();
+  };
+  console.log(`--graduated-current-trust: dot<=0/dot>0-beslutningen vægtes nu 0-100% (lineær rampe ${ALWAYS_INCLUDE_DISTANCE_M}m-${CMEMS_GRID_M}m) i stedet for et hårdt spring ved ${ALWAYS_INCLUDE_DISTANCE_M}m. Identisk med den ægte kode under ${ALWAYS_INCLUDE_DISTANCE_M}m og over ${CMEMS_GRID_M}m.`);
 }
 
 const { scoreSite } = require(scoreSitePath);
@@ -524,7 +585,7 @@ async function main() {
     config: {
       ecoliThreshold: ECOLI_THRESHOLD, enterococciThreshold: ENTEROCOCCI_THRESHOLD,
       excellentEcoliThreshold: EXCELLENT_ECOLI_THRESHOLD, excellentEnterococciThreshold: EXCELLENT_ENTEROCOCCI_THRESHOLD,
-      flagThreshold: FLAG_THRESHOLD, softenCurrentExclusion: SOFTEN_CURRENT_EXCLUSION,
+      flagThreshold: FLAG_THRESHOLD, softenCurrentExclusion: SOFTEN_CURRENT_EXCLUSION, graduatedCurrentTrust: GRADUATED_CURRENT_TRUST,
       ukwaterRepo: UKWATER_REPO, medianLongTermSpillCount,
       note: 'Scored with the REAL, unmodified scoreSite() from krestenbersoe/ukwater — see this file\'s own header for exactly which cascade layers were exercised vs. gracefully degraded (no CMEMS current data, no flow-network data, live-EDM-status reconstructed from real event start/end timestamps).',
     },
