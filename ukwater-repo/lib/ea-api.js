@@ -33,12 +33,54 @@ const USER_AGENT = 'dkvand-ukwater-research/1.0 (bathing-water model validation 
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-// Retries on 429 (respecting Retry-After if the server sends one) and on
-// 5xx (transient gateway/server errors) with exponential backoff. Any
-// other non-OK status (400, 404, ...) is a real bug in the request, not a
+// A process-wide minimum gap between successive HTTP requests to the API,
+// enforced regardless of how many concurrent jobs are calling in — a
+// promise-chain gate, not a per-worker delay, so N concurrent callers
+// queue up and take turns rather than each independently pacing itself
+// (which would still let them burst together at t=0).
+//
+// NYT (bruger-rapporteret, reelt fund): en fuld kørsel mod den ægte API
+// (24 job, 4 samtidige forbindelser, INGEN pacing) kørte fint i ~44s, men
+// fejlede derefter midt i med "HTTP 403 — Microsoft-Azure-Application-
+// Gateway/v2" — dvs. IKKE en fejl i selve forespørgslen (alle tidligere
+// og senere identiske forespørgsler mod samme slags data virkede), men et
+// gateway/WAF-niveau der reagerer på vedvarende forespørgselsrate, ikke
+// et enkelt burst. Håndteret to steder: denne throttle (reducerer raten
+// FØR den rammer grænsen) og RETRYABLE_403_MARKER nedenfor (falder
+// tilbage med backoff HVIS den alligevel rammes).
+let requestGateChain = Promise.resolve();
+let lastRequestAtMs = 0;
+const MIN_REQUEST_GAP_MS = 300;
+function throttleSlot() {
+  const slot = requestGateChain.then(async () => {
+    const waitMs = Math.max(0, lastRequestAtMs + MIN_REQUEST_GAP_MS - Date.now());
+    if (waitMs > 0) await sleep(waitMs);
+    lastRequestAtMs = Date.now();
+  });
+  requestGateChain = slot.catch(() => {}); // never let one failed wait poison the chain for later callers
+  return slot;
+}
+
+// A 403 with an HTML body naming "Microsoft-Azure-Application-Gateway" is
+// the gateway/WAF's OWN block page, not the API's — every genuine 4xx this
+// API itself returns (confirmed during development: 400s for bad
+// parameters) comes back as JSON {"detail": "..."}. Distinguishing the two
+// matters: retrying a genuine access-denied forever would just waste time,
+// but this gateway block is exactly the transient, rate-triggered kind
+// retrying (with the throttle above ALSO now slowing the request rate
+// that triggered it) is meant for.
+function looksLikeGatewayBlockPage(body) {
+  return /Microsoft-Azure-Application-Gateway/i.test(body);
+}
+
+// Retries on 429 (respecting Retry-After if the server sends one), on 5xx
+// (transient gateway/server errors), and on the specific gateway-WAF 403
+// page above, all with exponential backoff. Any other non-OK status (400,
+//404, a genuine JSON-bodied 403, ...) is a real bug in the request, not a
 // transient condition — thrown immediately, same principle as
 // scripts/lib/badevand-backtest-utils.js's fetchArchive().
 async function fetchWithRetry(url, options = {}, attempt = 0) {
+  await throttleSlot();
   const res = await fetch(url, {
     ...options,
     headers: { 'User-Agent': USER_AGENT, ...(options.headers || {}) },
@@ -49,6 +91,15 @@ async function fetchWithRetry(url, options = {}, attempt = 0) {
     const waitMs = Number.isFinite(retryAfterSec) && retryAfterSec > 0 ? retryAfterSec * 1000 : 2000 * 2 ** attempt;
     await sleep(waitMs);
     return fetchWithRetry(url, options, attempt + 1);
+  }
+  if (res.status === 403) {
+    const body = await res.text().catch(() => '');
+    if (looksLikeGatewayBlockPage(body)) {
+      if (attempt >= 6) throw new Error(`${url}: HTTP 403 (gateway block, gave up after ${attempt} retries) — ${body.slice(0, 200)}`);
+      await sleep(3000 * 2 ** attempt);
+      return fetchWithRetry(url, options, attempt + 1);
+    }
+    throw new Error(`${url}: HTTP 403 ${res.statusText} — ${body.slice(0, 300)}`);
   }
   if (res.status >= 500) {
     if (attempt >= 4) throw new Error(`${url}: HTTP ${res.status} — gave up after ${attempt} retries`);

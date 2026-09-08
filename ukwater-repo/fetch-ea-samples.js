@@ -80,6 +80,20 @@
 // and re-request each half from scratch (skip always 0), recursing down to
 // single-day windows if truly needed. Slower than pagination would be at
 // real sampling frequencies (which never come close to 2500 rows/day for a
+//
+// A THIRD failure mode, found on a real full-scale run (387,789-row
+// source file, 24 site-batch×year jobs, 4 concurrent): the gateway in
+// front of the API (Microsoft-Azure-Application-Gateway) started 403-ing
+// requests partway through — not immediately, only after a sustained
+// burst of ~9-17 requests across ~44-80s, and only ever with an HTML body
+// naming the gateway, never the API's own JSON {"detail":...} error shape
+// used for every genuine 4xx seen during development. Read as rate/WAF
+// throttling, not a real access-denial. Fixed in lib/ea-api.js two ways:
+// a process-wide minimum gap between requests (throttleSlot(), enforced
+// regardless of CONCURRENCY — this is WHY concurrency doesn't need
+// lowering below its default despite this bug: the throttle, not the
+// worker count, now caps the actual request rate), and a backoff retry
+// specifically for that HTML-gateway-page 403 shape as a safety net.
 // 50-site batch) — but skip pagination is the one thing empirically proven
 // broken here, so this sidesteps it entirely rather than retrying into it.
 //
