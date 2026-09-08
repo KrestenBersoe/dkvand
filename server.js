@@ -127,6 +127,36 @@ const TILES_DIR = path.join(DATA_DIR, 'tiles');
 // flisefilen.
 const MAP_ASSETS_DIR = path.join(__dirname, 'map-assets');
 
+// RETTET (samme cache-mønster/risiko som getTilesVersion() nedenfor, men
+// for sprite/fonts): disse filer deployes med git/Docker-imaget og kan
+// derfor ændre INDHOLD ved enhver ny deploy, men blev serveret på nøjagtig
+// samme immutable/30d URL uanset — et allerede cachet style.json ville
+// blive ved med at pege browseren på et sprite-billede/glyffer, der ikke
+// længere matcher stilens øvrige indhold efter en deploy. Sat én gang ved
+// opstart (ny container/deploy = ny værdi) og indsat som sti-præfiks for
+// sprite/glyphs-URL'erne i GET /map-assets/style.json nedenfor.
+const MAP_ASSETS_VERSION = String(Date.now());
+
+// RETTET (kort-fliser blev usynlige efter en manuel coverage.pmtiles-
+// genupload — se GET /map-assets/style.json nedenfor): /tiles/coverage.
+// pmtiles serveres med immutable/30d cache (nødvendigt, filen er 5,5 GB og
+// hentes i mange små Range-requests), men FILNAVNET ændres ikke ved en
+// genupload. Klienter/CDN'en der allerede havde cachet byte-ranges fra den
+// GAMLE fil blandede dem derfor sammen med den NYE fils indholdsfortegnelse
+// — pmtiles-læseren fejlfortolker offsets, og hele baggrundskortet
+// forsvinder (markørerne, som hentes via egne JSON-endpoints, er upåvirket
+// — nøjagtig det mønster brugeren observerede). Løsning: URL'en til
+// fliserne skal ændre sig, når filen gør — her via filens egen mtime,
+// automatisk opdateret ved hver "fly ssh sftp put", ingen ændring af
+// upload-arbejdsgangen nødvendig.
+function getTilesVersion() {
+  try {
+    return String(Math.floor(fs.statSync(path.join(TILES_DIR, 'coverage.pmtiles')).mtimeMs));
+  } catch (_) {
+    return '0';   // filen findes endnu ikke (lokal udvikling) — stadig en gyldig, stabil version
+  }
+}
+
 // ── VAPID configuration ─────────────────────────────────────────────────────
 // Set these as environment variables on Fly.io:
 //   fly secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=...
@@ -5788,9 +5818,36 @@ app.get('/api/health', (req, res) => {
 // navngivne rute.
 app.use('/tiles', express.static(TILES_DIR, { maxAge: '30d', immutable: true }));
 
-// Stil/skrifttyper/sprite til samme kortløsning — se MAP_ASSETS_DIR ovenfor.
-// Samme placering-før-allowlisten-begrundelse: .pbf (skrifttype-glyffer)
-// er bevidst IKKE i PUBLIC_STATIC_EXTENSIONS.
+// GET /map-assets/style.json — serveret dynamisk (FØR express.static
+// nedenfor, som ellers ville fange den) for at kunne indsætte den aktuelle
+// tiles-version (se getTilesVersion() ovenfor) i pmtiles-kildens URL. Selve
+// stil-dokumentet ændres kun ved en git-deploy, så det indlæses og
+// parses én gang — kun versions-strengen genberegnes pr. request (ét
+// billigt fs.statSync-kald).
+const mapStyleTemplate = JSON.parse(fs.readFileSync(path.join(MAP_ASSETS_DIR, 'style.json'), 'utf8'));
+app.get('/map-assets/style.json', (req, res) => {
+  const style = JSON.parse(JSON.stringify(mapStyleTemplate));
+  style.sources.openmaptiles.url = `pmtiles:///tiles/coverage.pmtiles?v=${getTilesVersion()}`;
+  // Sti-præfikset (MAP_ASSETS_VERSION) gør URL'erne unikke pr. deploy — selve
+  // filstien efter præfikset er uændret, se den versionerede static-rute
+  // nedenfor, som ignorerer præfiks-værdien og altid server fra MAP_ASSETS_DIR.
+  style.sprite = `/map-assets/${MAP_ASSETS_VERSION}/sprite/sprite`;
+  style.glyphs = `/map-assets/${MAP_ASSETS_VERSION}/fonts/{fontstack}/{range}.pbf`;
+  res.set('Cache-Control', 'no-cache, no-transform');
+  res.json(style);
+});
+
+// Skrifttyper/sprite til samme kortløsning — se MAP_ASSETS_DIR/
+// MAP_ASSETS_VERSION ovenfor. Versioneret rute FØRST: matcher ethvert
+// sti-præfiks (fx /map-assets/1736345678901/…, sat af style.json ovenfor)
+// og server uændret fra MAP_ASSETS_DIR — værdien af selve præfikset bruges
+// aldrig, den findes udelukkende for at gøre URL'en unik pr. deploy.
+// Den U-versionerede rute derefter bevares for allerede cachede style.json-
+// dokumenter (fra før denne rettelse), der stadig peger på de gamle,
+// præfiks-løse sti'er.
+// Samme placering-før-allowlisten-begrundelse som /tiles ovenfor: .pbf
+// (skrifttype-glyffer) er bevidst IKKE i PUBLIC_STATIC_EXTENSIONS.
+app.use('/map-assets/:mapAssetsVersion', express.static(MAP_ASSETS_DIR, { maxAge: '30d', immutable: true }));
 app.use('/map-assets', express.static(MAP_ASSETS_DIR, { maxAge: '30d', immutable: true }));
 
 const BLOCKED_STATIC_PATH_PATTERNS = [
