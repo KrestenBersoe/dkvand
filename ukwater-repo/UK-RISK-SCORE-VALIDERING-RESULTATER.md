@@ -284,6 +284,22 @@ free: every rainfall-only row is numerically identical (Δ=0.000) between
 the two runs, as expected since that score field never touches the
 calibration file — confirms the two runs differed in nothing else.
 
+**How much better, in plain terms — depends which baseline you ask against:**
+
+- **vs. the original broken calibration**: AUC-PR +0.009 (~9% relative,
+  combined) to +0.014 (~14% relative, bacterial), recall +6.6 to +6.8
+  points, precision essentially flat.
+- **vs. no calibration at all** (the fairer question, since "no
+  calibration" was always a legitimate fallback, not a broken state):
+  AUC-PR +0.006, recall +2.7 points, precision flat.
+- **Keep this in proportion**: AUC-PR moved from ~0.10 to ~0.10–0.11 —
+  still a modest absolute number, not a transformed model. This is the
+  first calibration approach that measurably helps rather than hurts, not
+  evidence the model is now good. It's the smallest and most defensible
+  of the improvements found this session, not the biggest lever available
+  — that's still the open question of why the fuller cascade underperforms
+  rainfall alone at the Very High tier (see above).
+
 ## Suggestions for improvement
 
 Ranked by strength of evidence gathered this session, not by effort:
