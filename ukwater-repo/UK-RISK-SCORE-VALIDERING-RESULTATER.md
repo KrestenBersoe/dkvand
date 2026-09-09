@@ -371,6 +371,90 @@ pay for themselves once whatever is causing that residual gap is found
 and fixed; until then, shipping shrinkage calibration alone is the
 higher-AUC-PR choice on this dataset.
 
+## Alternative model: does a learned combiner beat the hand-designed cascade?
+
+Everything above tunes or fixes pieces of `scoreSite()`'s own hand-designed
+formula (MAX-of-outlets, saturating exponential, hard current exclusion).
+None of it ever fits weights against the real labels. This tests the
+obvious next question directly: given the exact same real ingredients
+`hazardScore()` already computes — decayed rainfall (bacterial and viral),
+each nearby outlet's own contribution/distance/baseline/live-status (top 5,
+real `allContributors`), plus raw current vectors independent of the
+cascade's own hard exclusion — does a model that LEARNS how to combine them
+beat the hand-picked MAX?
+
+**Method, leakage-safe throughout**: shrinkage-calibrated thresholds
+recomputed using only pre-2024 events (`--events-before 2024-01-01` —
+191/874 outlets had enough pre-2024 history to calibrate directly, fewer
+than the full-history 874 since EDM monitoring itself only starts
+Dec 2020); trained on samples before 2024-01-01 (n=12,522), tested only on
+2024+ samples never seen in training (n=4,333) — same split point this
+session's other holdout tests use. Two models: logistic regression (linear,
+a sanity check on whether the gain is really about tree flexibility) and
+XGBoost (gradient-boosted trees). Rule-based comparison scores
+(`ruleBasedScoreNoCurrents`, `ruleBasedScoreWithCurrents`,
+`ruleBasedRainfallOnly`) are the REAL `scoreSite()` output on the identical
+rows — not a different sample set.
+
+Combined score, either-determinand, test period only (2024-01-01 onward):
+
+| Model | AUC-PR | Lift | Precision @matched flag rate | Recall @matched flag rate |
+|---|---|---|---|---|
+| Rule-based, shrinkage calib., no currents (this doc's best config) | 0.088 | 1.54x | 9.6% | 39.4% |
+| Rule-based, with currents | 0.077 | 1.33x | 6.9% | 28.1% |
+| Rule-based, rainfall alone | 0.097 | 1.68x | 9.4% | 38.6% |
+| Logistic regression (same raw features) | 0.118 | 2.05x | 10.7% | 43.8% |
+| **XGBoost (same raw features)** | **0.122** | **2.12x** | **10.2%** | **41.8%** |
+
+("Matched flag rate" — the rule-based cascade's own >0.2 threshold flags
+23.5% of the test set; every model's own threshold is set to flag that same
+share, since a learned model's score isn't on the same 0-1 scale as the
+rule-based probability, so comparing at "score > 0.2" for both would compare
+different operating points, not a fair one.)
+
+**XGBoost beats the best rule-based config by +0.033 AUC-PR (~38%
+relative), logistic regression by +0.030 (~34%)** — bigger than every fix
+found earlier in this document, shrinkage calibration included (+0.006 to
++0.019). That even plain logistic regression clearly beats every rule-based
+variant says the gain isn't really about tree flexibility — it's that
+nobody had ever fit weights against the real labels before. Precision/
+recall gains at the matched flag rate are real but far more modest (+1
+point precision, +2–4 points recall) than the AUC-PR gap suggests — the
+learned models are better across the whole ranking, not dramatically better
+at this one operating point.
+
+**A real caveat this test surfaced, not swept under: 5-fold cross-validation
+on the training period alone overstates both models, XGBoost much more
+than logistic regression.** Train-CV AUC-PR: logistic regression
+0.163±0.018 (vs. 0.118 true holdout — a 0.045 gap), XGBoost 0.207±0.023 (vs.
+0.122 true holdout — a 0.085 gap). The holdout numbers in the table above
+are the trustworthy ones; anyone re-running this and only checking
+cross-validation would conclude the model is considerably better than it
+actually is on genuinely unseen data. This is exactly the kind of gap this
+session's own temporal-holdout discipline exists to catch.
+
+**Feature importance (XGBoost) partly corroborates an earlier finding**:
+rainfall (decayed mm, baseline probability, bacterial and viral) dominates
+as expected, followed by distance and isotropic-contribution features
+across multiple outlets. Notably, `f_top0_currentDot` — the raw current
+direction toward the site, computed independently of `currentBias.js`'s own
+hard exclusion — ranks in the top 15. That's a second, independent hint
+(alongside the softened-exclusion isolation test elsewhere in this
+document) that real usable signal exists in current direction which the
+hard `dot≤0 → 0` rule throws away entirely rather than discounting.
+
+**What this does and doesn't establish**: it establishes that a learned
+combiner beats the hand-designed cascade on this real, leakage-safe
+holdout — not a small or marginal result. It does NOT establish a
+production-ready alternative: this is a single train/test split (the CV
+numbers are a stability check on the training period only, not a
+substitute for repeated holdout evaluation), XGBoost's hyperparameters are
+reasonable defaults rather than tuned against a validation set, and the
+absolute lift (2.1x) is still well short of what a swim/no-swim decision
+would need (see this document's own gap estimate — roughly 3–5x precision
+at comparable recall). This is evidence the rule-based cascade's ceiling is
+lower than necessary, not evidence a deployable replacement exists yet.
+
 ## Suggestions for improvement
 
 Ranked by strength of evidence gathered this session, not by effort:
@@ -426,6 +510,19 @@ Ranked by strength of evidence gathered this session, not by effort:
    range across the board pre-shrinkage), fixing what's already in the
    cascade has shown a clearer, larger, more reliable return than any
    input added this session.
+7. **Investigate a learned combiner (XGBoost/logistic regression) as a
+   longer-term replacement for the hand-designed MAX-of-outlets cascade —
+   the single biggest AUC-PR gain found this session (+0.033, ~38%
+   relative, on a genuine temporal holdout), but not yet ready to ship.**
+   Same real per-outlet ingredients `hazardScore()` already computes, fed
+   to a model that learns its own combination instead of being told MAX.
+   Bigger than every rule-based fix above, and feature importance points at
+   the same current-exclusion signal loss item 2 already targets — but this
+   is one split, untuned hyperparameters, and cross-validation on the
+   training period alone was shown to substantially overstate it (a real,
+   measured gap, not a hypothetical risk). Worth a proper multi-split /
+   nested-CV evaluation before treating the headline number as final. See
+   "Alternative model" above for the full numbers and caveats.
 
 ## What's still untested or unresolved
 
