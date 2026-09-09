@@ -516,6 +516,38 @@ precision at comparable recall). This is evidence the rule-based cascade's
 ceiling is lower than necessary, not evidence a deployable replacement
 exists yet.
 
+**Tested and NOT supported on this dataset: hour-of-day as a feature —
+motivated by real published evidence, but the dataset itself can't test
+it.** Wyer et al. 2018 (*Water Research X* 1:100006, Swansea Bay,
+half-hourly sampling, n=1,303) found FIO concentrations at a UK bathing
+water swing by a mean of 1 log10 order within a single day (largest cases
+>2 log10) on a diurnal cycle independent of rainfall (their own bivariate
+regression: r²=0.106 for E. coli, r²=0.000/p=0.755 for enterococci — no
+relationship at all). Adding sin/cos-encoded hour-of-day (from the
+existing `tsMs` field, no new data needed) to the alt-model's feature set
+made logistic regression WORSE on both holdouts (0.118→0.111, 0.088→0.082)
+and did nothing for XGBoost (+0.0003, +0.0008 — noise on both). Checked
+why rather than left as an unexplained null: **85% of all 16,855 samples
+in this dataset were collected between 10:00–13:00 UTC, standard deviation
+of sample hour is 1.6 hours** — nothing like Wyer et al.'s deliberate
+07:00–19:00 half-hourly design. There's essentially no within-day timing
+variation for a model to learn from here, so this result doesn't
+contradict the paper — it means this dataset structurally can't test its
+claim.
+
+**A sharper, more concerning question falls out of that same fact, unresolved**:
+10:00–13:00 UTC is 11:00–14:00 local during the (BST) bathing season —
+close to the low-concentration trough Wyer et al. reported (their low
+period was roughly 11:00–16:00 GMT). If UK regulatory sampling schedules
+systematically cluster in that window — plausible on its own, a normal
+working-hours sampling round would land here regardless of any deliberate
+choice — every label in this dataset could be systematically biased toward
+under-ascertaining pollution, not just noisily scattered around the true
+value. That's a different, more serious problem than ordinary label noise,
+and this dataset has no way to check it: it would need repeated same-day
+sampling at varied hours (like Swansea Bay's own study design), which
+doesn't exist here.
+
 ## Suggestions for improvement
 
 Ranked by strength of evidence gathered this session, not by effort:
@@ -600,6 +632,18 @@ Ranked by strength of evidence gathered this session, not by effort:
 
 ## What's still untested or unresolved
 
+- **Possible systematic (not random) bias in every label in this dataset,
+  toward under-ascertaining pollution — unresolved, no data available to
+  check it.** 85% of all 16,855 samples were collected 10:00–13:00 UTC
+  (11:00–14:00 local in the BST bathing season), close to the daily
+  low-concentration trough a real published study found at a UK bathing
+  water (Wyer et al. 2018 — see "Alternative model" above and References).
+  If regulatory sampling schedules generally land in that window — a
+  plausible consequence of ordinary working-hours sampling rounds, not
+  necessarily a deliberate choice — every "clean" label in this dataset
+  could be systematically undercounting real risk, not just noisily
+  scattered around it. Would need repeated same-day sampling at varied
+  hours to check, which this dataset doesn't have.
 - **The calibration curve was only computed for the baseline variant.**
   Whether the "signal only in the top ~30%" shape holds, sharpens, or
   flattens further under real calibration/currents is unknown.
@@ -668,6 +712,7 @@ Ranked by strength of evidence gathered this session, not by effort:
 - [Open-Meteo Historical Weather API](https://archive-api.open-meteo.com/v1/archive) — source of all real hourly rainfall.
 - [CMEMS NWSHELF_MULTIYEAR_PHY_004_009](https://data.marine.copernicus.eu/product/NWSHELF_MULTIYEAR_PHY_004_009) (`cmems_mod_nws_phy-uv_my_7km-3D_P1D-m`) — source of all real historical current data, confirmed live via `copernicusmarine describe` before use, not guessed.
 - [krestenbersoe/ukwater](https://github.com/KrestenBersoe/ukwater) — the real product repository; `server/risk/scoreSite.js` and its sibling modules (`rainfallDecay.js`, `baselineProbability.js`, `liveOverride.js`, `currentBias.js`, `distanceDecay.js`, `flowDecay.js`, `staticFrequencyBaseline.js`) are the exact, unmodified code scored throughout; `pipeline/14-compute-outlet-thresholds.js`'s real functions were used to derive the calibrated thresholds.
+- Wyer, M.D., Kay, D., Morgan, H., Naylor, S., Clark, S., Watkins, J., Davies, C.M., Francis, C., Osborn, H., Bennett, S. (2018). [Within-day variability in microbial concentrations at a UK designated bathing water: Implications for regulatory monitoring and the application of predictive modelling based on historical compliance data](https://doi.org/10.1016/j.wroa.2018.10.003). *Water Research X*, 1, 100006 — source of the diurnal-variability/single-spot-sample findings discussed above.
 
 ## Bottom line
 
