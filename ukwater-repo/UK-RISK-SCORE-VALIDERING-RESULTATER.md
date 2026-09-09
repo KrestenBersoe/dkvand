@@ -230,27 +230,81 @@ Two findings worth acting on:
   **without** damaging this tier (17.3–17.7% vs. the real code's 18.0% —
   a rounding-level difference, not a regression).
 
+## Shrinkage calibration: a genuinely-learned per-outlet threshold
+
+The original tier-1 calibration (`pipeline/14`'s `deriveThresholdForOutlet`)
+never actually learns anything from EDM data — it picks whichever rainfall
+peak makes an outlet's annual event *count* come out right, without ever
+checking what rainfall level actually preceded any real event. Two outlets
+with the same event count get calibrated identically regardless of whether
+one reliably spills at 4mm and the other only at 20mm.
+
+`compute-outlet-thresholds-shrinkage.js` fixes this: for each outlet, it
+reads the real decayed rainfall accumulation *at each genuine event's own
+start timestamp* (using the real `accumulateDecayed()`), and uses the
+median of those values as an empirical per-outlet estimate — shrunk toward
+a k-nearest-neighbor-borrowed prior in proportion to how much real data
+exists (`threshold = (nOwn×ownMedian + PSEUDO_COUNT×neighborValue) / (nOwn+PSEUDO_COUNT)`,
+so a single event pulls the estimate partway toward itself, not all the
+way — no hard "enough events" cutoff, same graduated-not-stepped principle
+as the current-bias fixes). `edm-outlet-coverage-stats.js` showed this had
+real data to work with: 76.1% of outlets (665/874) have 10+ genuine events,
+plenty for a real empirical median, not just a count.
+
+Result — full backtest, currents off both times, combined score, either-
+determinand, overall:
+
+| Variant | AUC-PR | Precision @0.2 | Recall @0.2 |
+|---|---|---|---|
+| No calibration (tier 2 heuristic) | 0.098 | 10.0% | 43.2% |
+| Old calibration (count-matched) | 0.095 | 11.1% | 39.3% |
+| **Shrinkage calibration (event-onset)** | **0.104** | 10.0% | 45.9% |
+
+Bacterial sub-score shows the same pattern, more strongly: 0.108 (no
+calibration) → 0.100 (old calibration, worse) → **0.114** (shrinkage,
+best of all three, and the best AUC-PR recorded anywhere in this
+document). Unlike the sigmoid fix, this isn't a precision/recall trade —
+recall improves substantially (+6.6 points combined, +6.8 bacterial vs.
+old calibration) while precision moves only slightly (within ±1 point).
+This is the single strongest, cleanest improvement found this session.
+
+**Known limitation, not yet resolved**: no temporal holdout. Like the
+original calibration, this uses an outlet's full event history to derive
+its threshold, then a full-history backtest evaluates it against
+overlapping years — the EDM event log itself only spans ~5.7 years
+(Dec 2020 – Sep 2026, per `edm-outlet-coverage-stats.js`), so there's
+limited room for a real train/test split, but this result hasn't been
+checked against one. Should be resolved before treating this AUC-PR gain
+as fully trustworthy rather than an upper bound.
+
 ## Suggestions for improvement
 
 Ranked by strength of evidence gathered this session, not by effort:
 
-1. **Ship the current-bias exclusion fix (soften or graduated) — the most
-   evidence-backed change here.** Recovers ~80% of the AUC-PR and ~72% of
-   the recall that real currents otherwise cost, verified at full scale,
-   and doesn't hurt the Very High tier (unlike the sigmoid change). Between
-   the two: `graduated-current-trust` edges out `soften-exclusion` slightly
-   and is closer to the real code's own logic outside the 500m–7km band,
-   but the difference is small (~0.001 AUC-PR) against real added
-   complexity — soften-exclusion is the simpler, easier-to-defend default
-   unless a future test shows the 500m–7km band specifically mattering.
-2. **Do not ship the sigmoid probability-curve change as tested.** It
+1. **Adopt shrinkage calibration (event-onset rainfall + graduated blend) —
+   now the single best-evidenced change in this document.** +0.009 to
+   +0.014 AUC-PR over the old count-matched method across every
+   scoreField/labelType combo, recall up substantially, precision roughly
+   flat. Resolve the temporal-holdout gap above first — this result is a
+   plausible upper bound until validated against a real held-out period,
+   not yet a confirmed generalizing improvement.
+2. **Ship the current-bias exclusion fix (soften or graduated).** Recovers
+   ~80% of the AUC-PR and ~72% of the recall that real currents otherwise
+   cost, verified at full scale, and doesn't hurt the Very High tier
+   (unlike the sigmoid change). Between the two: `graduated-current-trust`
+   edges out `soften-exclusion` slightly and is closer to the real code's
+   own logic outside the 500m–7km band, but the difference is small
+   (~0.001 AUC-PR) against real added complexity — soften-exclusion is the
+   simpler, easier-to-defend default unless a future test shows the
+   500m–7km band specifically mattering.
+3. **Do not ship the sigmoid probability-curve change as tested.** It
    trades recall for precision at 0.2 and does the reverse at 0.8 — net
    roughly a wash on AUC-PR, but actively worse at the tier that matters
    most for public trust. If a shape change is still worth pursuing, it
    needs its own multi-threshold validation (this document's own
    extract-veryhigh-precision.js / sweep-sigmoid-steepness.js pattern),
    not a single-threshold check.
-3. **Investigate why the fuller cascade underperforms rainfall alone at
+4. **Investigate why the fuller cascade underperforms rainfall alone at
    Very High**, not just that it does. A plausible next step: check
    whether live-status/distance/current contributions are amplifying
    scores multiplicatively near the top of the range (pushing already-high
@@ -258,18 +312,19 @@ Ranked by strength of evidence gathered this session, not by effort:
    decayFactor)`) rather than adding independent signal — that would
    directly explain "more flags, not more correct flags" without needing a
    new hypothesis.
-4. **Document or derive real justification for RISK_BANDS' 0.2/0.5/0.8
+5. **Document or derive real justification for RISK_BANDS' 0.2/0.5/0.8
    boundaries.** Already flagged as unsourced (see below), but the sigmoid
    result makes this more urgent, not less: this session just demonstrated
    that a change validated at one boundary can silently move the others in
    the wrong direction, which is a real risk for a set of thresholds with
    no documented rationale to check changes against.
-5. **Prioritize this over new input sources.** Given calibration and
-   currents both reduced AUC-PR before their respective fixes, and neither
-   the raw EDM field nor any tested risk-score variant achieves a
-   convincing AUC-PR advantage over the other (0.106–0.115 range across the
-   board), fixing what's already in the cascade has shown a clearer,
-   larger, more reliable return than any input added this session.
+6. **Prioritize the above over new input sources.** Given the old
+   calibration and currents both reduced AUC-PR before their respective
+   fixes, and neither the raw EDM field nor any tested risk-score variant
+   achieves a convincing AUC-PR advantage over the other (0.106–0.115
+   range across the board pre-shrinkage), fixing what's already in the
+   cascade has shown a clearer, larger, more reliable return than any
+   input added this session.
 
 ## What's still untested or unresolved
 
