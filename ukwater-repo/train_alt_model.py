@@ -19,18 +19,23 @@
 # ═══════════════════════════════════════════════════════════════════════════
 import argparse
 import json
+import time
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import average_precision_score, precision_recall_curve
-from sklearn.model_selection import StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_val_score, TimeSeriesSplit, RandomizedSearchCV
+from scipy.stats import randint, uniform, loguniform
 import xgboost as xgb
 
 p = argparse.ArgumentParser()
 p.add_argument('--features', default='output/ml-features.ndjson')
 p.add_argument('--split-date', default='2024-01-01')
 p.add_argument('--label', default='eitherExceeds')
+p.add_argument('--tune', action='store_true', help='Nested-CV hyperparameter search for XGBoost (inner loop, training period only) before the final holdout evaluation.')
+p.add_argument('--tune-iter', type=int, default=60, help='Candidate configurations sampled by RandomizedSearchCV.')
+p.add_argument('--tune-splits', type=int, default=4, help='Time-ordered inner CV folds (TimeSeriesSplit) within the training period.')
 args = p.parse_args()
 
 SPLIT_MS = pd.Timestamp(args.split_date, tz='UTC').value // 10**6
@@ -138,16 +143,54 @@ evaluate('logistic_regression', logreg.predict_proba(X_test_s)[:, 1],
 
 print("\n=== XGBoost gradient-boosted trees (same raw features, learned combination) ===")
 pos_weight = (len(y_train) - y_train.sum()) / max(1, y_train.sum())
-xgb_model = xgb.XGBClassifier(
-    n_estimators=300, max_depth=4, learning_rate=0.05,
-    subsample=0.8, colsample_bytree=0.8,
-    scale_pos_weight=pos_weight, eval_metric='aucpr', random_state=42,
-)
-xgb_model.fit(X_train, y_train)
-evaluate('xgboost', xgb_model.predict_proba(X_test)[:, 1],
-          cv_estimator=xgb.XGBClassifier(n_estimators=300, max_depth=4, learning_rate=0.05,
-                                          subsample=0.8, colsample_bytree=0.8,
-                                          scale_pos_weight=pos_weight, eval_metric='aucpr', random_state=42),
+DEFAULT_XGB_PARAMS = dict(n_estimators=300, max_depth=4, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8)
+
+if args.tune:
+    # Nested CV, adapted to this dataset's one real constraint: the
+    # shrinkage-calibrated thresholds baked into these features were
+    # computed from ONLY pre-2024 events (compute-outlet-thresholds-
+    # shrinkage.js --events-before 2024-01-01) — the one split point where
+    # that's guaranteed leakage-free. A second, independently-shuffled
+    # OUTER CV loop reaching further back into the training period would
+    # silently let some inner folds' "test" rows sit chronologically BEFORE
+    # calibration data their own training rows already reflect. So the
+    # outer evaluation stays the single genuine 2024-01-01 holdout already
+    # used throughout this document; nesting happens on the INNER loop
+    # only — TimeSeriesSplit (time-ordered, never shuffled) restricted to
+    # the training period, used purely to select hyperparameters. The test
+    # set is touched exactly once, after the search, for the final number.
+    train_order = np.argsort(df.loc[train_mask, 'tsMs'].values)
+    X_train_sorted = X_train.iloc[train_order].reset_index(drop=True)
+    y_train_sorted = y_train.iloc[train_order].reset_index(drop=True)
+
+    param_dist = {
+        'n_estimators': randint(100, 600),
+        'max_depth': randint(2, 7),
+        'learning_rate': loguniform(0.01, 0.3),
+        'subsample': uniform(0.6, 0.4),
+        'colsample_bytree': uniform(0.5, 0.5),
+        'min_child_weight': randint(1, 10),
+        'reg_alpha': loguniform(1e-3, 10),
+        'reg_lambda': loguniform(1e-3, 10),
+    }
+    base_estimator = xgb.XGBClassifier(scale_pos_weight=pos_weight, eval_metric='aucpr', random_state=42, n_jobs=-1)
+    inner_cv = TimeSeriesSplit(n_splits=args.tune_splits)
+    search = RandomizedSearchCV(base_estimator, param_dist, n_iter=args.tune_iter, scoring='average_precision',
+                                  cv=inner_cv, random_state=42, n_jobs=-1, verbose=1, refit=True)
+    print(f"Nested CV: {args.tune_iter} candidate configs x {args.tune_splits} time-ordered inner folds on the {len(X_train_sorted):,}-row training period only (test set untouched)...")
+    t_tune0 = time.time()
+    search.fit(X_train_sorted, y_train_sorted)
+    print(f"Search done in {time.time()-t_tune0:.0f}s. Best inner-CV AUC-PR: {search.best_score_:.4f}")
+    print(f"Best params: {search.best_params_}")
+    xgb_model = search.best_estimator_
+    final_params = search.best_params_
+else:
+    xgb_model = xgb.XGBClassifier(**DEFAULT_XGB_PARAMS, scale_pos_weight=pos_weight, eval_metric='aucpr', random_state=42)
+    xgb_model.fit(X_train, y_train)
+    final_params = DEFAULT_XGB_PARAMS
+
+evaluate('xgboost_tuned' if args.tune else 'xgboost', xgb_model.predict_proba(X_test)[:, 1],
+          cv_estimator=xgb.XGBClassifier(**final_params, scale_pos_weight=pos_weight, eval_metric='aucpr', random_state=42),
           cv_X=X_train)
 
 print("\n=== Feature importance (XGBoost, top 15) ===")
@@ -161,7 +204,10 @@ for name, r in results.items():
     diff = r['aucPr'] - base
     print(f"  {name:32s} AUC-PR={r['aucPr']:.4f}  ({'+' if diff>=0 else ''}{diff:.4f} vs. shrinkage-only rule baseline)")
 
-with open('output/alt-model-results.json', 'w') as f:
+out_name = 'output/alt-model-results-tuned.json' if args.tune else 'output/alt-model-results.json'
+with open(out_name, 'w') as f:
     json.dump({'splitDate': args.split_date, 'label': args.label, 'featureCols': feature_cols,
-               'nTrain': int(train_mask.sum()), 'nTest': int(test_mask.sum()), 'results': results}, f, indent=2)
-print("\nWrote output/alt-model-results.json")
+               'nTrain': int(train_mask.sum()), 'nTest': int(test_mask.sum()), 'results': results,
+               'tuned': args.tune, 'xgbParams': final_params,
+               'tuneInnerCvAucPr': float(search.best_score_) if args.tune else None}, f, indent=2)
+print(f"\nWrote {out_name}")
