@@ -78,6 +78,14 @@ const HISTORY_PATH = path.resolve(argVal('--history', path.join(DIR, 'outlet-rai
 const OUT_PATH = path.resolve(argVal('--out', path.join(DIR, 'outlet-calibrated-thresholds-shrinkage.json')));
 const UKWATER_REPO = path.resolve(argVal('--ukwater-repo', '/home/user/ukwater'));
 const PSEUDO_COUNT = parseFloat(argVal('--pseudo-count', '3'));
+// Temporal holdout support: only events strictly BEFORE this date inform
+// calibration. Pair with validate-uk-risk-score.js's own --samples-after
+// (same cutoff, or later) to test whether this calibration generalizes to
+// a period it never saw, rather than evaluating on the same years it was
+// fit from. Without this flag, behavior is unchanged — every genuine event
+// is used, exactly as the original (non-holdout) run did.
+const EVENTS_BEFORE_ISO = argVal('--events-before', null);
+const EVENTS_BEFORE_MS = EVENTS_BEFORE_ISO ? Date.parse(EVENTS_BEFORE_ISO.endsWith('Z') ? EVENTS_BEFORE_ISO : `${EVENTS_BEFORE_ISO}Z`) : null;
 
 const pipeline14Path = path.join(UKWATER_REPO, 'pipeline', '14-compute-outlet-thresholds.js');
 const cellKeyPath = path.join(UKWATER_REPO, 'pipeline', '13-fetch-outlet-rainfall-history.js');
@@ -111,17 +119,19 @@ function median(values) {
 async function main() {
   console.log(`Læser ${EVENTS_PATH}...`);
   const outletEvents = new Map(); // outletId -> { lat, lon, startTsMsList }
-  let scanned = 0, badCoord = 0;
+  let scanned = 0, badCoord = 0, afterCutoff = 0;
   for await (const ev of ndjsonLines(EVENTS_PATH)) {
     scanned++;
     if (!ev.outfall) continue;
     if (!ev.genuine || ev.endedStatus !== 'Ended' || ev.startTsMs == null) continue; // same exclusion as validate-uk-risk-score.js/compute-outlet-thresholds.js — 'Ongoing' has no knowable true end
     if (!(ev.lat != null && ev.lng != null && ev.lat >= -90 && ev.lat <= 90 && ev.lng >= -180 && ev.lng <= 180)) { badCoord++; continue; } // same STAPLEFIELD-style bad-coordinate guard used elsewhere
+    if (EVENTS_BEFORE_MS != null && ev.startTsMs >= EVENTS_BEFORE_MS) { afterCutoff++; continue; } // holdout: this event is in the test period, calibration must not see it
     let o = outletEvents.get(ev.outfall);
     if (!o) { o = { lat: ev.lat, lon: ev.lng, startTsMsList: [] }; outletEvents.set(ev.outfall, o); }
     o.startTsMsList.push(ev.startTsMs);
   }
   console.log(`${scanned.toLocaleString('en')} rækker scannet, ${outletEvents.size} udløb med mindst én ægte, afsluttet hændelse og gyldige koordinater (${badCoord} rækker med ugyldige koordinater sprunget over).`);
+  if (EVENTS_BEFORE_MS != null) console.log(`--events-before ${EVENTS_BEFORE_ISO}: ${afterCutoff.toLocaleString('en')} hændelser på/efter cutoff udelukket fra kalibrering (holdout).`);
 
   console.log(`Læser ${HISTORY_PATH}...`);
   const history = JSON.parse(fs.readFileSync(HISTORY_PATH, 'utf8'));
@@ -201,7 +211,7 @@ async function main() {
   fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
   fs.writeFileSync(OUT_PATH, JSON.stringify({
     generatedAt: new Date().toISOString(),
-    config: { pseudoCount: PSEUDO_COUNT, decayLambda: DECAY_LAMBDA, method: 'event-onset-median-shrinkage' },
+    config: { pseudoCount: PSEUDO_COUNT, decayLambda: DECAY_LAMBDA, method: 'event-onset-median-shrinkage', eventsBefore: EVENTS_BEFORE_ISO },
     thresholds,
   }, null, 2), 'utf8');
   console.log(`Skrevet: ${OUT_PATH}`);

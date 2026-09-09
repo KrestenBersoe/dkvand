@@ -109,6 +109,14 @@ const ENTEROCOCCI_THRESHOLD = parseFloat(argVal('--enterococci-threshold', '185'
 // "the app's own real flag threshold, not an arbitrary one" convention
 // dkvand's Danish validation used for ITS real app's 0.2 threshold.
 const FLAG_THRESHOLD = parseFloat(argVal('--flag-threshold', '0.2'));
+// Temporal holdout support: restrict the SCORED/EVALUATED samples to a
+// period, so a calibration built only from events BEFORE that period
+// (compute-outlet-thresholds-shrinkage.js's own --events-before) can be
+// tested against a period it never saw. Without this flag, behavior is
+// unchanged — every sample is scored, exactly as every prior run this
+// session did.
+const SAMPLES_AFTER_ISO = argVal('--samples-after', null);
+const SAMPLES_AFTER_MS = SAMPLES_AFTER_ISO ? Date.parse(SAMPLES_AFTER_ISO.endsWith('Z') ? SAMPLES_AFTER_ISO : `${SAMPLES_AFTER_ISO}Z`) : null;
 // Isolates ONE internal rule inside the real currentBias.js, not the whole
 // currents module — the "currents on/off" isolation runs already done
 // (--currents pointing at a nonexistent path) test whether real current
@@ -445,8 +453,14 @@ async function main() {
   }
 
   console.log(`Læser ${SAMPLES_PATH} og bygger etiketter...`);
-  const sampleEvents = await buildLabeledSampleEvents(SAMPLES_PATH, siteByNotation, ECOLI_THRESHOLD, ENTEROCOCCI_THRESHOLD,
+  let sampleEvents = await buildLabeledSampleEvents(SAMPLES_PATH, siteByNotation, ECOLI_THRESHOLD, ENTEROCOCCI_THRESHOLD,
     (scanned, grouped) => console.log(`${scanned.toLocaleString('en')} observationsrækker scannet, ${grouped.toLocaleString('en')} prøver indgår.`));
+
+  if (SAMPLES_AFTER_MS != null) {
+    const before = sampleEvents.length;
+    sampleEvents = sampleEvents.filter((s) => s.tsMs != null && s.tsMs >= SAMPLES_AFTER_MS);
+    console.log(`--samples-after ${SAMPLES_AFTER_ISO}: ${sampleEvents.length.toLocaleString('en')}/${before.toLocaleString('en')} prøver beholdt (holdout-periode — testperiode kalibreringen ikke har set).`);
+  }
 
   // NYT: fremskridtslinje hver 1.000 prøve. Hver scoreSite()-kald scanner
   // sin stations FULDE flertidige regn-array to gange (bakteriel + viral
@@ -622,6 +636,7 @@ async function main() {
       excellentEcoliThreshold: EXCELLENT_ECOLI_THRESHOLD, excellentEnterococciThreshold: EXCELLENT_ENTEROCOCCI_THRESHOLD,
       flagThreshold: FLAG_THRESHOLD, softenCurrentExclusion: SOFTEN_CURRENT_EXCLUSION, graduatedCurrentTrust: GRADUATED_CURRENT_TRUST,
       sigmoidBaselineProbability: SIGMOID_BASELINE_PROBABILITY, sigmoidSteepness: SIGMOID_BASELINE_PROBABILITY ? SIGMOID_STEEPNESS : null,
+      samplesAfter: SAMPLES_AFTER_ISO,
       ukwaterRepo: UKWATER_REPO, medianLongTermSpillCount,
       note: 'Scored with the REAL, unmodified scoreSite() from krestenbersoe/ukwater — see this file\'s own header for exactly which cascade layers were exercised vs. gracefully degraded (no CMEMS current data, no flow-network data, live-EDM-status reconstructed from real event start/end timestamps).',
     },
