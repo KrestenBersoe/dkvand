@@ -49,6 +49,26 @@ print(f"Loaded {len(df):,} rows from {args.features}")
 
 df = df[df[args.label].notna()].copy()
 y = df[args.label].astype(int)
+
+# Hour-of-day features — motivated by Wyer et al. 2018 (Water Research X
+# 1:100006): half-hourly sampling at a UK bathing water found FIO
+# concentrations swing by a mean of 1 log10 order within a single day
+# (largest cases >2 log10), on a diurnal cycle (high early morning, low
+# early-mid afternoon) that was INDEPENDENT of antecedent rainfall (their
+# own bivariate regression: r^2=0.106 for E. coli, r^2=0.000/p=0.755 for
+# enterococci). Nothing in this model currently has a time-of-day term —
+# sin/cos encoding (not raw hour, which would wrongly treat 23:00 and 00:00
+# as far apart) tests whether that pattern is present and learnable here.
+# Caveat: `tsMs` is parsed as UTC throughout this pipeline (matches how
+# Open-Meteo rainfall is fetched — timezone=UTC, see rainfallDecay.js's own
+# comment), not local UK clock time — during British Summer Time (roughly
+# late Mar-late Oct, i.e. most of the bathing season) that's parsed ONE
+# HOUR EARLIER than the sampler's actual local clock time. Not corrected
+# here; a real source of smearing in this feature specifically, unlike
+# every other feature in this table.
+_hour_frac = (pd.to_datetime(df['tsMs'], unit='ms').dt.hour + pd.to_datetime(df['tsMs'], unit='ms').dt.minute / 60.0)
+df['f_hourSin'] = np.sin(2 * np.pi * _hour_frac / 24.0)
+df['f_hourCos'] = np.cos(2 * np.pi * _hour_frac / 24.0)
 print(f"{len(df):,} rows with a real '{args.label}' label, base rate {y.mean()*100:.1f}%")
 
 feature_cols = [c for c in df.columns if c.startswith('f_')]
