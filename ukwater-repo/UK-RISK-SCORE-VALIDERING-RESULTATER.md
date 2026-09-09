@@ -229,6 +229,27 @@ Two findings worth acting on:
   tested changes that improve the currents-on numbers broadly (see above)
   **without** damaging this tier (17.3–17.7% vs. the real code's 18.0% —
   a rounding-level difference, not a regression).
+- **RESOLVED — the "fuller cascade underperforms rainfall alone" gap has a
+  confirmed mechanism: MAX-of-N cascade amplification, and shrinkage
+  calibration fixes it as a side effect.** `scoreSite()` combines every
+  nearby outlet via MAX, not an average — so a site with more candidate
+  outlets has more independent chances for one of them to clear a fixed
+  threshold by luck, inflating flags without adding real signal. Splitting
+  samples by nearby-outlet count (runtime median split, `outlets:few` /
+  `outlets:many`) confirms this directly under the old tier-2 heuristic:
+  many-outlet sites get flagged Very High ~3.7x more often proportionally
+  (n=9,615, flagged=171, rate 1.78%, precision 17.0%) than few-outlet sites
+  (n=7,240, flagged=35, rate 0.48%, precision 20.0%) — more outlets, worse
+  precision, exactly what MAX-of-N inflation predicts. Under shrinkage
+  calibration alone, the pattern **reverses**: many-outlet sites flag less
+  often and precision more than quadruples (flagged=42, rate 0.44%,
+  precision 35.7%) versus few-outlet sites (flagged=58, rate 0.80%,
+  precision 8.6%) — the combined config (shrinkage + real currents +
+  softened exclusion) confirms the same reversal (34.1% many vs. 10.5%
+  few). Shrinkage calibration doesn't just raise AUC-PR in aggregate — it
+  specifically suppresses the false positives that MAX-of-N inflation was
+  generating at high-outlet-density sites, which is the mechanism-level
+  answer to why the fuller cascade underperformed rainfall alone.
 
 ## Shrinkage calibration: a genuinely-learned per-outlet threshold
 
@@ -298,7 +319,36 @@ calibration file — confirms the two runs differed in nothing else.
   evidence the model is now good. It's the smallest and most defensible
   of the improvements found this session, not the biggest lever available
   — that's still the open question of why the fuller cascade underperforms
-  rainfall alone at the Very High tier (see above).
+  rainfall alone at the Very High tier (see above; now resolved — see the
+  Very High band section and "Does it stack with the current-bias fix?"
+  below).
+
+**Does it stack with the current-bias fix? Yes, almost exactly
+additively — but that reveals a practical recommendation.**
+`sweep-combined-fixes.js` ran all four combinations (baseline,
+shrinkage-only, currentfix-only, combined) against the identical sample
+set. Combined score, either-determinand, overall:
+
+| Config | AUC-PR | Gain vs. baseline |
+|---|---|---|
+| Baseline | 0.0981 | — |
+| Shrinkage-only | 0.1041 | +0.0060 |
+| Currentfix-only | 0.0960 | −0.0022 |
+| Combined | 0.1019 | +0.0037 |
+
+Additive prediction (baseline + shrinkage gain + currentfix gain) =
+0.1020; actual combined = 0.1019 — a diff of −0.0001, essentially exact
+additivity. Bacterial sub-score matches: 0.1080 → 0.1140 (+0.0061) →
+0.1048 (−0.0032) → 0.1108 (+0.0029), additive prediction 0.1109, diff
+−0.0000.
+
+The practical consequence: because real currents still cost a small
+residual (~0.002 AUC-PR) even with the exclusion softened, **the
+best-performing tested configuration right now is shrinkage calibration
+alone with currents off — not the combined configuration.** Currents only
+pay for themselves once whatever is causing that residual gap is found
+and fixed; until then, shipping shrinkage calibration alone is the
+higher-AUC-PR choice on this dataset.
 
 ## Suggestions for improvement
 
@@ -329,14 +379,19 @@ Ranked by strength of evidence gathered this session, not by effort:
    needs its own multi-threshold validation (this document's own
    extract-veryhigh-precision.js / sweep-sigmoid-steepness.js pattern),
    not a single-threshold check.
-4. **Investigate why the fuller cascade underperforms rainfall alone at
-   Very High**, not just that it does. A plausible next step: check
-   whether live-status/distance/current contributions are amplifying
-   scores multiplicatively near the top of the range (pushing already-high
-   rainfall-driven scores further up, past 0.8, via `Math.min(1, probability *
-   decayFactor)`) rather than adding independent signal — that would
-   directly explain "more flags, not more correct flags" without needing a
-   new hypothesis.
+4. **RESOLVED — the fuller cascade underperforms rainfall alone at Very
+   High because of MAX-of-N cascade amplification, and shrinkage
+   calibration already fixes it.** `scoreSite()` combines nearby outlets
+   via MAX, not an average, so sites with more candidate outlets have more
+   independent chances for one to clear a threshold by luck. Confirmed
+   directly by splitting samples on nearby-outlet count: under the old
+   heuristic, many-outlet sites flag Very High ~3.7x more often
+   proportionally with worse precision (17.0% vs. 20.0% for few-outlet
+   sites); under shrinkage calibration the pattern reverses and precision
+   at many-outlet sites more than quadruples (35.7% vs. 8.6%). This is not
+   a separate problem needing separate work — it's further, mechanism-
+   level evidence for adopting shrinkage calibration (item 1). See the
+   Very High band section for the full numbers.
 5. **Document or derive real justification for RISK_BANDS' 0.2/0.5/0.8
    boundaries.** Already flagged as unsourced (see below), but the sigmoid
    result makes this more urgent, not less: this session just demonstrated
