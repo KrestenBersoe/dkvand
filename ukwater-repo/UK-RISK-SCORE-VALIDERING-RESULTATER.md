@@ -16,8 +16,10 @@ not a replacement for that data.
 
 **Does the app's risk score actually predict dirty water? Weakly to
 moderately — real signal exists, but nothing tested here is reliable enough
-to base a swim/no-swim decision on alone, and making the inputs more
-realistic did not clearly make the score better.**
+to base a swim/no-swim decision on alone. Richer inputs only help when
+they're built to genuinely learn from data; the first attempt at two of
+them (per-outlet rainfall calibration, real sea currents) made things
+worse, and one of those has since been fixed and now measurably helps.**
 
 - At its best, flagging the top ~20–30% of scores catches water that's
   genuinely dirtier than average — about 2–2.5x more likely to fail a real
@@ -27,13 +29,32 @@ realistic did not clearly make the score better.**
   roughly 1 time in 8 to 1 time in 9, and misses more than half of all real
   contamination events in its best-recall configuration — worse once real
   ocean-current data is added.
-- Feeding the model more realistic inputs — a real per-outlet rainfall
-  threshold instead of a generic one, and real measured sea currents instead
-  of assuming pollution spreads evenly in every direction — made warnings
-  somewhat more trustworthy when they fire, but made the score's overall
-  ability to rank risky water above safe water measurably *worse*, and cut
-  how many real problems it catches roughly in half. That's a genuine
-  trade-off, not an upgrade.
+- **Real measured sea currents, even with the current-bias exclusion bug
+  fixed, still cost a small amount of overall ranking quality** (~0.002
+  AUC-PR) versus leaving currents out — a genuine, if now much smaller,
+  trade-off rather than an upgrade. The original hard downstream-exclusion
+  rule cost far more (roughly 80% of currents' total AUC-PR damage, 72% of
+  its recall damage) and has an identified, tested fix.
+- **The original per-outlet rainfall calibration was a genuine bug, not a
+  trade-off: it never actually learned from real spill data.** It picked
+  whichever rainfall level made an outlet's annual event *count* come out
+  right, without ever checking the rainfall level at any real event —
+  two outlets with the same count were calibrated identically regardless
+  of whether one reliably spills at 4mm and the other at 20mm. A corrected
+  version — reading real decayed rainfall at each genuine spill's own
+  start time — measurably improves the score (+0.006 AUC-PR over no
+  calibration, +0.009 over the broken version, confirmed on data the
+  calibration never saw). It also happens to fix a second, unrelated-
+  looking symptom: the app's top "Very High" alert tier was less reliable
+  than rainfall alone specifically at sites with many nearby outlets,
+  because the score takes the max across outlets rather than an average,
+  so more outlets meant more chances for a false alarm. The corrected
+  calibration suppresses exactly those false alarms.
+- **The best configuration found so far is the corrected rainfall
+  calibration on its own, with currents left off** — currents' remaining
+  small cost isn't yet earned back by anything tested. The two fixes
+  combine almost exactly additively, so this isn't a matter of one
+  masking the other; currents just haven't paid for themselves yet.
 - A physically-motivated fix — accounting for the fact that pollution takes
   real time to travel from an outlet to a beach, so a spill's impact arrives
   hours after it starts, not instantly — was built, verified to work
