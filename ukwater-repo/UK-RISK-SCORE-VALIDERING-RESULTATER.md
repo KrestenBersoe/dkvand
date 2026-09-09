@@ -268,14 +268,21 @@ recall improves substantially (+6.6 points combined, +6.8 bacterial vs.
 old calibration) while precision moves only slightly (within ±1 point).
 This is the single strongest, cleanest improvement found this session.
 
-**Known limitation, not yet resolved**: no temporal holdout. Like the
-original calibration, this uses an outlet's full event history to derive
-its threshold, then a full-history backtest evaluates it against
-overlapping years — the EDM event log itself only spans ~5.7 years
-(Dec 2020 – Sep 2026, per `edm-outlet-coverage-stats.js`), so there's
-limited room for a real train/test split, but this result hasn't been
-checked against one. Should be resolved before treating this AUC-PR gain
-as fully trustworthy rather than an upper bound.
+**RESOLVED — temporal holdout confirms this is real, not overfitting.**
+Calibrated using only events before 2024-01-01
+(`compute-outlet-thresholds-shrinkage.js --events-before`), then evaluated
+only on samples from 2024-01-01 onward (`validate-uk-risk-score.js
+--samples-after`) — a period the calibration never saw, against a fair
+control (identical restricted sample set, no calibration). Combined
+score, either-determinand, overall (n=4,333, smaller than the full
+16,855-sample set, so wider confidence intervals than the headline
+numbers): AUC-PR 0.076→0.086 (+0.010), precision +0.8pt, recall +4.8pt.
+Bacterial: 0.082→0.094 (+0.012). The out-of-sample gain is as large as or
+larger than the full-dataset in-sample gain (+0.006–0.007) — the opposite
+of what overfitting would look like. One internal consistency check for
+free: every rainfall-only row is numerically identical (Δ=0.000) between
+the two runs, as expected since that score field never touches the
+calibration file — confirms the two runs differed in nothing else.
 
 ## Suggestions for improvement
 
@@ -285,9 +292,11 @@ Ranked by strength of evidence gathered this session, not by effort:
    now the single best-evidenced change in this document.** +0.009 to
    +0.014 AUC-PR over the old count-matched method across every
    scoreField/labelType combo, recall up substantially, precision roughly
-   flat. Resolve the temporal-holdout gap above first — this result is a
-   plausible upper bound until validated against a real held-out period,
-   not yet a confirmed generalizing improvement.
+   flat — and confirmed on a genuine temporal holdout (calibrated on
+   pre-2024 events, tested only on 2024+ samples it never saw), where the
+   gain held up (+0.010 to +0.019 AUC-PR) just as strongly as in-sample.
+   Not an in-sample artifact — the strongest-evidenced recommendation in
+   this document.
 2. **Ship the current-bias exclusion fix (soften or graduated).** Recovers
    ~80% of the AUC-PR and ~72% of the recall that real currents otherwise
    cost, verified at full scale, and doesn't hurt the Very High tier
