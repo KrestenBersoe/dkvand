@@ -514,6 +514,17 @@ async function main() {
     s.riskScoreRainfallOnly = Math.max(result.bacterial.rainfallBaselineProbability, result.viral.rainfallBaselineProbability);
     s.riskLabel = result.label;
     s.anyConfirmedActive = result.anyConfirmedActive;
+    // How many nearby outlets contributed to the MAX-combination for this
+    // sample — tests the "cascade-amplification" hypothesis (see this
+    // file's segments[] below): scoreSite()'s own header explains the
+    // site score is the MAX across all nearby outlets' contributions, not
+    // an average. Taking the max of more, independently-noisy candidate
+    // scores is a real statistical inflation effect (more attempts, more
+    // chances one clears a threshold by chance) even when every individual
+    // contribution is honestly computed — distinct from, and untested by,
+    // any of the currentBias.js/baselineProbability.js isolation variants
+    // above, which all still let this MAX-of-N combination stand.
+    s.nearbyOutletCount = nearby.length;
     scored++;
     if (processed % 1000 === 0 || processed === sampleEvents.length) {
       const elapsedS = (Date.now() - scoreT0) / 1000;
@@ -551,11 +562,34 @@ async function main() {
     return d < CMEMS_GRID_KM * 1000 ? 'close' : 'far';
   }
 
+  // NYT: udløbs-tæthed-segmentering — tester "cascade-amplification"-
+  // hypotesen (UK-RISK-SCORE-VALIDERING-RESULTATER.md's "Suggestions for
+  // improvement" #2/#4): scoreSite() kombinerer alle nærliggende udløb via
+  // MAX, ikke et gennemsnit (se scoreSite.js's eget filhoved). At tage MAX
+  // over FLERE, uafhængigt støjende kandidat-scorer er en reel statistisk
+  // inflations-effekt — flere forsøg giver flere chancer for at en enkelt
+  // klarer tærsklen ved tilfældighed — selv når hvert enkelt bidrag er
+  // ærligt beregnet. Hvis dette er (en del af) forklaringen på hvorfor
+  // regnhenfald ALENE slår den fulde kaskade ved Very High, bør stationer
+  // med MANGE nærliggende udløb vise dårligere præcision end stationer med
+  // FÅ, ved samme flag-tærskel — uafhængigt af afstands- eller strøm-
+  // relaterede effekter (distance:close/far ovenfor tester noget andet:
+  // afstand til NÆRMESTE udløb, ikke ANTALLET af udløb).
+  // Medianopdeling beregnet direkte fra dette datasæts egne prøver (intet
+  // eksternt "rundt tal" at binde sig til, i modsætning til CMEMS' 7km).
+  const outletCounts = sampleEvents.map((s) => s.nearbyOutletCount).filter((c) => c != null).sort((a, b) => a - b);
+  const medianOutletCount = outletCounts.length > 0
+    ? (outletCounts.length % 2 === 0 ? (outletCounts[outletCounts.length / 2 - 1] + outletCounts[outletCounts.length / 2]) / 2 : outletCounts[(outletCounts.length - 1) / 2])
+    : null;
+  console.log(`Median antal nærliggende udløb pr. prøve: ${medianOutletCount} (bruges til outlets:few/outlets:many-segmentering).`);
+
   const segments = [
     { key: 'overall', label: 'Alle stationer', filter: () => true },
     ...areas.map((a) => ({ key: `area:${a}`, label: a, filter: (s) => s.area === a })),
     { key: `distance:close`, label: `Nærmeste udløb <${CMEMS_GRID_KM}km (inden for én CMEMS-gittercelle)`, filter: (s) => distanceBandOf(s.siteNotation) === 'close' },
     { key: `distance:far`, label: `Nærmeste udløb ≥${CMEMS_GRID_KM}km (flere CMEMS-gitterceller væk)`, filter: (s) => distanceBandOf(s.siteNotation) === 'far' },
+    { key: 'outlets:few', label: `Få nærliggende udløb (<${medianOutletCount}, under medianen)`, filter: (s) => s.nearbyOutletCount != null && medianOutletCount != null && s.nearbyOutletCount < medianOutletCount },
+    { key: 'outlets:many', label: `Mange nærliggende udløb (≥${medianOutletCount}, medianen eller derover)`, filter: (s) => s.nearbyOutletCount != null && medianOutletCount != null && s.nearbyOutletCount >= medianOutletCount },
   ];
   // Excellent-tier thresholds: Bathing Water Regulations 2013 (SI 2013/1675)
   // Schedule 5, coastal/transitional waters, 95th-percentile "Excellent"
