@@ -24,6 +24,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import average_precision_score, precision_recall_curve
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 import xgboost as xgb
 
 p = argparse.ArgumentParser()
@@ -73,17 +74,54 @@ y_train, y_test = y[train_mask], y[test_mask]
 
 results = {}
 
-def evaluate(name, scores_test):
+# Flag-rate-matched precision/recall: a learned model's score isn't on the
+# same 0-1 scale/meaning as the rule-based cascade's probability, so
+# comparing precision/recall at "score > 0.2" for both would be comparing
+# different operating points, not a fair test. Instead, find the threshold
+# that flags the SAME SHARE of the test set the rule-based cascade's own
+# app threshold (>0.2) flags, and compare precision/recall there.
+rule_flag_rate = float((df.loc[test_mask, 'ruleBasedScoreNoCurrents'].fillna(0) > 0.2).mean())
+print(f"Rule-based (shrinkage, no currents) flags {rule_flag_rate*100:.2f}% of the test set at >0.2 — matching every model's threshold to this same flag rate.")
+
+def matched_precision_recall(scores_test, flag_rate):
+    if flag_rate <= 0:
+        return None, None
+    n_flag = max(1, round(flag_rate * len(scores_test)))
+    order = np.argsort(-np.asarray(scores_test))
+    flagged = np.zeros(len(scores_test), dtype=bool)
+    flagged[order[:n_flag]] = True
+    tp = int((flagged & (y_test.values == 1)).sum())
+    fp = int((flagged & (y_test.values == 0)).sum())
+    fn = int((~flagged & (y_test.values == 1)).sum())
+    precision = tp / (tp + fp) if (tp + fp) > 0 else None
+    recall = tp / (tp + fn) if (tp + fn) > 0 else None
+    return precision, recall
+
+def evaluate(name, scores_test, cv_estimator=None, cv_X=None):
+    scores_test = np.asarray(scores_test)
     ap = average_precision_score(y_test, scores_test)
     base = y_test.mean()
     lift = ap / base if base > 0 else None
-    precision, recall, thresh = precision_recall_curve(y_test, scores_test)
-    # Flag-rate-matched comparison: precision/recall at the threshold that
-    # flags roughly the same SHARE of test samples as the rule-based score's
-    # own 0.2 cutoff does, rather than assuming a learned model's score is
-    # on the same 0-1 scale/meaning as the rule-based probability.
-    results[name] = {'aucPr': ap, 'baseRate': base, 'liftOverBaseRate': lift}
-    print(f"  {name:32s} AUC-PR={ap:.4f}  lift={lift:.2f}x" if lift else f"  {name:32s} AUC-PR={ap:.4f}")
+    precision, recall = matched_precision_recall(scores_test, rule_flag_rate)
+    cv_mean, cv_std = None, None
+    if cv_estimator is not None:
+        # 5-fold CV AUC-PR on the TRAIN period only (temporal split preserved —
+        # this never touches the test period) — a sanity check for whether the
+        # single train/test split result is stable or a lucky/unlucky draw.
+        cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+        scores_cv = cross_val_score(cv_estimator, cv_X, y_train, cv=cv, scoring='average_precision')
+        cv_mean, cv_std = float(scores_cv.mean()), float(scores_cv.std())
+    results[name] = {'aucPr': ap, 'baseRate': base, 'liftOverBaseRate': lift,
+                      'matchedFlagRatePrecision': precision, 'matchedFlagRateRecall': recall,
+                      'trainCvAucPrMean': cv_mean, 'trainCvAucPrStd': cv_std}
+    line = f"  {name:32s} AUC-PR={ap:.4f}"
+    if lift:
+        line += f"  lift={lift:.2f}x"
+    if precision is not None:
+        line += f"  @matched-flag-rate: precision={precision*100:.1f}% recall={recall*100:.1f}%"
+    if cv_mean is not None:
+        line += f"  train-CV AUC-PR={cv_mean:.4f}±{cv_std:.4f}"
+    print(line)
 
 print("\n=== Rule-based scoreSite() cascade (comparison baseline, same rows) ===")
 for col in ['ruleBasedScoreNoCurrents', 'ruleBasedScoreWithCurrents', 'ruleBasedRainfallOnly']:
@@ -95,7 +133,8 @@ X_train_s = scaler.fit_transform(X_train)
 X_test_s = scaler.transform(X_test)
 logreg = LogisticRegression(max_iter=2000, class_weight='balanced')
 logreg.fit(X_train_s, y_train)
-evaluate('logistic_regression', logreg.predict_proba(X_test_s)[:, 1])
+evaluate('logistic_regression', logreg.predict_proba(X_test_s)[:, 1],
+          cv_estimator=LogisticRegression(max_iter=2000, class_weight='balanced'), cv_X=X_train_s)
 
 print("\n=== XGBoost gradient-boosted trees (same raw features, learned combination) ===")
 pos_weight = (len(y_train) - y_train.sum()) / max(1, y_train.sum())
@@ -105,7 +144,11 @@ xgb_model = xgb.XGBClassifier(
     scale_pos_weight=pos_weight, eval_metric='aucpr', random_state=42,
 )
 xgb_model.fit(X_train, y_train)
-evaluate('xgboost', xgb_model.predict_proba(X_test)[:, 1])
+evaluate('xgboost', xgb_model.predict_proba(X_test)[:, 1],
+          cv_estimator=xgb.XGBClassifier(n_estimators=300, max_depth=4, learning_rate=0.05,
+                                          subsample=0.8, colsample_bytree=0.8,
+                                          scale_pos_weight=pos_weight, eval_metric='aucpr', random_state=42),
+          cv_X=X_train)
 
 print("\n=== Feature importance (XGBoost, top 15) ===")
 imp = sorted(zip(feature_cols, xgb_model.feature_importances_), key=lambda x: -x[1])[:15]
