@@ -404,7 +404,8 @@ Combined score, either-determinand, test period only (2024-01-01 onward):
 | Rule-based, with currents | 0.077 | 1.33x | 6.9% | 28.1% |
 | Rule-based, rainfall alone | 0.097 | 1.68x | 9.4% | 38.6% |
 | Logistic regression (same raw features) | 0.118 | 2.05x | 10.7% | 43.8% |
-| **XGBoost (same raw features)** | **0.122** | **2.12x** | **10.2%** | **41.8%** |
+| XGBoost, untuned defaults (same raw features) | 0.122 | 2.12x | 10.2% | 41.8% |
+| **XGBoost, nested-CV tuned (same raw features)** | **0.117** | **2.04x** | **11.0%** | **45.0%** |
 
 ("Matched flag rate" — the rule-based cascade's own >0.2 threshold flags
 23.5% of the test set; every model's own threshold is set to flag that same
@@ -412,48 +413,76 @@ share, since a learned model's score isn't on the same 0-1 scale as the
 rule-based probability, so comparing at "score > 0.2" for both would compare
 different operating points, not a fair one.)
 
-**XGBoost beats the best rule-based config by +0.033 AUC-PR (~38%
-relative), logistic regression by +0.030 (~34%)** — bigger than every fix
-found earlier in this document, shrinkage calibration included (+0.006 to
-+0.019). That even plain logistic regression clearly beats every rule-based
-variant says the gain isn't really about tree flexibility — it's that
-nobody had ever fit weights against the real labels before. Precision/
-recall gains at the matched flag rate are real but far more modest (+1
-point precision, +2–4 points recall) than the AUC-PR gap suggests — the
-learned models are better across the whole ranking, not dramatically better
-at this one operating point.
+**Both learned models beat the best rule-based config by roughly the same
+margin — logistic regression +0.030 AUC-PR (~34% relative), tuned XGBoost
++0.029 (~33%)** — bigger than every fix found earlier in this document,
+shrinkage calibration included (+0.006 to +0.019). That plain logistic
+regression matches tuned XGBoost says the gain isn't about tree flexibility
+at all — it's that nobody had ever fit weights against the real labels
+before. Precision/recall gains at the matched flag rate are real but far
+more modest (+1 point precision, +2–5 points recall) than the AUC-PR gap
+suggests — the learned models are better across the whole ranking, not
+dramatically better at this one operating point.
 
-**A real caveat this test surfaced, not swept under: 5-fold cross-validation
-on the training period alone overstates both models, XGBoost much more
-than logistic regression.** Train-CV AUC-PR: logistic regression
-0.163±0.018 (vs. 0.118 true holdout — a 0.045 gap), XGBoost 0.207±0.023 (vs.
-0.122 true holdout — a 0.085 gap). The holdout numbers in the table above
-are the trustworthy ones; anyone re-running this and only checking
-cross-validation would conclude the model is considerably better than it
-actually is on genuinely unseen data. This is exactly the kind of gap this
-session's own temporal-holdout discipline exists to catch.
+**RESOLVED — nested-CV hyperparameter tuning: XGBoost's apparent edge over
+logistic regression in the first pass was a single-split artifact, not a
+real advantage.** Inner loop: `RandomizedSearchCV` (60 candidates) over
+`TimeSeriesSplit` (4 time-ordered folds, training period only — never
+touching the 2024+ test set); outer evaluation stays the one genuine
+holdout, not a second shuffled outer loop, because the shrinkage-calibrated
+thresholds baked into every feature were themselves computed from only
+pre-2024 events — a second outer loop reaching further back within the
+training period would let some folds' training rows reflect calibration
+information from their own chronological future. Full detail in
+`train_alt_model.py --tune`. Two results worth having found:
 
-**Feature importance (XGBoost) partly corroborates an earlier finding**:
-rainfall (decayed mm, baseline probability, bacterial and viral) dominates
-as expected, followed by distance and isotropic-contribution features
-across multiple outlets. Notably, `f_top0_currentDot` — the raw current
-direction toward the site, computed independently of `currentBias.js`'s own
-hard exclusion — ranks in the top 15. That's a second, independent hint
-(alongside the softened-exclusion isolation test elsewhere in this
-document) that real usable signal exists in current direction which the
-hard `dot≤0 → 0` rule throws away entirely rather than discounting.
+- **Properly tuned, XGBoost does not beat the untuned defaults, and lands
+  statistically indistinguishable from plain logistic regression** (0.117
+  vs. 0.118 AUC-PR — the earlier untuned XGBoost number, 0.122, was the
+  best of this comparison by chance, not by a real edge). The search
+  itself chose a much simpler model than the untuned default (`max_depth=2`
+  vs. 4, meaningful L1/L2 regularization) — the tuning process correctly
+  recognized that less complexity generalizes better forward in time on
+  this dataset, it just didn't translate into beating the linear baseline.
+- **The inner-CV score used to SELECT these hyperparameters (0.154) was
+  itself well above the true holdout result (0.117) even after doing
+  everything right** — time-ordered folds, no shuffling, hyperparameters
+  chosen without ever touching the test set. This is a stronger version of
+  the CV-overstatement caveat from the first pass (train-CV 0.207 vs. 0.122
+  test for untuned XGBoost, 0.163 vs. 0.118 for logistic regression): even
+  a methodologically correct inner-CV number, used for the thing it's
+  supposed to be safe for (model/hyperparameter selection, not final
+  reporting), still ran meaningfully hot relative to the real 2024+ period.
+  The most defensible reading is real distribution shift between the
+  training and test periods (weather patterns, EDM monitoring coverage,
+  station changes over 2015–2026) that no amount of regularization
+  corrects — not just ordinary variance from one split. The holdout number
+  is the only one of these worth quoting as "how good is this," full stop.
+
+**Feature importance (tuned XGBoost) reinforces an earlier finding, more
+strongly than the untuned pass did**: rainfall (viral and bacterial,
+baseline probability and decayed mm) dominates as expected, followed by
+distance and isotropic-contribution features across multiple outlets — but
+THREE current-related features now appear in the top 15
+(`f_top0_currentDot`, `f_top1_currentDot`, `f_top0_currentSpeed`), computed
+independently of `currentBias.js`'s own hard exclusion. That's a second,
+independent hint (alongside the softened-exclusion isolation test elsewhere
+in this document) that real usable signal exists in current direction which
+the hard `dot≤0 → 0` rule throws away entirely rather than discounting.
 
 **What this does and doesn't establish**: it establishes that a learned
-combiner beats the hand-designed cascade on this real, leakage-safe
-holdout — not a small or marginal result. It does NOT establish a
-production-ready alternative: this is a single train/test split (the CV
-numbers are a stability check on the training period only, not a
-substitute for repeated holdout evaluation), XGBoost's hyperparameters are
-reasonable defaults rather than tuned against a validation set, and the
-absolute lift (2.1x) is still well short of what a swim/no-swim decision
-would need (see this document's own gap estimate — roughly 3–5x precision
-at comparable recall). This is evidence the rule-based cascade's ceiling is
-lower than necessary, not evidence a deployable replacement exists yet.
+combiner — either model, tree or linear — beats the hand-designed cascade
+on this real, leakage-safe holdout, and that the specific choice of
+gradient-boosted trees over plain logistic regression doesn't matter once
+tuning is done honestly. It does NOT establish a production-ready
+alternative: this is still a single genuine outer split (repeated,
+independent holdouts — e.g. a second, later cutoff date once more data
+exists — would be needed to separate "real generalization gap" from "this
+particular 2024 cutoff was unlucky"), and the absolute lift (~2.0x) is
+still well short of what a swim/no-swim decision would need (see this
+document's own gap estimate — roughly 3–5x precision at comparable
+recall). This is evidence the rule-based cascade's ceiling is lower than
+necessary, not evidence a deployable replacement exists yet.
 
 ## Suggestions for improvement
 
@@ -510,18 +539,25 @@ Ranked by strength of evidence gathered this session, not by effort:
    range across the board pre-shrinkage), fixing what's already in the
    cascade has shown a clearer, larger, more reliable return than any
    input added this session.
-7. **Investigate a learned combiner (XGBoost/logistic regression) as a
-   longer-term replacement for the hand-designed MAX-of-outlets cascade —
-   the single biggest AUC-PR gain found this session (+0.033, ~38%
-   relative, on a genuine temporal holdout), but not yet ready to ship.**
-   Same real per-outlet ingredients `hazardScore()` already computes, fed
-   to a model that learns its own combination instead of being told MAX.
-   Bigger than every rule-based fix above, and feature importance points at
-   the same current-exclusion signal loss item 2 already targets — but this
-   is one split, untuned hyperparameters, and cross-validation on the
-   training period alone was shown to substantially overstate it (a real,
-   measured gap, not a hypothetical risk). Worth a proper multi-split /
-   nested-CV evaluation before treating the headline number as final. See
+7. **Investigate a learned combiner (logistic regression or XGBoost — the
+   tuning result below shows the choice barely matters) as a longer-term
+   replacement for the hand-designed MAX-of-outlets cascade — the single
+   biggest AUC-PR gain found this session (+0.029 to +0.030, ~33-34%
+   relative, on a genuine temporal holdout with nested-CV-tuned
+   hyperparameters), but not yet ready to ship.** Same real per-outlet
+   ingredients `hazardScore()` already computes, fed to a model that learns
+   its own combination instead of being told MAX. Bigger than every
+   rule-based fix above, and feature importance points at the same
+   current-exclusion signal loss item 2 already targets. Nested-CV tuning
+   (`train_alt_model.py --tune` — time-ordered inner folds, training period
+   only, test set touched once) found XGBoost's initial edge over logistic
+   regression was a single-split artifact, not real, AND found that even a
+   methodologically correct inner-CV score run hot relative to the true
+   2024+ holdout (0.154 inner-CV vs. 0.117 final) — best read as genuine
+   distribution shift between the training and test periods, not ordinary
+   split variance. One genuine outer holdout is still one data point:
+   repeated holdouts at different cutoff dates, once more data accumulates,
+   are needed before treating any of these numbers as the ceiling. See
    "Alternative model" above for the full numbers and caveats.
 
 ## What's still untested or unresolved
