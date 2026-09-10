@@ -185,6 +185,34 @@ from about the 80th percentile up. This was not recomputed for the
 calibration/currents/travel-time variants — worth doing before relying on
 any variant's score as a literal probability, not just the baseline's.
 
+## How much does the label definition matter? Threshold sensitivity and what happens without one
+
+Two follow-up questions, both computed directly from real data (`ml-features-holdout.ndjson`, shrinkage calibration, no currents — the rule-based cascade's own score, not the alt-model), not simulated.
+
+**1. Sufficient vs. Excellent regulatory threshold — real effect, and it cuts the opposite way intuition suggests.**
+
+| Determinand | Threshold | Base rate | AUC-PR | Lift over base rate |
+|---|---|---|---|---|
+| E. coli | >500 cfu/100ml (Sufficient) | 2.1% | 0.056 | **2.63x** |
+| E. coli | >250 cfu/100ml (Excellent) | 4.6% | 0.097 | 2.09x |
+| Enterococci | >185 cfu/100ml (Sufficient) | 5.2% | 0.107 | **2.04x** |
+| Enterococci | >100 cfu/100ml (Excellent) | 8.6% | 0.158 | 1.83x |
+
+Raw AUC-PR roughly doubles at the looser Excellent threshold, but that's mostly just more positives available to find — lift over base rate, the fair comparison, actually goes *down* at the looser threshold for both determinands. The risk score is relatively better at catching genuinely severe regulatory failures than at catching mild exceedances — its strength is concentrated at the rare, extreme end of the distribution, not spread evenly across "any elevation at all."
+
+**2. Removing the threshold entirely — and the result depends entirely on whether "average" means mean or median, which is not a minor detail on this data.**
+
+| Label | Base rate | AUC-PR | Lift |
+|---|---|---|---|
+| E. coli > median (10 cfu/100ml) | 40.1% | 0.477 | **1.19x** |
+| E. coli > mean (70.2 cfu/100ml) | 15.3% | 0.224 | 1.46x |
+| Enterococci > median (10 cfu/100ml) | 35.4% | 0.441 | **1.24x** |
+| Enterococci > mean (61.4 cfu/100ml) | 13.7% | 0.218 | 1.59x |
+
+The mean is nowhere near the middle of this data: median E. coli is 10 cfu/100ml, but the mean is 70 — a handful of extreme spikes (max 14,000 cfu/100ml) drag it far above where "typical" water sits, so only 15% of samples exceed the mean, not ~50%. "Above mean" ends up behaving like a loose regulatory-style threshold, not a true above/below split.
+
+**"Above median" is the real answer to "remove the threshold and split on average" — a genuine 50/50 split — and the result is the starkest finding in this document: lift collapses to ~1.2x, barely better than a coin flip.** The AUC-PR number alone (0.48) looks large only because a 40% base rate is a trivially easy target for ANY monotonic score, informative or not — this is exactly why `liftOverBaseRate`, not raw AUC-PR, has been the standard comparison throughout this document. This sharpens what the calibration-curve section above already hinted at into a hard number: **the model has essentially no signal for "is this water somewhat cleaner or dirtier than typical" — its entire real value is concentrated in flagging the rare, extreme pollution tail.** Take away the regulatory threshold and ask the softer question, and there is almost nothing left.
+
 ## Head-to-head: risk score vs. Southern Water's raw Impact Status field
 
 | Signal | AUC-PR | Precision | Recall |
