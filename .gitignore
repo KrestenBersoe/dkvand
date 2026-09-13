@@ -38,6 +38,11 @@ puls_vBadevandsstationResultater_csv.zip
 __pycache__/
 *.pyc
 
+# watershed-sync.js's own local ETag cache — runtime state for the
+# conditional-GET path, regenerated on first sync against the Watershed
+# hub, not source data.
+.watershed-etags.json
+
 # Claude Code lokal permissions-/settings-fil — IKKE til versionsstyring:
 # permission-allowlisten kan indeholde fulde kommandotekster verbatim,
 # inklusive evt. hemmeligheder skrevet inline i tidligere godkendte
