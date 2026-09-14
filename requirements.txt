@@ -5,3 +5,15 @@ copernicusmarine==2.4.1
 # .interp()-kaldet med "ModuleNotFoundError: No module named 'scipy'"
 # (set direkte i produktion, se fetch_currents.py's NWSHELF-udvidelse).
 scipy
+# Bruges af ID15-pipelinens geometri-scripts (compute-denmark-sea.py,
+# fetch-and-simplify-denmark-land.py, scripts/id15/*.py) — reelle, altid
+# nødvendige afhængigheder for update-all-data.sh's fulde kørsel (se dens
+# egen header: "Kræver: ... python3 med shapely+pyproj"), som aldrig var
+# listet her. Set direkte i produktion (Watershed hub, 2026-09-13/14):
+# "Mangler afhængigheder. Kør: pip install shapely pyproj" ved hver kørsel,
+# fordi kun copernicusmarine+scipy ovenfor rent faktisk blev installeret.
+shapely
+pyproj
+# Kun build-id15-geometry.py (`import shapefile`) — læser et shapefile som
+# en af ID15-terrænmodellens kilder.
+pyshp
