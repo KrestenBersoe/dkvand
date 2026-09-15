@@ -53,6 +53,31 @@ const dmiRain      = require('./dmi-rain');
 // deploy, crash, SIGTERM — arve exitCode 1). Se runWatershedSync() nedenfor
 // for den egne, sikre løkke.
 const watershedSync = require('./watershed-sync');
+// NYT: live-event tier (dmi-rain-history) hub sync — fast poll + webhook,
+// see the module's own header for why both, and the architecture-doc push-
+// mechanism section for the full reasoning. WATERSHED_HUB_URL-gated, same
+// opt-in convention as watershedSync itself above.
+const watershedLiveSync = require('./watershed-live-sync');
+const DKVAND_WEBHOOK_SECRET = process.env.DKVAND_WEBHOOK_SECRET || null;
+// Shared between the webhook router (mounted near express.json(), below)
+// and the fast poller (started near app.listen()) so whichever path
+// processes an update first makes the other see a cheap 304 instead of a
+// redundant re-download — see watershed-live-sync.js's own header.
+// Declared here, near the top, not down by its two use sites: both need it
+// defined before they run, and const doesn't hoist (a real ReferenceError
+// caught running this live when it was declared next to the webhook route
+// instead — see that comment for what happened).
+const dmiRainSyncEtagCache = {};
+const dmiRainSyncHandlers = {
+  'dmi-rain-history': {
+    relativePath: watershedSync.DATASETS['dmi-rain-history'],
+    onSynced: () => {
+      if (dmiRain.loadFromSyncedFile(watershedSync.DATASETS['dmi-rain-history'])) {
+        dmiRain.rebuildCellIndex(buildPulsGrid());
+      }
+    },
+  },
+};
 // NYT: borgerobservationer (ét-tryks status + algeobservation) — se modulets
 // eget filhoved for den HÅRDE grænse mod at dette nogensinde må påvirke
 // badevandRisk's officielle farve/badge. Egen SQLite-fil på samme Volume,
@@ -2867,7 +2892,16 @@ app.get('/og/soe/:slug', (req, res) => {
 // Grid: 0.25° (~17×28 km) — 4× finer than original 0.5°, reliable API usage.
 // TTL: 3 hours. warmCache uses individual single-location calls (proven to work).
 // API budget: ~220 cells × 8 warmups/day = ~1.760 calls/day (well under 10.000).
-const GRID_DEG       = 0.25;
+// RETTET (hub-migrering): GRID_DEG/gridKey/buildPulsGrid/buildDenmarkGrid/
+// fetchOpenMeteo/computeMetrics flyttet til open-meteo-weather.js, verbatim
+// — se dens filhoved for hvorfor (samme logik nu delt med
+// watershed-hub-open-meteo-poll.js's hub-side bulk-hentning, i stedet for
+// to kopier der kunne drifte fra hinanden). weatherCache-Map'en selv,
+// dens disk-persistens, og apiCallCount/cacheHitCount/fetchErrors BLIVER
+// her uændret — for mange andre steder i denne fil læser/skriver dem
+// direkte til at flytte dem uden en langt større omskrivning.
+const openMeteoWeather = require('./open-meteo-weather');
+const { GRID_DEG, gridKey, buildDenmarkGrid, fetchOpenMeteo, isTransientOpenMeteoError, fetchOpenMeteoWithRetry, computeMetrics } = openMeteoWeather;
 // RETTET: sat til 6 timer — men DMI's HARMONIE-model (som Open-Meteos
 // best_match rent faktisk bruger for Danmark, bekræftet via DMI's egen
 // dokumentation) opdaterer selv sin prognose hver 3. time, ikke hver 6.
@@ -2915,210 +2949,18 @@ function persistWeatherCacheToDisk() {
 }
 loadPersistedWeatherCache();
 
-function gridKey(lat, lng) {
-  const clat = Math.round((Math.floor(lat / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
-  const clng = Math.round((Math.floor(lng / GRID_DEG) * GRID_DEG + GRID_DEG / 2) * 10000) / 10000;
-  return `${clat.toFixed(4)}:${clng.toFixed(4)}`;
-}
-
-// Build grid from actual PULS overflow point coordinates — only cells that
-// contain real data points. Avoids warming ~220 sea/foreign bbox cells.
-// puls-data.json format: { a: [authorities], w: [waterAreas], d: [[lat,lng,...], ...] }
-// Typically ~150-180 unique 0.25° cells vs 420 for full bbox.
+// Same no-arg, memoized call signature every existing call site in this
+// file already uses — only the actual grid computation moved to
+// open-meteo-weather.js (see this file's own top-of-section comment).
+// Memoization preserved deliberately: puls-data.json can be large, and the
+// original re-read it only once per process lifetime too, not on every call
+// (DMI_RAIN_CELL_REMATCH_MS's daily rebuild, warmCache(), the stats
+// endpoint, etc. all call this).
 let _pulsGrid = null;
 function buildPulsGrid() {
   if (_pulsGrid) return _pulsGrid;
-  try {
-    const raw  = require('fs').readFileSync(path.join(STATIC_DIR, 'puls-data.json'), 'utf8');
-    const data = JSON.parse(raw);
-    const rows = data?.d || data;                  // compressed: { d: rows } or raw array
-    const seen = new Set();
-    const cells = [];
-    for (const r of rows) {
-      const lat = parseFloat(Array.isArray(r) ? r[0] : (r.lat ?? r.Lat));
-      const lng = parseFloat(Array.isArray(r) ? r[1] : (r.lng ?? r.Lon ?? r.lon));
-      if (isNaN(lat) || isNaN(lng)) continue;
-      const key = gridKey(lat, lng);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const [ls, gs] = key.split(':');
-      cells.push({ lat: parseFloat(ls), lng: parseFloat(gs) });
-    }
-    console.log(`buildPulsGrid: ${cells.length} unique cells from ${rows.length} PULS points`);
-    _pulsGrid = cells;
-    return cells;
-  } catch(e) {
-    console.warn('buildPulsGrid failed, falling back to bbox grid:', e.message);
-    return buildDenmarkGrid();
-  }
-}
-
-// Denmark + Bornholm bounding box at 0.25°. Fallback if buildPulsGrid fails.
-function buildDenmarkGrid() {
-  const iLatMin = Math.floor(54.5 / GRID_DEG);
-  const iLatMax = Math.ceil(57.9  / GRID_DEG);
-  const iLngMin = Math.floor(8.0  / GRID_DEG);
-  const iLngMax = Math.ceil(15.4  / GRID_DEG);
-  const cells = [], seen = new Set();
-  for (let iLat = iLatMin; iLat < iLatMax; iLat++) {
-    for (let iLng = iLngMin; iLng < iLngMax; iLng++) {
-      const key = gridKey((iLat + 0.1) * GRID_DEG, (iLng + 0.1) * GRID_DEG);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const [ls, gs] = key.split(':');
-      cells.push({ lat: parseFloat(ls), lng: parseFloat(gs) });
-    }
-  }
-  return cells;
-}
-
-// Single-location fetch — proven reliable with Open-Meteo.
-function fetchOpenMeteo(lat, lng) {
-  return new Promise((resolve, reject) => {
-    const url = `https://api.open-meteo.com/v1/forecast` +
-      `?latitude=${lat.toFixed(4)}&longitude=${lng.toFixed(4)}` +
-      // NYT: windspeed_10m/winddirection_10m tilføjet — samme kilde vi
-      // allerede henter nedbør+temperatur fra, blot udvidet med to ekstra
-      // variable. wind_speed_unit=ms sikrer samme enhed (m/s) som
-      // strømdataen (CMEMS uo/vo), så de to kan sammenlignes direkte i UI'en.
-      `&hourly=precipitation,temperature_2m,windspeed_10m,winddirection_10m` +
-      // RETTET (Kommune Dashboard-udvidelse, "Overløb"-fanens 72h-prognose):
-      // forecast_days var tidligere 2 (nok til den eksisterende 24h-sum,
-      // forecastMM nedenfor) — hævet til 4 for at have nok rå prognosetimer
-      // til også at kunne summere en 72h-prognose (forecastMM72h). Den
-      // eksisterende 24h-sum er UÆNDRET af dette, kun mere data hentes.
-      `&wind_speed_unit=ms&past_days=7&forecast_days=4` +
-      `&models=best_match&timezone=Europe%2FCopenhagen`;
-    https.get(url, resp => {
-      if (resp.statusCode !== 200) {
-        reject(new Error(`Open-Meteo HTTP ${resp.statusCode}`));
-        resp.resume(); return;
-      }
-      let body = '';
-      resp.on('data', c => body += c);
-      resp.on('end', () => {
-        try { resolve(JSON.parse(body)); }
-        catch(e) { reject(e); }
-      });
-    }).on('error', reject);
-  });
-}
-
-// Transiente serverfejl (503/502/504) hos Open-Meteo er ofte kortvarige —
-// et par sekunders pause og ét gen-forsøg løser typisk problemet, i stedet
-// for at give hele cellen op med det samme. Ikke-transiente fejl (4xx,
-// netværksfejl) gives videre uden forsinkelse.
-function isTransientOpenMeteoError(err) {
-  return /Open-Meteo HTTP (502|503|504)/.test(err.message || '');
-}
-
-async function fetchOpenMeteoWithRetry(lat, lng, retries = 2) {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fetchOpenMeteo(lat, lng);
-    } catch (e) {
-      if (attempt >= retries || !isTransientOpenMeteoError(e)) throw e;
-      await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
-    }
-  }
-}
-
-// Compute derived precipitation metrics from raw Open-Meteo JSON.
-function computeMetrics(json) {
-  const times     = json?.hourly?.time             || [];
-  const values    = json?.hourly?.precipitation    || [];
-  const tempVals  = json?.hourly?.temperature_2m   || [];
-  const windVals  = json?.hourly?.windspeed_10m    || [];
-  const windDirs  = json?.hourly?.winddirection_10m || [];
-  const now    = Date.now();
-  const MS_HOUR = 3600 * 1000;
-  const TAU    = 3.0;
-  let todayMM = 0, forecastMM = 0, forecastMM72h = 0, totalRain7d = 0;
-  const hourlyObs = [], hourlyFore = [], hourlyWeek = [];
-  // Luft-temperatur — TO ADSKILTE FORMÅL, der tidligere delte samme tal:
-  //   1) recentAirTempAvg (72h glidende gennemsnit): bruges INTERNT til at
-  //      ESTIMERE vandtemperatur i søer/åer (Mohseni-Stefan-model, se
-  //      computeFreshwaterTemp() client-side) — et gennemsnit er her
-  //      hydrologisk korrekt, fordi selv lavvandede vandområder har en vis
-  //      termisk træghed og reagerer på flere dages vejr, ikke et enkelt
-  //      døgns udsving.
-  //   2) todayMaxAirTemp (RETTET/NYT): den faktiske lufttemperatur en
-  //      badegæst oplever — dagens HØJESTE temperatur, ikke et
-  //      bagudskuende gennemsnit der iblander kolde nattetimer. Blev
-  //      tidligere fejlagtigt vist til brugeren i stedet for dette tal,
-  //      hvilket kunne gøre luft "koldere" end vand, selvom det reelt var
-  //      dagens varmeste periode der var relevant. Dækker HELE
-  //      kalenderdagen (allerede observerede timer + resten af dagens
-  //      prognose), ikke kun et ±24-timers rullende vindue, så en
-  //      forespørgsel om morgenen stadig fanger eftermiddagens forventede
-  //      maksimum.
-  //   3) hourlyTempWeek (NYT): fuld time-for-time temperaturkurve for hele
-  //      7-dages-vinduet (parallel til hourlyWeek for nedbør) — til en
-  //      fremtidig graf, hvis et enkelt dagsmaksimum ikke er nok.
-  let tempSum72h = 0, tempCount72h = 0;
-  const hourlyTempWeek = [];
-  let todayMaxAirTemp = null;
-  const todayDateStr = new Date().toLocaleDateString('sv-SE', { timeZone: 'Europe/Copenhagen' }); // "YYYY-MM-DD", matcher Open-Meteos lokale hourly.time-strenge
-
-  // NYT: vind — i modsætning til temperatur (hvor dagens HØJESTE er det
-  // relevante) er det NUVÆRENDE vindforhold, der er relevant for en
-  // badegæst — vind ændrer sig hurtigt, og et dagsgennemsnit/-maksimum
-  // ville være misvisende. Finder timen tættest på "nu" (mindste |diffMs|),
-  // uanset om den er observeret eller prognoseret.
-  let currentWindSpeed = null, currentWindDir = null, bestWindDiffMs = Infinity;
-
-  times.forEach((tStr, i) => {
-    const mm  = Math.max(Number(values[i]) || 0, 0);
-    const tMs = new Date(tStr).getTime();
-    if (isNaN(tMs)) return;
-    const diffMs  = now - tMs;
-
-    const temp = Number(tempVals[i]);
-    const hasTemp = !isNaN(temp);
-    hourlyTempWeek.push(hasTemp ? temp : null);
-    if (hasTemp && tStr.slice(0, 10) === todayDateStr) {
-      if (todayMaxAirTemp === null || temp > todayMaxAirTemp) todayMaxAirTemp = temp;
-    }
-
-    const windSpeed = Number(windVals[i]);
-    if (!isNaN(windSpeed) && Math.abs(diffMs) < bestWindDiffMs) {
-      bestWindDiffMs = Math.abs(diffMs);
-      currentWindSpeed = windSpeed;
-      const wd = Number(windDirs[i]);
-      currentWindDir = isNaN(wd) ? null : wd;
-    }
-
-    if (diffMs >= 0) {
-      totalRain7d += mm;
-      hourlyWeek.push(mm);  // full 7-day history
-      if (diffMs < 24 * MS_HOUR) { todayMM += mm; hourlyObs.push(mm); }
-      if (hasTemp && diffMs < 72 * MS_HOUR) { tempSum72h += temp; tempCount72h++; }
-    } else {
-      if (-diffMs <= 24 * MS_HOUR) { forecastMM += mm; hourlyFore.push(mm); }
-      // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanens 72h-prognose) —
-      // parallel 72h-sum ved siden af den eksisterende 24h-sum ovenfor,
-      // IKKE en erstatning for den (badested-kaskaden/hovedrisikoen bruger
-      // fortsat forecastMM/24h uændret). Kræver forecast_days=4 ovenfor for
-      // at have rå prognosetimer nok til at nå 72h frem.
-      if (-diffMs <= 72 * MS_HOUR) { forecastMM72h += mm; }
-    }
-  });
-  const recentAirTempAvg = tempCount72h > 0 ? tempSum72h / tempCount72h : null;
-  // RETTET: antecedentMM regnede tidligere sin egen, parallelle udgave af
-  // samme henfaldsformel inline i loopet ovenfor. Genbruger nu
-  // riskModel.accumulateDecayed() (samme rullende τ=3-dages henfald som
-  // estimateLastEventAge() allerede brugte) — sidste værdi i den returnerede
-  // serie SVARER til "akkumuleret henfaldet nedbør ved seneste observerede
-  // time", som er præcis hvad antecedentMM altid har repræsenteret. Se
-  // kommentar ved accumulateDecayed() i risk-model.js for den mikroskopiske
-  // (<1,5 %), accepterede præcisionsforskel dette medfører.
-  const decayedSeries = riskModel.accumulateDecayed(hourlyWeek, TAU);
-  const antecedentMM  = decayedSeries.length ? decayedSeries[decayedSeries.length - 1] : 0;
-  return {
-    antecedentMM, todayMM, forecastMM, forecastMM72h, totalRain7d, hourlyObs, hourlyFore, hourlyWeek,
-    recentAirTempAvg, todayMaxAirTemp, hourlyTempWeek,
-    currentWindSpeed, currentWindDir,
-  };
+  _pulsGrid = openMeteoWeather.buildPulsGrid(path.join(STATIC_DIR, 'puls-data.json'));
+  return _pulsGrid;
 }
 
 // ── Proactive cache warming ──────────────────────────────────────────────────
@@ -3126,10 +2968,53 @@ function computeMetrics(json) {
 let warmRunning       = false;
 let currentWarmPromise = null;
 
-function warmCache() {
-  if (warmRunning) return currentWarmPromise;
-  warmRunning = true;
-  currentWarmPromise = (async () => {
+// RETTET (hub-migrering): warmCache() henter nu fra hub-synkroniseringen når
+// WATERSHED_HUB_URL er sat — samme opt-in/additiv konvention som resten af
+// dette projekts hub-integration (aldrig en erstatning, kun en alternativ
+// kilde, indtil der er reel tillid). warmCacheDirect() nedenfor er den
+// OPRINDELIGE, uændrede logik, bevaret som fallback for en standalone
+// dkvand-instans uden hub konfigureret. De individuelle pr.-request
+// on-demand fallback-stier andre steder i filen (en kold celle uden for
+// PULS-gitteret) er UÆNDREDE af dette — de kalder fortsat
+// fetchOpenMeteoWithRetry() direkte for netop deres egen manglende celle,
+// uanset om hub'en er aktiv.
+const openMeteoSyncEtagCache = {};
+function loadWeatherCacheFromSyncedFile(filePath) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (e) {
+    if (e.code !== 'ENOENT') console.warn('warmCache (hub sync): kunne ikke læse synkroniseret cache —', e.message);
+    return 0;
+  }
+  if (!Array.isArray(parsed)) return 0;
+  // Merge, ikke erstat — en celle en on-demand fallback-sti allerede har
+  // hentet (fx uden for PULS-gitteret, som hub'ens bulk-hentning ikke
+  // dækker) skal ikke fjernes bare fordi den ikke er i hub'ens egen snapshot.
+  for (const [key, entry] of parsed) weatherCache.set(key, entry);
+  return parsed.length;
+}
+
+async function warmCacheFromHub() {
+  const t0 = Date.now();
+  let updated = 0;
+  try {
+    const relativePath = watershedSync.DATASETS['open-meteo-weather-cache'];
+    const result = await watershedSync.syncOne('open-meteo-weather-cache', relativePath, openMeteoSyncEtagCache);
+    if (result.status === 'updated') {
+      updated = loadWeatherCacheFromSyncedFile(path.join(STATIC_DIR, relativePath));
+    }
+  } catch (e) {
+    console.warn('warmCache (hub sync) failed:', e.message);
+    fetchErrors.push({ ts: new Date().toISOString(), key: 'hub-sync', error: e.message });
+    if (fetchErrors.length > 10) fetchErrors.shift();
+  }
+  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+  console.log(`warmCache (hub sync): ${updated} cell(s) refreshed — ${elapsed}s — cache: ${weatherCache.size} cells`);
+  if (updated > 0) persistWeatherCacheToDisk();
+}
+
+async function warmCacheDirect() {
     const cells = buildPulsGrid();
     const CONC  = 10;    // 10 parallelle kald — undgår burst rate-limit hos Open-Meteo
     let idx = 0, fetched = 0, skipped = 0, failed = 0;
@@ -3165,6 +3050,17 @@ function warmCache() {
     const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
     console.log(`warmCache: ${fetched} fetched, ${skipped} skipped, ${failed} failed — ${elapsed}s — cache: ${weatherCache.size} cells`);
     if (fetched > 0) persistWeatherCacheToDisk();
+}
+
+function warmCache() {
+  if (warmRunning) return currentWarmPromise;
+  warmRunning = true;
+  currentWarmPromise = (async () => {
+    if (process.env.WATERSHED_HUB_URL) {
+      await warmCacheFromHub();
+    } else {
+      await warmCacheDirect();
+    }
     warmRunning = false;
     currentWarmPromise = null;
   })();
@@ -4077,49 +3973,47 @@ async function ensureFreshRiskCaches() {
 // alt bliver "skipped"), men betyder at en delvis fejl retter sig selv
 // inden for minutter i stedet for at kunne stå i op til 6 timer.
 const WEATHER_CHECK_INTERVAL_MS = 15 * 60 * 1000;  // tjek hvert 15. minut — billigt, da fortsat-friske celler bare springes over
+// RETTET: dmiRain.refreshLatest() fjernet fra denne kæde — DMI-hentningen
+// sker nu hub-side (se watershed-hub-dmi-rain-poll.js), denne proces
+// abonnerer i stedet på resultatet via watershedLiveSync (fast poll +
+// webhook, opsat nedenfor ved DMI_RAIN_CELL_REMATCH_MS). warmCache()
+// (Open-Meteo) er UÆNDRET her — det er en separat stykke arbejde, ikke
+// forsøgt flyttet til hub'en i denne omgang.
 setTimeout(() => warmCache()
-  .then(() => dmiRain.refreshLatest())
   .then(() => evaluatePushNotifications())
   .catch(e => console.warn('warmCache (2s):', e.message)), 2000);
 setTimeout(() => warmCache()
-  .then(() => dmiRain.refreshLatest())
   .then(() => evaluatePushNotifications())
   .catch(e => console.warn('warmCache (10s):', e.message)), 10000);
 setInterval(() => warmCache()
-  .then(() => dmiRain.refreshLatest())
   .then(() => evaluatePushNotifications())
   .catch(e => console.warn('warmCache (interval):', e.message)), WEATHER_CHECK_INTERVAL_MS);
 
-// NYT (bruger-krav 2026-09-04) — engangs-opstart af dmi-rain.js's
-// celle-indeks + 7-dages historisk opbakning (se dens filhoved for hvorfor
-// opbakningen er nødvendig: uden den ville målt data først "vinde" over
-// Open-Meteo-modellen efter en hel uges drift). refreshLatest() køres FØRST
-// — den er samtidig den eneste kilde til stationskoordinater (se
-// stationCoords' filhoved i dmi-rain.js), rebuildCellIndex() har derfor
-// intet at matche imod før mindst ét kald har kørt. Uafhængig af
-// warmCache-kæden ovenfor (egen fejlhåndtering, blokerer intet andet) —
-// indtil den er færdig, returnerer dmiRain.getMeasuredForCell() blot null
-// for alle celler, og risikoløkken falder tilbage til Open-Meteo-modellen,
-// præcis som før denne fil fandtes.
+// RETTET (hub-migrering): DMI-hentningen (refreshLatest()/backfillHistory())
+// sker nu udelukkende hub-side (watershed-hub-dmi-rain-poll.js, kørt af
+// watershed-hubben på dens egen 15-minutters kadence) — ikke længere denne
+// proces' eget ansvar. Denne opstartsblok gør tre ting i stedet:
+//  1. loadPersistedHistory() som et rent lokalt fallback for det korte
+//     vindue før allerførste hub-sync er nået at køre (samme rolle den
+//     altid har haft, nu blot en midlertidig bro i stedet for den primære
+//     kilde).
+//  2. Forsøger straks at indlæse en allerede hub-synkroniseret fil, hvis én
+//     findes fra en tidligere proces-levetid (samme maskine, ikke
+//     genstartet siden sidste sync) — vinder over (1) hvis begge findes,
+//     da den er den friskere/rigtige kilde.
+//  3. rebuildCellIndex() uanset hvilken af de to der leverede data —
+//     indtil NOGEN af dem har kørt, returnerer dmiRain.getMeasuredForCell()
+//     blot null for alle celler, og risikoløkken falder tilbage til
+//     Open-Meteo-modellen, præcis som før denne fil fandtes.
 const DMI_RAIN_CELL_REMATCH_MS = 24 * 3600 * 1000; // gen-match celler mod evt. nye/forsvundne stationer ~dagligt
-(async () => {
-  try {
-    // RETTET (produktionshændelse 2026-09-05): indlæses FØR
-    // backfillHistory() kaldes, så dennes egen dybde-tjek (se dmi-rain.js's
-    // BACKFILL_SKIP_DEPTH_RATIO) har noget at sammenligne med — uden dette
-    // ville hver eneste genstart (denne maskine genstarter hvert 15.-70.
-    // minut, se produktionsloggen) blindt gentage den fulde 8-samtidige
-    // backfill-byrde på tværs af ALLE stationer, uanset hvor frisk
-    // disk-cachen allerede er.
-    dmiRain.loadPersistedHistory();
-    await dmiRain.refreshLatest();
-    dmiRain.rebuildCellIndex(buildPulsGrid());
-    await dmiRain.backfillHistory(dmiRain.matchedStationIds());
-  } catch (e) {
-    console.warn('dmi-rain: opstartsindlæsning fejlede —', e.message);
-  }
-})();
+dmiRain.loadPersistedHistory();
+dmiRain.loadFromSyncedFile(watershedSync.DATASETS['dmi-rain-history']);
+dmiRain.rebuildCellIndex(buildPulsGrid());
 setInterval(() => dmiRain.rebuildCellIndex(buildPulsGrid()), DMI_RAIN_CELL_REMATCH_MS);
+// Fast poll (correctness floor) + webhook (latency optimization, route
+// already mounted above, before express.json()) — see
+// watershed-live-sync.js's own header for why both.
+watershedLiveSync.startLiveSync(dmiRainSyncHandlers, { etagCache: dmiRainSyncEtagCache });
 
 // NYT (bruger-ønske 2026-08-17) — se vurderingCount30dCache's filhoved for
 // hvorfor dette er præ-beregnet fremfor et pr.-request DB-kald. Time-cadence
@@ -4636,6 +4530,20 @@ app.get('/api/weather/hourly', (req, res) => {
     hourlyFore: cached.data.hourlyFore || [],
   });
 });
+
+// NYT: hub webhook receiver — MUST be mounted before the global
+// express.json() below, since its route needs the raw body (express.raw(),
+// scoped to just this one path inside hubWebhookRouter itself) to verify
+// the HMAC signature; registering it after express.json() would let the
+// global parser consume the body stream first, leaving nothing for the
+// signature check to read. dmiRainSyncHandlers/dmiRainSyncEtagCache are
+// declared earlier (near the top of this file, alongside the other
+// watershed-* requires) — startLiveSync() below app.listen() needs them
+// too, before this point in the file (RETTET: a real ReferenceError caught
+// running this live — const doesn't hoist, so declaring them down here
+// crashed the earlier startLiveSync() call with "Cannot access before
+// initialization").
+app.use(watershedLiveSync.hubWebhookRouter(dmiRainSyncHandlers, { secret: DKVAND_WEBHOOK_SECRET }));
 
 // ── POST /api/weather/bulk — fallback with limited individual fetches ─────────
 // Returns warm cells from cache immediately. Cold cells are fetched individually

@@ -215,6 +215,37 @@ function loadPersistedHistory() {
   }
 }
 
+// ── Loads a hub-synced snapshot (watershed-sync.js's dmi-rain-history
+// dataset) — REPLACES stationHistory/stationCoords wholesale, not a merge,
+// since the hub's own copy is the single authoritative nationwide fetch now
+// (see watershed-hub-dmi-rain-poll.js's own header). Distinct from
+// loadPersistedHistory() above, which reads dkvand's OWN self-written
+// /data cache and has no coords in its format — this reads the file
+// watershed-sync.js's syncOne() writes, which DOES carry coords (see
+// persistHistoryToDiskSync() above). Returns true if a file was found and
+// loaded, false otherwise (nothing yet synced — caller's own first-run
+// fallback, not an error).
+function loadFromSyncedFile(filePath) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (e) {
+    if (e.code !== 'ENOENT') console.warn('dmi-rain: kunne ikke læse hub-synkroniseret historik —', e.message);
+    return false;
+  }
+  if (!parsed || !Array.isArray(parsed.stations)) return false;
+
+  stationHistory = new Map(parsed.stations.map(([id, entries]) => [id, new Map(entries)]));
+  stationCoords = new Map(parsed.coords ?? []);
+
+  const hours = [...stationHistory.values()].reduce((sum, h) => sum + h.size, 0);
+  console.log(
+    `dmi-rain: ${stationHistory.size} stationer / ${stationCoords.size} koordinater indlæst fra hub-sync ` +
+    `(${hours} timeaflæsninger, alder: ${Math.round((Date.now() - (parsed.ts || 0)) / 60000)} min)`
+  );
+  return true;
+}
+
 // RETTET (produktionshændelse 2026-09-05, opdaget ved genlæsning af egen
 // kode samme dag): kaldt fra refreshLatest() HVER GANG mindst én station
 // havde en ny aflæsning — reelt næsten hver eneste kørsel, dvs. 2 sek. og
@@ -237,6 +268,30 @@ function persistHistoryToDisk() {
   fs.writeFile(HISTORY_CACHE_FILE, JSON.stringify({ ts: now, stations }), (err) => {
     if (err) console.warn('Kunne ikke skrive dmi-rain-historik til disk:', err.message);
   });
+}
+
+// For a ONE-SHOT caller only (watershed-hub-dmi-rain-poll.js) — the
+// throttled async persistHistoryToDisk() above is correct for a long-running
+// server (many calls over hours, no reason to hit disk every time), but
+// wrong here for two reasons a real run exposed: (1) refreshLatest()'s own
+// write can land first and throttle away backfillHistory()'s much fuller
+// write moments later in the SAME process, leaving only one hour's data on
+// disk instead of the full week; (2) fs.writeFile is fire-and-forget — a
+// one-shot script's process can exit before that async write lands, same
+// class of bug this project's own edmEventLog.js migration hit and fixed
+// (see ukwater's history). Synchronous and unconditional: always writes
+// whatever's actually in stationHistory right now, no throttle.
+function persistHistoryToDiskSync() {
+  const now = Date.now();
+  const stations = [...stationHistory].map(([stationId, h]) => [stationId, [...h]]);
+  // coords alongside stations — a real gap in the pre-existing
+  // persistHistoryToDisk() format, which never saved stationCoords at all
+  // (fine for dkvand's OWN server, since refreshLatest() always re-derives
+  // coords itself before any read; NOT fine for a hub-side one-shot script
+  // whose whole output IS this file — a reader with no coords has nothing
+  // to run rebuildCellIndex() against).
+  const coords = [...stationCoords];
+  fs.writeFileSync(HISTORY_CACHE_FILE, JSON.stringify({ ts: now, stations, coords }));
 }
 
 function floorToHour(iso) {
@@ -350,7 +405,20 @@ function stats() {
   };
 }
 
+// Every station this process has EVER seen coordinates for, regardless of
+// whether it matched a dkvand bathing-site cell — matchedStationIds() only
+// covers cellStation's own matched subset, which needs rebuildCellIndex(cells)
+// to have been called with dkvand's own cell list first. The hub-side
+// nationwide poller (see watershed-hub-dmi-rain-poll.js) has no cell list at
+// all — it exists to fetch and persist EVERY reporting station's history,
+// leaving cell-matching to whichever app actually needs it, same separation
+// server/lib/liveEdmPoller.js's own .live-patching-vs-fetching split already
+// uses for ukwater.
+function allStationIds() {
+  return new Set(stationCoords.keys());
+}
+
 module.exports = {
-  rebuildCellIndex, matchedStationIds, backfillHistory, refreshLatest,
-  getMeasuredForCell, stats, loadPersistedHistory,
+  rebuildCellIndex, matchedStationIds, allStationIds, backfillHistory, refreshLatest,
+  getMeasuredForCell, stats, loadPersistedHistory, persistHistoryToDiskSync, loadFromSyncedFile,
 };
