@@ -3058,9 +3058,18 @@ function warmCache() {
   currentWarmPromise = (async () => {
     if (process.env.WATERSHED_HUB_URL) {
       await warmCacheFromHub();
-    } else {
-      await warmCacheDirect();
     }
+    // RETTET (safety net — real incident found this same session, in
+    // ukwater's/frwater's own Open-Meteo hub migration: a hub-sync-only
+    // path with NO fallback silently went dark in production when the hub
+    // adapter had a bug and never once succeeded). warmCacheDirect()
+    // already skips any cell weatherCache already holds FRESH data for
+    // (its own WEATHER_TTL_MS check) — whether that data arrived via the
+    // hub sync just above, or an earlier direct fetch — so calling it
+    // unconditionally here costs nothing once the hub sync is actually
+    // working (every cell gets skipped, zero network calls) and is what
+    // keeps this from ever going dark if it isn't.
+    await warmCacheDirect();
     warmRunning = false;
     currentWarmPromise = null;
   })();
@@ -5371,12 +5380,49 @@ function runPythonFetch() {
 // grid lokalt fra hver sin kopi af de rå strømpunkter).
 const { buildCurrentGrid, getCurrentAtServer } = require('./current-grid');
 
+// WATERSHED_HUB_URL sat: hub'ens egen watershed-hub-cmems-poll.js kører
+// allerede den SAMME fetch_currents.py på sin egen tidsplan, så dette
+// prøver et billigt conditional-GET først. Falder ALTID tilbage til det
+// direkte Python-kald hvis hub-synkroniseringen ikke leverer rigtige
+// punkter, uanset årsag (sync-fejl, hub'en har aldrig selv haft succes, en
+// kastet netværksfejl, eller et 'unchanged'-resultat uden en synkroniseret
+// fil endnu) — samme "aldrig et stille hul"-princip som warmCache()'s
+// egen rettelse ovenfor, anvendt fra start her (samme lektie fundet i
+// ukwater's/frwater's Open-Meteo hub-migration denne session, ikke opdaget
+// på samme måde en tredje gang).
+const cmemsSyncEtagCache = {};
+function loadHubSyncedCurrents() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(__dirname, watershedSync.DATASETS['cmems-currents']), 'utf8'));
+    if (parsed && Array.isArray(parsed.points) && parsed.points.length) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+async function fetchCurrentsData() {
+  if (process.env.WATERSHED_HUB_URL) {
+    try {
+      const relativePath = watershedSync.DATASETS['cmems-currents'];
+      const result = await watershedSync.syncOne('cmems-currents', relativePath, cmemsSyncEtagCache);
+      if (result.status === 'updated' || result.status === 'unchanged') {
+        const synced = loadHubSyncedCurrents();
+        if (synced) return synced;
+      }
+      console.warn(`CMEMS currents: hub sync status '${result.status}' — falder tilbage til direkte Python-hentning`);
+    } catch (err) {
+      console.warn('CMEMS currents: hub sync fejlede, falder tilbage til direkte Python-hentning:', err.message);
+    }
+  }
+  return runPythonFetch();
+}
+
 // Selve netværkskaldet — altid asynkront, opdaterer cache + disk ved succes,
 // beholder eksisterende (forældede) cache ved fejl i stedet for at nulstille.
 async function refreshCurrentsNow() {
   currentsLastAttemptTs = Date.now();
   try {
-    const result = await runPythonFetch();
+    const result = await fetchCurrentsData();
     if (!result.points || !result.points.length) throw new Error('Ingen strømpunkter modtaget');
 
     const ts = Date.now();
