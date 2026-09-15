@@ -47,6 +47,12 @@ const DATASETS = {
   // picks them up as a fallback, same as every other dataset.
   'dmi-rain-history': 'dmi-rain-history.json',
   'open-meteo-weather-cache': 'weather-cache.json',
+  // Also volatile tier, synced directly inside server.js's own
+  // fetchCMEMSCurrents()/fetchCurrentsData() (not watershed-live-sync.js —
+  // no need for sub-minute latency on a 1h-TTL dataset). Falls back to a
+  // direct CMEMS Python fetch whenever the hub sync doesn't hand back
+  // usable points, for any reason.
+  'cmems-currents': 'currents-hub.json',
 };
 
 function loadEtagCache() {
