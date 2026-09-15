@@ -215,6 +215,37 @@ function loadPersistedHistory() {
   }
 }
 
+// ── Loads a hub-synced snapshot (watershed-sync.js's dmi-rain-history
+// dataset) — REPLACES stationHistory/stationCoords wholesale, not a merge,
+// since the hub's own copy is the single authoritative nationwide fetch now
+// (see watershed-hub-dmi-rain-poll.js's own header). Distinct from
+// loadPersistedHistory() above, which reads dkvand's OWN self-written
+// /data cache and has no coords in its format — this reads the file
+// watershed-sync.js's syncOne() writes, which DOES carry coords (see
+// persistHistoryToDiskSync() above). Returns true if a file was found and
+// loaded, false otherwise (nothing yet synced — caller's own first-run
+// fallback, not an error).
+function loadFromSyncedFile(filePath) {
+  let parsed;
+  try {
+    parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch (e) {
+    if (e.code !== 'ENOENT') console.warn('dmi-rain: kunne ikke læse hub-synkroniseret historik —', e.message);
+    return false;
+  }
+  if (!parsed || !Array.isArray(parsed.stations)) return false;
+
+  stationHistory = new Map(parsed.stations.map(([id, entries]) => [id, new Map(entries)]));
+  stationCoords = new Map(parsed.coords ?? []);
+
+  const hours = [...stationHistory.values()].reduce((sum, h) => sum + h.size, 0);
+  console.log(
+    `dmi-rain: ${stationHistory.size} stationer / ${stationCoords.size} koordinater indlæst fra hub-sync ` +
+    `(${hours} timeaflæsninger, alder: ${Math.round((Date.now() - (parsed.ts || 0)) / 60000)} min)`
+  );
+  return true;
+}
+
 // RETTET (produktionshændelse 2026-09-05, opdaget ved genlæsning af egen
 // kode samme dag): kaldt fra refreshLatest() HVER GANG mindst én station
 // havde en ny aflæsning — reelt næsten hver eneste kørsel, dvs. 2 sek. og
@@ -253,7 +284,14 @@ function persistHistoryToDisk() {
 function persistHistoryToDiskSync() {
   const now = Date.now();
   const stations = [...stationHistory].map(([stationId, h]) => [stationId, [...h]]);
-  fs.writeFileSync(HISTORY_CACHE_FILE, JSON.stringify({ ts: now, stations }));
+  // coords alongside stations — a real gap in the pre-existing
+  // persistHistoryToDisk() format, which never saved stationCoords at all
+  // (fine for dkvand's OWN server, since refreshLatest() always re-derives
+  // coords itself before any read; NOT fine for a hub-side one-shot script
+  // whose whole output IS this file — a reader with no coords has nothing
+  // to run rebuildCellIndex() against).
+  const coords = [...stationCoords];
+  fs.writeFileSync(HISTORY_CACHE_FILE, JSON.stringify({ ts: now, stations, coords }));
 }
 
 function floorToHour(iso) {
@@ -382,5 +420,5 @@ function allStationIds() {
 
 module.exports = {
   rebuildCellIndex, matchedStationIds, allStationIds, backfillHistory, refreshLatest,
-  getMeasuredForCell, stats, loadPersistedHistory, persistHistoryToDiskSync,
+  getMeasuredForCell, stats, loadPersistedHistory, persistHistoryToDiskSync, loadFromSyncedFile,
 };

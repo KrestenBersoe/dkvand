@@ -53,6 +53,31 @@ const dmiRain      = require('./dmi-rain');
 // deploy, crash, SIGTERM — arve exitCode 1). Se runWatershedSync() nedenfor
 // for den egne, sikre løkke.
 const watershedSync = require('./watershed-sync');
+// NYT: live-event tier (dmi-rain-history) hub sync — fast poll + webhook,
+// see the module's own header for why both, and the architecture-doc push-
+// mechanism section for the full reasoning. WATERSHED_HUB_URL-gated, same
+// opt-in convention as watershedSync itself above.
+const watershedLiveSync = require('./watershed-live-sync');
+const DKVAND_WEBHOOK_SECRET = process.env.DKVAND_WEBHOOK_SECRET || null;
+// Shared between the webhook router (mounted near express.json(), below)
+// and the fast poller (started near app.listen()) so whichever path
+// processes an update first makes the other see a cheap 304 instead of a
+// redundant re-download — see watershed-live-sync.js's own header.
+// Declared here, near the top, not down by its two use sites: both need it
+// defined before they run, and const doesn't hoist (a real ReferenceError
+// caught running this live when it was declared next to the webhook route
+// instead — see that comment for what happened).
+const dmiRainSyncEtagCache = {};
+const dmiRainSyncHandlers = {
+  'dmi-rain-history': {
+    relativePath: watershedSync.DATASETS['dmi-rain-history'],
+    onSynced: () => {
+      if (dmiRain.loadFromSyncedFile(watershedSync.DATASETS['dmi-rain-history'])) {
+        dmiRain.rebuildCellIndex(buildPulsGrid());
+      }
+    },
+  },
+};
 // NYT: borgerobservationer (ét-tryks status + algeobservation) — se modulets
 // eget filhoved for den HÅRDE grænse mod at dette nogensinde må påvirke
 // badevandRisk's officielle farve/badge. Egen SQLite-fil på samme Volume,
@@ -4077,49 +4102,47 @@ async function ensureFreshRiskCaches() {
 // alt bliver "skipped"), men betyder at en delvis fejl retter sig selv
 // inden for minutter i stedet for at kunne stå i op til 6 timer.
 const WEATHER_CHECK_INTERVAL_MS = 15 * 60 * 1000;  // tjek hvert 15. minut — billigt, da fortsat-friske celler bare springes over
+// RETTET: dmiRain.refreshLatest() fjernet fra denne kæde — DMI-hentningen
+// sker nu hub-side (se watershed-hub-dmi-rain-poll.js), denne proces
+// abonnerer i stedet på resultatet via watershedLiveSync (fast poll +
+// webhook, opsat nedenfor ved DMI_RAIN_CELL_REMATCH_MS). warmCache()
+// (Open-Meteo) er UÆNDRET her — det er en separat stykke arbejde, ikke
+// forsøgt flyttet til hub'en i denne omgang.
 setTimeout(() => warmCache()
-  .then(() => dmiRain.refreshLatest())
   .then(() => evaluatePushNotifications())
   .catch(e => console.warn('warmCache (2s):', e.message)), 2000);
 setTimeout(() => warmCache()
-  .then(() => dmiRain.refreshLatest())
   .then(() => evaluatePushNotifications())
   .catch(e => console.warn('warmCache (10s):', e.message)), 10000);
 setInterval(() => warmCache()
-  .then(() => dmiRain.refreshLatest())
   .then(() => evaluatePushNotifications())
   .catch(e => console.warn('warmCache (interval):', e.message)), WEATHER_CHECK_INTERVAL_MS);
 
-// NYT (bruger-krav 2026-09-04) — engangs-opstart af dmi-rain.js's
-// celle-indeks + 7-dages historisk opbakning (se dens filhoved for hvorfor
-// opbakningen er nødvendig: uden den ville målt data først "vinde" over
-// Open-Meteo-modellen efter en hel uges drift). refreshLatest() køres FØRST
-// — den er samtidig den eneste kilde til stationskoordinater (se
-// stationCoords' filhoved i dmi-rain.js), rebuildCellIndex() har derfor
-// intet at matche imod før mindst ét kald har kørt. Uafhængig af
-// warmCache-kæden ovenfor (egen fejlhåndtering, blokerer intet andet) —
-// indtil den er færdig, returnerer dmiRain.getMeasuredForCell() blot null
-// for alle celler, og risikoløkken falder tilbage til Open-Meteo-modellen,
-// præcis som før denne fil fandtes.
+// RETTET (hub-migrering): DMI-hentningen (refreshLatest()/backfillHistory())
+// sker nu udelukkende hub-side (watershed-hub-dmi-rain-poll.js, kørt af
+// watershed-hubben på dens egen 15-minutters kadence) — ikke længere denne
+// proces' eget ansvar. Denne opstartsblok gør tre ting i stedet:
+//  1. loadPersistedHistory() som et rent lokalt fallback for det korte
+//     vindue før allerførste hub-sync er nået at køre (samme rolle den
+//     altid har haft, nu blot en midlertidig bro i stedet for den primære
+//     kilde).
+//  2. Forsøger straks at indlæse en allerede hub-synkroniseret fil, hvis én
+//     findes fra en tidligere proces-levetid (samme maskine, ikke
+//     genstartet siden sidste sync) — vinder over (1) hvis begge findes,
+//     da den er den friskere/rigtige kilde.
+//  3. rebuildCellIndex() uanset hvilken af de to der leverede data —
+//     indtil NOGEN af dem har kørt, returnerer dmiRain.getMeasuredForCell()
+//     blot null for alle celler, og risikoløkken falder tilbage til
+//     Open-Meteo-modellen, præcis som før denne fil fandtes.
 const DMI_RAIN_CELL_REMATCH_MS = 24 * 3600 * 1000; // gen-match celler mod evt. nye/forsvundne stationer ~dagligt
-(async () => {
-  try {
-    // RETTET (produktionshændelse 2026-09-05): indlæses FØR
-    // backfillHistory() kaldes, så dennes egen dybde-tjek (se dmi-rain.js's
-    // BACKFILL_SKIP_DEPTH_RATIO) har noget at sammenligne med — uden dette
-    // ville hver eneste genstart (denne maskine genstarter hvert 15.-70.
-    // minut, se produktionsloggen) blindt gentage den fulde 8-samtidige
-    // backfill-byrde på tværs af ALLE stationer, uanset hvor frisk
-    // disk-cachen allerede er.
-    dmiRain.loadPersistedHistory();
-    await dmiRain.refreshLatest();
-    dmiRain.rebuildCellIndex(buildPulsGrid());
-    await dmiRain.backfillHistory(dmiRain.matchedStationIds());
-  } catch (e) {
-    console.warn('dmi-rain: opstartsindlæsning fejlede —', e.message);
-  }
-})();
+dmiRain.loadPersistedHistory();
+dmiRain.loadFromSyncedFile(watershedSync.DATASETS['dmi-rain-history']);
+dmiRain.rebuildCellIndex(buildPulsGrid());
 setInterval(() => dmiRain.rebuildCellIndex(buildPulsGrid()), DMI_RAIN_CELL_REMATCH_MS);
+// Fast poll (correctness floor) + webhook (latency optimization, route
+// already mounted above, before express.json()) — see
+// watershed-live-sync.js's own header for why both.
+watershedLiveSync.startLiveSync(dmiRainSyncHandlers, { etagCache: dmiRainSyncEtagCache });
 
 // NYT (bruger-ønske 2026-08-17) — se vurderingCount30dCache's filhoved for
 // hvorfor dette er præ-beregnet fremfor et pr.-request DB-kald. Time-cadence
@@ -4636,6 +4659,20 @@ app.get('/api/weather/hourly', (req, res) => {
     hourlyFore: cached.data.hourlyFore || [],
   });
 });
+
+// NYT: hub webhook receiver — MUST be mounted before the global
+// express.json() below, since its route needs the raw body (express.raw(),
+// scoped to just this one path inside hubWebhookRouter itself) to verify
+// the HMAC signature; registering it after express.json() would let the
+// global parser consume the body stream first, leaving nothing for the
+// signature check to read. dmiRainSyncHandlers/dmiRainSyncEtagCache are
+// declared earlier (near the top of this file, alongside the other
+// watershed-* requires) — startLiveSync() below app.listen() needs them
+// too, before this point in the file (RETTET: a real ReferenceError caught
+// running this live — const doesn't hoist, so declaring them down here
+// crashed the earlier startLiveSync() call with "Cannot access before
+// initialization").
+app.use(watershedLiveSync.hubWebhookRouter(dmiRainSyncHandlers, { secret: DKVAND_WEBHOOK_SECRET }));
 
 // ── POST /api/weather/bulk — fallback with limited individual fetches ─────────
 // Returns warm cells from cache immediately. Cold cells are fetched individually
