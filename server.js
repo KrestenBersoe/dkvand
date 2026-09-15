@@ -4543,7 +4543,7 @@ app.get('/api/weather/hourly', (req, res) => {
 // running this live — const doesn't hoist, so declaring them down here
 // crashed the earlier startLiveSync() call with "Cannot access before
 // initialization").
-app.use(watershedLiveSync.hubWebhookRouter(dmiRainSyncHandlers, { secret: DKVAND_WEBHOOK_SECRET }));
+app.use(watershedLiveSync.hubWebhookRouter(dmiRainSyncHandlers, { secret: DKVAND_WEBHOOK_SECRET, etagCache: dmiRainSyncEtagCache }));
 
 // ── POST /api/weather/bulk — fallback with limited individual fetches ─────────
 // Returns warm cells from cache immediately. Cold cells are fetched individually
