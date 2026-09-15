@@ -239,6 +239,23 @@ function persistHistoryToDisk() {
   });
 }
 
+// For a ONE-SHOT caller only (watershed-hub-dmi-rain-poll.js) — the
+// throttled async persistHistoryToDisk() above is correct for a long-running
+// server (many calls over hours, no reason to hit disk every time), but
+// wrong here for two reasons a real run exposed: (1) refreshLatest()'s own
+// write can land first and throttle away backfillHistory()'s much fuller
+// write moments later in the SAME process, leaving only one hour's data on
+// disk instead of the full week; (2) fs.writeFile is fire-and-forget — a
+// one-shot script's process can exit before that async write lands, same
+// class of bug this project's own edmEventLog.js migration hit and fixed
+// (see ukwater's history). Synchronous and unconditional: always writes
+// whatever's actually in stationHistory right now, no throttle.
+function persistHistoryToDiskSync() {
+  const now = Date.now();
+  const stations = [...stationHistory].map(([stationId, h]) => [stationId, [...h]]);
+  fs.writeFileSync(HISTORY_CACHE_FILE, JSON.stringify({ ts: now, stations }));
+}
+
 function floorToHour(iso) {
   return Math.floor(new Date(iso).getTime() / 3600000) * 3600000;
 }
@@ -350,7 +367,20 @@ function stats() {
   };
 }
 
+// Every station this process has EVER seen coordinates for, regardless of
+// whether it matched a dkvand bathing-site cell — matchedStationIds() only
+// covers cellStation's own matched subset, which needs rebuildCellIndex(cells)
+// to have been called with dkvand's own cell list first. The hub-side
+// nationwide poller (see watershed-hub-dmi-rain-poll.js) has no cell list at
+// all — it exists to fetch and persist EVERY reporting station's history,
+// leaving cell-matching to whichever app actually needs it, same separation
+// server/lib/liveEdmPoller.js's own .live-patching-vs-fetching split already
+// uses for ukwater.
+function allStationIds() {
+  return new Set(stationCoords.keys());
+}
+
 module.exports = {
-  rebuildCellIndex, matchedStationIds, backfillHistory, refreshLatest,
-  getMeasuredForCell, stats, loadPersistedHistory,
+  rebuildCellIndex, matchedStationIds, allStationIds, backfillHistory, refreshLatest,
+  getMeasuredForCell, stats, loadPersistedHistory, persistHistoryToDiskSync,
 };
