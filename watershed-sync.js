@@ -41,12 +41,12 @@ const DATASETS = {
   'vp3-rbu': 'vp3_rbu_slim.geojson',
   'vandlob-directions': 'vandlob-directions.json',
   'vandlob-display': 'vandlob-display.json',
-  // Live-event tier (15-min hub cadence, matches WEATHER_CHECK_INTERVAL_MS)
-  // — synced separately, at a faster cadence than this file's own DATASETS
-  // loop, by watershed-live-sync.js. Listed here too so main()'s own
-  // manual/cron sync (whatever cadence THAT runs at) also picks it up as a
-  // fallback, same as every other dataset.
+  // Volatile tier — synced separately, at a faster cadence than this file's
+  // own DATASETS loop, by watershed-live-sync.js. Listed here too so
+  // main()'s own manual/cron sync (whatever cadence THAT runs at) also
+  // picks them up as a fallback, same as every other dataset.
   'dmi-rain-history': 'dmi-rain-history.json',
+  'open-meteo-weather-cache': 'weather-cache.json',
 };
 
 function loadEtagCache() {
