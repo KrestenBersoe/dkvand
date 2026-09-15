@@ -43,6 +43,16 @@ const badevandRisk  = require('./badevand-risk');
 // stedet for Open-Meteo-modellen for enhver badevands-celle med en
 // regnmåler inden for rækkevidde. Se dmi-rain.js's filhoved.
 const dmiRain      = require('./dmi-rain');
+// NYT: watershed-sync.js er tidligere tilføjet (23d7608) men ALDRIG kaldt
+// nogen steder fra — samme mønster som blev fundet og rettet på ukwater/
+// frwater (deres server kaldte heller ikke deres egen sync-klient). Kun
+// { syncOne, DATASETS } bruges her, ikke modulets egen main() — main()
+// sætter process.exitCode = 1 ved en fejlet dataset-sync, korrekt for et
+// éngangs-CLI-kald men et reelt fodangreb kaldt gentagne gange INDE FRA en
+// langtidskørende server-proces (ville lade den NÆSTE, urelaterede exit —
+// deploy, crash, SIGTERM — arve exitCode 1). Se runWatershedSync() nedenfor
+// for den egne, sikre løkke.
+const watershedSync = require('./watershed-sync');
 // NYT: borgerobservationer (ét-tryks status + algeobservation) — se modulets
 // eget filhoved for den HÅRDE grænse mod at dette nogensinde må påvirke
 // badevandRisk's officielle farve/badge. Egen SQLite-fil på samme Volume,
@@ -6011,6 +6021,56 @@ async function runDailyStatsSnapshotJob() {
 }
 const DAILY_STATS_SNAPSHOT_INTERVAL_MS = 24 * 3600 * 1000;
 
+// NYT: wiring af watershed-sync.js (skrevet i 23d7608, aldrig kaldt før nu —
+// se dens require() ovenfor). No-op medmindre WATERSHED_HUB_URL er sat,
+// samme opt-in-kontrakt som modulet selv allerede dokumenterer.
+//
+// Bevidst IKKE et in-memory hot-reload-mønster som ukwater/frwater's egne
+// watershedPoller.js/pipelineDataReload.js — dkvand's server.js har intet
+// samlet `data`-objekt at mutere ét sted. De fleste af de 9 synkede filer
+// har derimod slet ikke brug for det:
+//   - puls-data.json serveres via res.sendFile() (linje ~398) — læser
+//     disken FRISK for hvert request, intet cache at ugyldiggøre.
+//   - vp3_kystvande_simplified.geojson, vp3_soeer.geojson,
+//     vp3_vandlob_simplified.geojson, vandlob-directions.json,
+//     vandlob-display.json, puls-udloeb-taerskler.json rammes alle af
+//     express.static(STATIC_DIR)-catch-all'en (linje ~5883) — samme
+//     "læs disken friskt" egenskab.
+// To reelle undtagelser, bevidst IKKE håndteret her endnu (kræver en
+// koordineret cache-invalidering server.js selv må eksportere en reset-
+// funktion for, ikke noget en ekstern sync-klient kan gøre sikkert):
+//   - vp3_badevand.geojson: _badevandCoordIndex/_badevandIdCoordIndex
+//     (linje ~3299/3325) cacher for evigt ved første kald, kun brugt til
+//     push-notifikations-favoritopslag og observation-lokationstjek — lavt
+//     indsats, ikke risikoscoring.
+//   - vp3_rbu_slim.geojson: _rbuFeaturesCache (linje ~2043), kun brugt af
+//     kommune-dashboardets "Overløb"-fane.
+// PULS-data der reelt fodrer badevandRisk.computeBadevandRiskCascade()
+// (kørt i badevand-risk-worker.js's egen worker_thread, workerData sat ÉN
+// gang ved new Worker(), linje ~3613) er af samme grund IKKE hot-swappet
+// her — nøjagtig samme "worker ejer sin egen snapshot, kræver en
+// koordineret genstart for at opdatere"-disciplin ukwater/frwater's egne
+// scoringWorker.js allerede dokumenterer. Alle disse tilfælde selvhelbreder
+// ved næste proces-genstart, samme som før denne ændring — denne sync gør
+// dem bare ikke VÆRRE, den forkorter blot hvor længe filerne på disken selv
+// er forældede.
+const WATERSHED_SYNC_INTERVAL_MS = 24 * 3600 * 1000; // samme "manuel/sjælden cadence" begrundelse som ukwater/frwater's egne pollere
+// Modul-scopet (ikke lokal i runWatershedSync()) — skal overleve mellem
+// kald, ellers sender hvert tick en fuld GET for alt frem for et betinget
+// If-None-Match, som er hele pointen med at cache ETags.
+const _watershedSyncEtagCache = {};
+async function runWatershedSync() {
+  if (!process.env.WATERSHED_HUB_URL) return; // stille no-op, samme kontrakt som watershed-sync.js's egen main()
+  for (const [datasetKey, relativePath] of Object.entries(watershedSync.DATASETS)) {
+    try {
+      const r = await watershedSync.syncOne(datasetKey, relativePath, _watershedSyncEtagCache);
+      if (r.status === 'updated') console.log(`[watershed-sync] ${r.datasetKey}: ${r.status} (${r.bytes} bytes)`);
+    } catch (e) {
+      console.warn(`[watershed-sync] ${datasetKey} fejlede:`, e.message);
+    }
+  }
+}
+
 // NYT (Postgres-migrering): afventer at BEGGE moduler har oprettet deres
 // skema, FØR serveren begynder at modtage trafik — en request der rammer
 // fx POST /api/badested-observation før CREATE TABLE er kørt færdig ville
@@ -6039,6 +6099,11 @@ Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, adminUsers.
     setInterval(() => refreshVurderingCount30dCache().catch(e => console.warn('refreshVurderingCount30dCache fejl:', e.message)), VURDERING_COUNT_REFRESH_MS);
     refreshKommuneLogoCache().catch(e => console.warn('refreshKommuneLogoCache (opstart) fejl:', e.message));
     setInterval(() => refreshKommuneLogoCache().catch(e => console.warn('refreshKommuneLogoCache fejl:', e.message)), KOMMUNE_LOGO_REFRESH_MS);
+    // No-ops entirely (see runWatershedSync()'s egen kommentar) medmindre
+    // WATERSHED_HUB_URL er sat. Kørt straks, samme "frisk deploy skal ikke
+    // vente på det fulde interval" begrundelse som de øvrige job herover.
+    runWatershedSync().catch(e => console.warn('runWatershedSync (opstart) fejl:', e.message));
+    setInterval(() => runWatershedSync().catch(e => console.warn('runWatershedSync fejl:', e.message)), WATERSHED_SYNC_INTERVAL_MS);
   })
   .catch(e => {
     console.error('Kunne ikke klargøre Postgres-skema ved opstart — serveren starter IKKE:', e.message);
