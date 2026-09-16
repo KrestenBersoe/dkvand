@@ -53,6 +53,11 @@ const dmiRain      = require('./dmi-rain');
 // deploy, crash, SIGTERM — arve exitCode 1). Se runWatershedSync() nedenfor
 // for den egne, sikre løkke.
 const watershedSync = require('./watershed-sync');
+// NYT (bruger-krav 2026-09-16): email-varsling når EN AF de tre hub-sync
+// fallback-stier (weatherCache/dmi-rain/CMEMS, se hvert deres eget kaldested)
+// falder tilbage — se hub-alert.js's eget filhoved for alvorligheds-/
+// gentagelsesreglerne.
+const hubAlert = require('./hub-alert');
 // NYT: live-event tier (dmi-rain-history) hub sync — fast poll + webhook,
 // see the module's own header for why both, and the architecture-doc push-
 // mechanism section for the full reasoning. WATERSHED_HUB_URL-gated, same
@@ -3004,10 +3009,19 @@ async function warmCacheFromHub() {
     if (result.status === 'updated') {
       updated = loadWeatherCacheFromSyncedFile(path.join(STATIC_DIR, relativePath));
     }
+    // NYT (bruger-krav 2026-09-16) — se hub-alert.js's filhoved. 'error'/
+    // 'not-yet-fetched-by-hub' er hub'en der SVARER, men ikke leverer friske
+    // data (degraded, ikke hardDown); 'updated'/'unchanged' er reel succes.
+    if (result.status === 'error' || result.status === 'not-yet-fetched-by-hub') {
+      hubAlert.reportHubFallback('open-meteo-weather', `sync status '${result.status}'${result.error ? ` — ${result.error}` : ''}`, false);
+    } else {
+      hubAlert.reportHubRecovered('open-meteo-weather');
+    }
   } catch (e) {
     console.warn('warmCache (hub sync) failed:', e.message);
     fetchErrors.push({ ts: new Date().toISOString(), key: 'hub-sync', error: e.message });
     if (fetchErrors.length > 10) fetchErrors.shift();
+    hubAlert.reportHubFallback('open-meteo-weather', e.message, true);
   }
   const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
   console.log(`warmCache (hub sync): ${updated} cell(s) refreshed — ${elapsed}s — cache: ${weatherCache.size} cells`);
@@ -5407,11 +5421,16 @@ async function fetchCurrentsData() {
       const result = await watershedSync.syncOne('cmems-currents', relativePath, cmemsSyncEtagCache);
       if (result.status === 'updated' || result.status === 'unchanged') {
         const synced = loadHubSyncedCurrents();
-        if (synced) return synced;
+        if (synced) {
+          hubAlert.reportHubRecovered('cmems-currents');
+          return synced;
+        }
       }
       console.warn(`CMEMS currents: hub sync status '${result.status}' — falder tilbage til direkte Python-hentning`);
+      hubAlert.reportHubFallback('cmems-currents', `sync status '${result.status}'${result.error ? ` — ${result.error}` : ''}`, false);
     } catch (err) {
       console.warn('CMEMS currents: hub sync fejlede, falder tilbage til direkte Python-hentning:', err.message);
+      hubAlert.reportHubFallback('cmems-currents', err.message, true);
     }
   }
   return runPythonFetch();
