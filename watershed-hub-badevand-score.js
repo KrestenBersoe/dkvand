@@ -129,12 +129,22 @@ if (require.main === module) {
       console.error('[watershed-hub-badevand-score] failed:', err.message);
       process.exitCode = 1;
     })
-    .finally(() => {
-      // Uden dette holder db.js's egen pool (keepAlive + 5-min heartbeat-
-      // setInterval, se dens filhoved) denne ellers ét-skuds-proces kørende
-      // for evigt — samme klasse bug som dmi-rain.js's persistHistoryToDisk()
-      // vs. persistHistoryToDiskSync() (se watershed-hub-dmi-rain-poll.js).
-      pool.end().catch(() => {});
+    .finally(async () => {
+      // RETTET (produktionshændelse 2026-09-16 — set live: kørslen
+      // GENNEMFØRTE fuldt ud, skrev alle 21563 punkter, alligevel markeret
+      // 'failed' med "exit null" PRÆCIS 120,0 sek. efter start): pool.end()
+      // alene er IKKE nok — db.js's eget 5-minutters heartbeat-setInterval
+      // (se dens filhoved) er ALDRIG .unref()'et, så det holder event loopet
+      // i live på ubestemt tid, uafhængigt af om selve pool'en er lukket.
+      // watershed-scheduleren's egen TIMEOUT_MS (her 120000) ramte derfor
+      // FØRST — et SIGKILL af en proces der reelt allerede var færdig med
+      // alt sit arbejde. Et eksplicit process.exit() her er den eneste
+      // pålidelige rettelse (matcher db.js's egen tilsigtede brug i den
+      // LANGTKØRENDE server, hvor akkurat DEN samme opførsel er korrekt —
+      // rettelsen hører derfor hjemme her, i det ét-skuds-script, ikke i
+      // det delte db.js).
+      await pool.end().catch(() => {});
+      process.exit(process.exitCode ?? 0);
     });
 }
 
