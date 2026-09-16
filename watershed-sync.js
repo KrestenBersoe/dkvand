@@ -53,6 +53,15 @@ const DATASETS = {
   // direct CMEMS Python fetch whenever the hub sync doesn't hand back
   // usable points, for any reason.
   'cmems-currents': 'currents-hub.json',
+  // NYT (bruger-beslutning 2026-09-16, "hub som central scorings-leder",
+  // trin 1/"A"): hub'ens egen kørsel af computeAllPointRisks() (samme
+  // funktion server.js selv kalder, se puls-risk-scoring.js) —
+  // watershed-hub-badevand-score.js's output. Volatile tier, samme
+  // 15-minutters kadence som dmi-rain (se manifestets cadence for denne
+  // entry). Bucket-transitions/-historik skrives DIREKTE til Postgres af
+  // adapteren selv (overloeb-events.js) — denne fil er KUN de færdige
+  // risikoscorer, ikke transition-loggen.
+  'badevand-scores': 'badevand-scores-hub.json',
 };
 
 function loadEtagCache() {

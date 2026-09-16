@@ -36,6 +36,10 @@ const { Worker }  = require('worker_threads');
 // serveren selv kan evaluere overløbsrisiko UAFHÆNGIGT af om en klient har
 // en fane åben — se server-modules/risk-model.js for fuld begrundelse.
 const riskModel    = require('./risk-model');
+// NYT (bruger-ønske 2026-09-16): se puls-risk-scoring.js's eget filhoved —
+// ren udtrækning af _evaluatePushNotificationsInner()'s PULS-punkt-
+// risikoløkke, første trin mod at kunne køre den samme beregning hub-side.
+const pulsRiskScoring = require('./puls-risk-scoring');
 const waterClass    = require('./water-classification');
 const badevandRisk  = require('./badevand-risk');
 // NYT (bruger-krav 2026-09-04: "measured rainfall should take priority to
@@ -3104,115 +3108,13 @@ function warmCache() {
 
 // Fuld PULS-punktliste (ikke kun unikke gitterceller som buildPulsGrid()) —
 // indlæst og cachet én gang, ligesom buildPulsGrid() gør det for celler.
-let _pulsPointsFull = null;
 let _pulsIdSet = null; // Set af PULS-punkt-id'er — cachet lazy, se /udloeb/:id-routen
+// NYT (bruger-ønske 2026-09-16, "hub som central scorings-leder", trin 1):
+// selve indlæsnings-/parse-logikken flyttet til puls-risk-scoring.js — se
+// dens filhoved. Samme nul-argument kaldesignatur bevaret her, så INGEN af
+// de eksisterende kaldesteder (linje ~2492/2815/3482/3579) skal ændres.
 function loadPulsPointsFull() {
-  if (_pulsPointsFull) return _pulsPointsFull;
-  try {
-    const raw  = fs.readFileSync(path.join(STATIC_DIR, 'puls-data.json'), 'utf8');
-    const data = JSON.parse(raw);
-    const auths = data.a || [];
-    const areas = data.w || [];
-    const rows  = data.d || data;
-    // RETTET (bruger-rapporteret 2026-08-11 — "F-U9 i Furesø" åbnede et
-    // udløb i Odense ved klik): id bruger rækkeindekset (i) i puls-data.
-    // json's d-array som id for /udloeb/:id-URL'er, udløbslister,
-    // favoritter osv. — men filen genopbygges periodisk, og rækkefølgen er
-    // IKKE stabil på tværs af genopbygninger (bekræftet: samme indeks 4050
-    // var tre FORSKELLIGE reelle udløb i tre snapshots taget uger fra
-    // hinanden), mens klienten cacher filen i IndexedDB i 14 dage
-    // (TTL_PULS_MS) — en klient med en ældre cache er derfor midlertidigt
-    // uenig med serveren om hvad et givet id betyder.
-    //
-    // FORSØGT RETTET til r[8] (outfallId, en ægte stabil GUID fra selve
-    // PULS-kilden — se update-puls.js's egen kommentar) — men RULLET
-    // TILBAGE samme dag: id15-lake-matches.json, id15-kystvand-matches.json
-    // og vandlob-upstream-matches.json (offline-forudberegnede ID15-match-
-    // filer, bygget af scripts/id15/*.js) refererer ALLE PULS-punkter via
-    // PRÆCIS dette rækkeindeks, ikke outfallId — GUID-skiftet brød derfor
-    // pointsById-opslaget for ALLE tre filer på én gang, hvilket viste sig
-    // som confirmedNoOutlet/"no-candidates" for stort set alle søer/
-    // kystvande der er afhængige af ID15-matching (værre end fejlen det
-    // skulle løse). En fuld migrering kræver enten at genköre de tre
-    // scripts mod det AKTUELLE puls-data.json (så de selv outputter
-    // outfallId i stedet for indeks), eller en oversættelsestabel — begge
-    // dele et separat, større arbejde, IKKE gjort her. id er derfor
-    // bevidst tilbage ved rækkeindekset (som streng, ikke tal — resten af
-    // kodebasen behandler det allerede som en ugennemsigtig streng efter
-    // denne rettelses øvrige ændringer, se handleUdloebPath()/#udlob=
-    // parsing/onclick-quoting, som ALLE forbliver korrekte uanset hvilken
-    // streng id rent faktisk er).
-    _pulsPointsFull = rows.map((r, i) => {
-      const derived = riskModel.derivePulsFields(r);
-      const [, , , authIdx, areaIdx] = r;
-      // NYT (rettelse af ustabil-id-fejlen ovenfor): outfallId (felt 8) er
-      // den ægte stabile GUID fra PULS-kilden — bruges IKKE til at erstatte
-      // id (rækkeindekset, stadig grundlaget for pointsById/id15-matching,
-      // se ovenfor), men medbringes som et PARALLELT felt til alt der
-      // krydser en dataopdatering: klientens favoritter (toggleFav()) og
-      // badevands-favoritgruppers pulsIds (toggleBadevandFav()). pointRisks
-      // (se enqueuePushNotifications()) slår op via BÅDE id og outfallId,
-      // så gamle (indeks-baserede) og nye (GUID-baserede) klientreferencer
-      // begge virker under overgangen. (Push for INDIVIDUELLE udløbs-
-      // favoritter — det tidligere warnMap/outletHits — er fjernet efter
-      // bruger-ønske 2026-08-12: push handler nu udelukkende om badesteder.)
-      const outfallId = (r[8] != null && r[8] !== '') ? String(r[8]) : null;
-      // NYT (bruger-krav 2026-08-20 — "samtlige puls data vi har i
-      // dkvand-appen" i kommune-dashboardets udløbs-detaljepanel):
-      // resten af de bagvedliggende PULS-felter (se update-puls.js's
-      // filhoved for den fulde d[]-skema-liste), hidtil ALDRIG udtrukket
-      // her — kun brugt internt af scripts/compute-puls-udloeb-taerskler.js
-      // (reducedArea/type/sewerStructure) eller slet ikke (resten).
-      //
-      // RETTET (2026-08-20): cod (r[13]) er nu trygt at udtrække — se
-      // risk-model.js's derivePulsFields()/scripts/merge-puls-thresholds.js
-      // for selve rettelsen af den tidligere row[13]-kollision (thresholdMm
-      // flyttet til r[24], cod fik sin egen, urørte position tilbage).
-      return {
-        id: String(i),
-        outfallId,
-        name: derived.name || `Udløb ${i}`,
-        municipality: auths[authIdx] || '—',
-        waterArea: areas[areaIdx] || 'Ukendt',
-        lat: derived.lat, lng: derived.lng,
-        meanVolumePerEvent: derived.meanVolumePerEvent,
-        overflowProbBase: derived.overflowProbBase,
-        thresholdMm: derived.thresholdMm,
-        // NYT (bruger-ønske 2026-07-25): se derivePulsFields()'s filhoved —
-        // bruges af badevandRisk.computeBadevandRiskCascade() til at
-        // udelukke bekræftede regnvandsudløb fra bakteriel/viral-risikoen.
-        isWastewater: derived.isWastewater,
-        // NYT (bruger-ønske — kommune-benchmark-rapportens datakvalitets-KPI,
-        // se computeKommuneBenchmark()): qualityCode fra PULS-grunddata,
-        // se derivePulsFields()'s filhoved.
-        dataQuality: derived.dataQuality,
-        // NYT (bruger-krav 2026-08-20) — rå stamdata, kun til visning
-        // (indgår ikke i nogen risikoberegning):
-        volumeM3: r[5] ?? null,               // seneste registrerede års udledte volumen (m³)
-        eventsPerYear: r[6] ?? null,           // seneste registrerede års antal overløbshændelser
-        reducedArea: r[9] ?? null,             // reduceret (befæstet) opland, hektar
-        type: r[10] ?? null,                   // udløbstype, allerede menneskelæsbar tekst fra PULS-kilden
-        sewerStructure: r[11] ?? null,         // kloaksystem-kode (SE/SF m.fl. — se PULS_NO_WASTEWATER_CODES)
-        latestDischargeYear: r[12] ?? null,
-        cod: r[13] ?? null,                    // kemisk iltforbrug, kg/år
-        bod: r[14] ?? null,                    // biokemisk iltforbrug, kg/år
-        nitrogen: r[15] ?? null,               // kg/år
-        phosphor: r[16] ?? null,               // kg/år
-        normalYear: r[17] ?? null,             // MST's normalårs-referenceperiode
-        normalVol: r[18] ?? null,
-        normalEv: r[19] ?? null,
-        normalCod: r[20] ?? null,
-        normalBod: r[21] ?? null,
-        normalNitrogen: r[22] ?? null,
-        normalPhosphor: r[23] ?? null,
-      };
-    });
-    console.log(`loadPulsPointsFull: ${_pulsPointsFull.length} PULS-punkter indlæst til push-evaluering`);
-  } catch (e) {
-    console.warn('loadPulsPointsFull fejlede:', e.message);
-    _pulsPointsFull = [];
-  }
-  return _pulsPointsFull;
+  return pulsRiskScoring.loadPulsPointsFull(STATIC_DIR);
 }
 
 // NYT (bruger-ønske 2026-07-26): koordinat -> bathingwat-ID-opslag for
@@ -3565,6 +3467,85 @@ function runBadevandRiskCascadeInWorker(points, staticDir, grid) {
   });
 }
 
+// NYT (bruger-beslutning 2026-09-16, "hub som central scorings-leder", trin
+// 2, option "A"): samme hub-sync-mønster som loadHubSyncedCurrents()/
+// fetchCurrentsData() ovenfor, for hub'ens allerede beregnede PULS-scorer
+// (watershed-hub-badevand-score.js). "aldrig et stille hul"-princippet
+// gælder her PRÆCIS som de andre tre — se _evaluatePushNotificationsInner()'s
+// eget kaldested for det ubetingede fald tilbage til lokal beregning.
+const badevandScoresSyncEtagCache = {};
+function loadHubSyncedBadevandScores() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(__dirname, watershedSync.DATASETS['badevand-scores']), 'utf8'));
+    if (parsed && Array.isArray(parsed.points) && parsed.points.length) return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+// NYT (samme beslutning): når hub'en HAR leveret friske scorer, genskaber
+// dette de samme pt.riskScore/viralScore/foreRisk/foreViralRisk/algaeScore/
+// rainSource-mutationer computeAllPointRisks() selv ville have sat direkte
+// på hvert punkt (badevand-risk.js's kaskade nedenfor læser dem sådan, se
+// dens eget kaldested) — matchet på id, IKKE genberegnet lokalt.
+// lastKnownBucketByPointId opdateres OGSÅ her (kontinuitet, så en senere
+// hub-nedetid har korrekt "forrige bucket" at sammenligne mod) — men INGEN
+// Postgres-skriv: hub-adapteren har allerede skrevet dette cyklus'
+// transitions/last-buckets selv (se watershed-hub-badevand-score.js), et
+// lokalt recordTransitions()/upsertLastBuckets()-kald her ville duplikere
+// PRÆCIS samme rækker (deraf de tomme bucketTransitions/
+// bucketPersistUpdates-arrays ved kaldestedet — begge no-op'er allerede
+// korrekt på tom liste, se deres egne if-tjek nedenfor).
+function mergeHubScoredPoints(points, hubPoints, minRisk) {
+  const byId = new Map(points.map(pt => [String(pt.id), pt]));
+  const warnPoints = [];
+  const pointRisks = new Map();
+  const allPointRisks = [];
+  let cellMatched = 0;
+  let maxForecastMMSeen = 0, maxTodayMMSeen = 0, maxForeRiskSeen = 0;
+
+  for (const entry of hubPoints) {
+    const pt = byId.get(String(entry.id));
+    if (!pt) continue; // punkt kendt af hub'en, men ikke (længere) i denne apps egen puls-data.json — springes over, ikke en fejl
+    pt.riskScore      = entry.riskScore;
+    pt.viralScore     = entry.viralScore;
+    pt.algaeScore     = entry.algaeScore;
+    pt.foreRisk        = entry.foreRisk;
+    pt.foreViralRisk   = entry.foreViralRisk;
+    pt.rainSource      = entry.rainSource;
+
+    lastKnownBucketByPointId.set(pt.id, riskModel.riskBucket(entry.riskScore));
+
+    cellMatched++;
+    allPointRisks.push(entry);
+
+    const riskEntry = {
+      id: pt.id, outfallId: pt.outfallId, name: pt.name, municipality: pt.municipality, waterArea: pt.waterArea,
+      foreRisk: entry.foreRisk, foreViralRisk: entry.foreViralRisk, forecastMM: entry.forecastMM, todayMM: entry.todayMM,
+      isWastewater: pt.isWastewater,
+    };
+    pointRisks.set(String(pt.id), riskEntry);
+    if (pt.outfallId) pointRisks.set(pt.outfallId, riskEntry);
+
+    if ((entry.forecastMM || 0) > maxForecastMMSeen) maxForecastMMSeen = entry.forecastMM || 0;
+    if ((entry.todayMM || 0) > maxTodayMMSeen) maxTodayMMSeen = entry.todayMM || 0;
+    if ((entry.foreRisk || 0) > maxForeRiskSeen) maxForeRiskSeen = entry.foreRisk || 0;
+
+    if ((entry.foreRisk || 0) > minRisk) {
+      warnPoints.push({
+        id: pt.id, outfallId: pt.outfallId, name: pt.name, municipality: pt.municipality, waterArea: pt.waterArea,
+        foreRisk: entry.foreRisk, forecastMM: entry.forecastMM, todayMM: entry.todayMM,
+      });
+    }
+  }
+  return {
+    warnPoints, pointRisks, allPointRisks,
+    cellMatched, cellMissing: points.length - cellMatched,
+    maxForecastMMSeen, maxTodayMMSeen, maxForeRiskSeen,
+  };
+}
+
 // NYT: selve arbejdet, uændret fra før — kun kaldt via låsen ovenfor.
 // BEMÆRK: hvis dette kald genbruger et allerede kørende kald (låsen ovenfor
 // slog til), IGNORERES dette kalds testThresholds stiltiende — accepteret
@@ -3586,214 +3567,56 @@ async function _evaluatePushNotificationsInner(testThresholds) {
 
   const minRisk   = testThresholds?.minRisk   ?? 0.35;
 
-  const warnPoints = [];
-  const pointRisks = new Map();
-  // NYT: fuld liste til /api/risk-scores — bact/viral BÅDE nu og prognose,
-  // for hvert punkt, uanset om det krydser nogen varslingstærskel. Klienten
-  // erstatter sin egen computeRisk()/computeViralRisk()-løkke med denne.
-  const allPointRisks = [];
-  // NYT (Overløb-fanen, hændelseslog) — samlet HER, ét bulk-INSERT efter
-  // løkken, ikke ét pr. punkt. Se overloeb-events.js's filhoved.
-  const bucketTransitions = [];
-  // NYT (bruger-krav 2026-08-20) — punkter hvis bucket ændrede sig ELLER ses
-  // for allerførste gang denne cyklus, til puls_point_last_bucket
-  // (holdbarhed på tværs af genstarter) — se upsertLastBuckets(). Bredere
-  // end bucketTransitions ovenfor (som kun tager RIGTIGE skift, ikke
-  // førstegangs-observationer, se shouldLogTransition()).
-  const bucketPersistUpdates = [];
-
-  let cellMatched = 0, cellMissing = 0;
-  let maxForecastMMSeen = 0, maxTodayMMSeen = 0, maxForeRiskSeen = 0;
-
-  for (const pt of points) {
-    const key = riskModel.cellKey(pt.lat, pt.lng);
-    const cached = weatherCache.get(key);
-    const w = cached ? cached.data : null;
-    if (!w) { cellMissing++; continue; } // ingen vejrdata for denne celle endnu
-    cellMatched++;
-
-    // NYT (bruger-krav 2026-09-04: målt nedbør har ALTID forrang for
-    // prognose/model) — se dmi-rain.js's filhoved. w.hourlyWeek (Open-Meteo-
-    // modellen) bruges KUN som fallback, når ingen DMI-regnmåler er inden
-    // for rækkevidde af denne celle, eller dens seneste måling er for
-    // gammel (dmi-rain.getMeasuredForCell() returnerer da null). forecastMM
-    // er BEVIDST ALTID fra Open-Meteo uanset dette — fremtidig nedbør kan
-    // pr. definition ikke være "målt". precipMM og lastEventAge udledes
-    // begge af SAMME valgte kilde (aldrig en blanding af målt+model), samme
-    // princip risk-model.js's estimateLastEventAge()-filhoved allerede
-    // beskriver for tærskel-konsistens.
-    const measuredRain = dmiRain.getMeasuredForCell(key);
-    const rainHourlyWeek = measuredRain ? measuredRain.hourlyWeek : w.hourlyWeek;
-    pt.rainSource = measuredRain ? 'malt' : 'prognose'; // NYT — til fremtidig UI-transparens
-
-    const precipMM = rainHourlyWeek?.length
-      ? riskModel.accumulateDecayed(rainHourlyWeek, riskModel.HOURLY_DECAY_TAU_DAYS)[rainHourlyWeek.length - 1]
-      : (w.antecedentMM ?? null);
-    const todayMM      = measuredRain ? measuredRain.todayMM : (w.todayMM ?? null);
-    const forecastMM   = w.forecastMM ?? null;
-    const lastEventAge = riskModel.estimateLastEventAge(rainHourlyWeek, pt.thresholdMm);
-
-    const riskInput = {
-      overflowProbBase: pt.overflowProbBase,
-      meanVolumePerEvent: pt.meanVolumePerEvent,
-      thresholdMm: pt.thresholdMm,
-      precipMM, forecastMM, lastEventAge,
-    };
-    // NYT: beregner nu ogsÅ "nu"-risikoen (uden prognose-tillæg), ikke kun
-    // foreRisk — det er DEN, klientens hovedtal ("Samlet forureningsrisiko")
-    // faktisk viser i dag, ikke prognoseværdien.
-    const nowResult      = riskModel.computeRisk(riskInput);
-    const nowViralRisk   = riskModel.computeViralRisk(riskInput);
-    const foreRisk        = riskModel.computeForecastRisk(riskInput);
-    const foreViralRisk   = riskModel.computeForecastViralRisk(riskInput);
-
-    // NYT (Overløb-fanen, hændelseslog) — KUN "nu"-risikoen (nowResult),
-    // ALDRIG foreRisk/foreRisk72h herunder — prognosehorisonterne skifter
-    // konstant uden at noget reelt er indtruffet, og ville forurene loggen
-    // med støj. Se overloeb-events.js's shouldLogTransition() for hvorfor
-    // den allerførste observation af et punkt (prevBucket undefined) IKKE
-    // logges som et skift.
-    const ovlBucket = riskModel.riskBucket(nowResult.risk);
-    const ovlPrevBucket = lastKnownBucketByPointId.get(pt.id);
-    if (riskModel.shouldLogTransition(ovlPrevBucket, ovlBucket)) {
-      bucketTransitions.push({
-        pointId: pt.id,
-        municipalityKey: slugIndex.normalizeKommuneKey(pt.municipality || ''),
-        bucket: ovlBucket,
-        prevBucket: ovlPrevBucket,
-        risk: nowResult.risk,
-        createdAt: Date.now(),
-      });
+  // NYT (bruger-beslutning 2026-09-16, trin 2, "A"): forsøger FØRST hub'ens
+  // allerede beregnede scorer (samme computeAllPointRisks(), kørt hub-side
+  // på dens egen 15-minutters kadence, se watershed-hub-badevand-score.js)
+  // — falder ubetinget tilbage til lokal beregning for ENHVER grund til at
+  // synkroniseringen ikke leverer brugbare, friske data. Samme "aldrig et
+  // stille hul"-princip som warmCacheFromHub()/fetchCurrentsData() (se
+  // disses egne kaldesteder), anvendt fra start her.
+  let hubScored = null;
+  if (process.env.WATERSHED_HUB_URL) {
+    try {
+      const relativePath = watershedSync.DATASETS['badevand-scores'];
+      const result = await watershedSync.syncOne('badevand-scores', relativePath, badevandScoresSyncEtagCache);
+      if (result.status === 'updated' || result.status === 'unchanged') {
+        hubScored = loadHubSyncedBadevandScores();
+      }
+      if (hubScored) {
+        hubAlert.reportHubRecovered('badevand-scores');
+      } else {
+        console.warn(`badevand-scores: hub sync status '${result.status}' — falder tilbage til lokal beregning`);
+        hubAlert.reportHubFallback('badevand-scores', `sync status '${result.status}'${result.error ? ` — ${result.error}` : ''}`, false);
+      }
+    } catch (err) {
+      console.warn('badevand-scores: hub sync fejlede, falder tilbage til lokal beregning:', err.message);
+      hubAlert.reportHubFallback('badevand-scores', err.message, true);
     }
-    // NYT (bruger-krav 2026-08-20): ovlPrevBucket !== ovlBucket dækker BÅDE
-    // et rigtigt skift OG et punkt set for allerførste gang (ovlPrevBucket
-    // undefined) — begge skal persisteres, ellers gentager hukommelses-
-    // tab-problemet sig for netop førstegangs-punkter ved næste genstart.
-    if (ovlPrevBucket !== ovlBucket) {
-      bucketPersistUpdates.push({ pointId: pt.id, bucket: ovlBucket, updatedAt: Date.now() });
-    }
-    lastKnownBucketByPointId.set(pt.id, ovlBucket);
-    // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanens 72h-prognose) —
-    // samme computeForecastRisk()-funktion, blot fodret med den 72h-summede
-    // nedbørsprognose (w.forecastMM72h, se computeMetrics() ovenfor) i
-    // stedet for den 24h-summede. Kun bakteriel (ikke viral) — matcher
-    // præcis den eksisterende konvention for udløbs-varselsringe på
-    // hovedkortet, som også kun bruger foreRisk (bakteriel), aldrig viral.
-    const foreRisk72h = riskModel.computeForecastRisk({ ...riskInput, forecastMM: w.forecastMM72h ?? null });
-    // NYT: sat DIREKTE på selve punktet (ikke kun i allPointRisks/
-    // pointRisks nedenfor), så badevandRisk.computeBadevandRiskCascade()
-    // kan bruge SAMME `points`-array uden at genopbygge det — det array
-    // har allerede name/waterArea/municipality, som kun mangler i de to
-    // andre, mere begrænsede datastrukturer.
-    pt.riskScore  = nowResult.risk;
-    pt.viralScore = nowViralRisk;
-    // RETTET: foreRisk/foreViralRisk blev tidligere KUN gemt i de lokale
-    // pointRisks/allPointRisks-strukturer nedenfor, ikke sat direkte på pt
-    // selv — i modsætning til riskScore/viralScore/algaeScore lige ovenfor.
-    // badevandRisk.computeBadevandRiskCascade() (se badevand-risk.js) læser
-    // udelukkende felter direkte på pt via samme points-array, og kunne
-    // derfor ikke se prognosen overhovedet — den forsvandt stille fra
-    // sø-/kystvand-tooltippen ved server-omlægningen af badevands-risiko.
-    pt.foreRisk      = foreRisk;
-    pt.foreViralRisk = foreViralRisk;
+  }
 
-    // NYT: se risk-model.js's computeAlgaeRisk() filhoved — alt dette har
-    // brug for var allerede hentet server-side (CMEMS-temp, 7-dages
-    // nedbør, glidende lufttemperatur-gennemsnit), kun selve
-    // beregningen manglede at blive flyttet fra klienten.
-    let algaeScore = null;
-    const isWaterPt = waterFlagsCache?.get(pt.id);
-    let waterTemp = null;
-    if (isWaterPt && currentsCache.grid) {
-      const c = getCurrentAtServer(pt.lat, pt.lng, currentsCache.grid);
-      if (c && c.temp != null) waterTemp = c.temp;
-    }
-    if (waterTemp === null && w.recentAirTempAvg != null) {
-      waterTemp = riskModel.computeFreshwaterTemp(w.recentAirTempAvg);
-    }
-    if (waterTemp !== null) {
-      algaeScore = riskModel.computeAlgaeRisk({ totalRain7d: w.totalRain7d, volumeM3Year: pt.volumeM3Year, waterTemp });
-    }
-    pt.algaeScore = algaeScore;
-    if ((forecastMM || 0) > maxForecastMMSeen) maxForecastMMSeen = forecastMM || 0;
-    if ((todayMM || 0) > maxTodayMMSeen) maxTodayMMSeen = todayMM || 0;
-    if ((foreRisk || 0) > maxForeRiskSeen) maxForeRiskSeen = foreRisk || 0;
-
-    const riskEntry = {
-      id: pt.id, outfallId: pt.outfallId, name: pt.name, municipality: pt.municipality, waterArea: pt.waterArea,
-      foreRisk, foreViralRisk, forecastMM, todayMM,
-      // NYT (bruger-ønske 2026-07-26): se derivePulsFields()'s filhoved i
-      // risk-model.js — bruges af enqueuePushNotifications() til at
-      // udelukke bekræftede regnvandsudløb fra badested-favoritters
-      // prognose-baserede varsling, samme filter som badevand-risk.js's
-      // "nu"-beregning allerede respekterer.
-      isWastewater: pt.isWastewater,
-    };
-    // NYT (ustabil-id-rettelse — se loadPulsPointsFull()): registreres
-    // under BEGGE id'er, samme objekt, så et opslag fra en klient (som nu
-    // kan sende enten det gamle rækkeindeks eller den nye stabile
-    // outfallId — se toggleFav()/toggleBadevandFav()) rammer uanset hvilket.
-    pointRisks.set(String(pt.id), riskEntry);
-    if (pt.outfallId) pointRisks.set(pt.outfallId, riskEntry);
-
-    allPointRisks.push({
-      id: pt.id,
-      riskScore: nowResult.risk,   // null hvis noData
-      viralScore: nowViralRisk,
-      algaeScore,  // NYT: se risk-model.js's computeAlgaeRisk() — tidligere kun beregnet klient-side
-      foreRisk, foreViralRisk, foreRisk72h,
-      noData: nowResult.noData,
-      isWater: waterFlagsCache?.get(pt.id),  // NYT: undefined hvis cachen ikke kunne bygges — klienten falder tilbage til lokal beregning i så fald
-      // NYT (Kommune Dashboard-udvidelse, "Overløb"-fanen) — lat/lng/
-      // municipality/isWastewater/name var tidligere IKKE med her (kun i
-      // pointRisks/riskEntry ovenfor) — tilføjet så overloeb-status.js kan
-      // kommune-scope og plotte punkterne direkte fra denne allerede
-      // cachede liste, uden selv at skulle genindlæse loadPulsPointsFull().
-      lat: pt.lat, lng: pt.lng, municipality: pt.municipality, isWastewater: pt.isWastewater, name: pt.name,
-      // NYT (Kommune Dashboard-udvidelse, udløbs-detaljepanel) — waterArea/
-      // dataQuality til stamdata-visning, weatherKey (samme 0,25°-gitter-
-      // celle som resten af appen, se riskModel.cellKey()) så klienten kan
-      // hente den offentlige 7-dages nedbørsgraf (GET /api/weather/weekly)
-      // uden selv at skulle genimplementere cellKey()-beregningen en tredje
-      // gang (server.js/dansk-overloeb-kort.html har den allerede hver for sig).
-      waterArea: pt.waterArea, dataQuality: pt.dataQuality, weatherKey: riskModel.cellKey(pt.lat, pt.lng),
-      // RETTET: forecastMM/todayMM manglede her fra sidste feature —
-      // overloeb-status.js's udloeb[].forecastMM/todayMM (vist i "Udløb med
-      // aktive varsler"-listen) læste dermed altid `pt.forecastMM`/`pt.
-      // todayMM` som undefined→null, og viste stille "0.0 mm" for begge felter
-      // uanset faktisk nedbør. Begge er allerede i scope i denne løkke (`w.
-      // forecastMM`/`w.todayMM`, se riskInput ovenfor).
-      forecastMM, todayMM,
-      // RETTET: meanVolumePerEvent manglede her fra sidste feature —
-      // /admin/api/overloeb-prioriteret's "størst estimeret udledning"-
-      // sortering slog altid op i denne (`riskScoresCache.points`), fandt
-      // undefined, og satte estimeretLiterTotal:null for ALLE udløb — den
-      // sorteringsmulighed var derfor reelt ikke-funktionel. pt.
-      // meanVolumePerEvent er allerede i scope (bruges i riskInput ovenfor).
-      meanVolumePerEvent: pt.meanVolumePerEvent,
-      // NYT (bruger-krav 2026-08-20 — "samtlige puls data" i udløbs-
-      // detaljepanelet): gennemstik af loadPulsPointsFull()'s rå PULS-
-      // stamdata (se dens filhoved for feltbeskrivelser og hvorfor `cod`
-      // bevidst IKKE er med) — samme "allerede i scope på pt"-mønster som
-      // waterArea/dataQuality ovenfor.
-      outfallId: pt.outfallId,
-      overflowProbBase: pt.overflowProbBase,
-      thresholdMm: pt.thresholdMm,
-      volumeM3: pt.volumeM3, eventsPerYear: pt.eventsPerYear,
-      reducedArea: pt.reducedArea, type: pt.type, sewerStructure: pt.sewerStructure,
-      latestDischargeYear: pt.latestDischargeYear,
-      cod: pt.cod, bod: pt.bod, nitrogen: pt.nitrogen, phosphor: pt.phosphor,
-      normalYear: pt.normalYear, normalVol: pt.normalVol, normalEv: pt.normalEv,
-      normalCod: pt.normalCod, normalBod: pt.normalBod,
-      normalNitrogen: pt.normalNitrogen, normalPhosphor: pt.normalPhosphor,
-    });
-
-    if ((foreRisk || 0) > minRisk) {
-      warnPoints.push({
-        id: pt.id, outfallId: pt.outfallId, name: pt.name, municipality: pt.municipality, waterArea: pt.waterArea,
-        foreRisk, forecastMM, todayMM,
-      });
-    }
+  // NYT (trin 0): selve PULS-punkt-risikoløkken flyttet til
+  // puls-risk-scoring.js, ren udtrækning — se dens eget filhoved for hvorfor
+  // (adskiller REN beregning fra Postgres-skriv/SSE/push-afsendelse
+  // nedenfor, så hub-adapteren kan kalde SAMME funktion uden at overtage
+  // nogen af de stateful dele). 100% adfærdsbevarende ved lokal beregning;
+  // ved hub-scorede data er bucketTransitions/bucketPersistUpdates bevidst
+  // tomme — se mergeHubScoredPoints()'s eget filhoved for hvorfor.
+  let warnPoints, pointRisks, allPointRisks, bucketTransitions, bucketPersistUpdates,
+      cellMatched, cellMissing, maxForecastMMSeen, maxTodayMMSeen, maxForeRiskSeen;
+  if (hubScored) {
+    ({
+      warnPoints, pointRisks, allPointRisks,
+      cellMatched, cellMissing, maxForecastMMSeen, maxTodayMMSeen, maxForeRiskSeen,
+    } = mergeHubScoredPoints(points, hubScored.points, minRisk));
+    bucketTransitions = [];
+    bucketPersistUpdates = [];
+  } else {
+    ({
+      warnPoints, pointRisks, allPointRisks, bucketTransitions, bucketPersistUpdates,
+      cellMatched, cellMissing, maxForecastMMSeen, maxTodayMMSeen, maxForeRiskSeen,
+    } = pulsRiskScoring.computeAllPointRisks(points, {
+      weatherCache, dmiRain, waterFlagsCache, currentsCache, lastKnownBucketByPointId, minRisk,
+    }));
   }
 
   riskScoresCache = { ts: Date.now(), points: allPointRisks };
