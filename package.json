@@ -13,6 +13,7 @@
     "compression": "^1.7.4",
     "express": "^4.21.0",
     "multer": "^2.2.0",
+    "nodemailer": "^10.0.10",
     "openid-client": "^6.8.5",
     "pdfkit": "^0.19.1",
     "pg": "^8.22.0",

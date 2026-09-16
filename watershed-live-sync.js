@@ -24,6 +24,7 @@
 
 const crypto = require('crypto');
 const { syncOne } = require('./watershed-sync');
+const hubAlert = require('./hub-alert');
 
 const HUB_URL = process.env.WATERSHED_HUB_URL;
 
@@ -68,8 +69,17 @@ function startLiveSync(datasetHandlers, { intervalMs = FAST_POLL_MS, log = conso
           log(`[watershed-live-sync] ${datasetKey}: updated (${result.bytes} bytes)`);
           handler.onSynced?.();
         }
+        // NYT (bruger-krav 2026-09-16) — se hub-alert.js's filhoved.
+        // 'unchanged'/'updated' er begge reel succes (hub'en er oppe og har
+        // svaret meningsfuldt); 'error'/'not-yet-fetched-by-hub' er degraded.
+        if (result.status === 'error' || result.status === 'not-yet-fetched-by-hub') {
+          hubAlert.reportHubFallback(datasetKey, `sync status '${result.status}'${result.error ? ` — ${result.error}` : ''}`, false);
+        } else {
+          hubAlert.reportHubRecovered(datasetKey);
+        }
       } catch (err) {
         log(`[watershed-live-sync] ${datasetKey}: poll failed — ${err.message}`);
+        hubAlert.reportHubFallback(datasetKey, err.message, true);
       }
     }
   }
