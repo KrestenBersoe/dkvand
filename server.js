@@ -977,6 +977,25 @@ app.get('/internal/sales', adminUsers.requireStaffSession, (req, res) => {
   res.redirect('/internal/choose-country');
 });
 
+// NYT (bruger-krav 2026-09-17 — "hide watershed behind same login as admin
+// login"): samme håndsrækningsmønster som kommune-login-håndsrækningen
+// ovenfor (se sso-handoff.js's buildMunicipalityHandoffRedirect), men til
+// watershed-huben i stedet for en tenant. 'system'-only — watershed er
+// tværnational infrastruktur (alle tre landes pipelines), ikke ét lands
+// driftsdata, se buildStaffHandoffRedirect()'s eget filhoved for hvorfor
+// tjekket ligger her og ikke i sso-handoff.js selv.
+app.get('/internal/watershed', adminUsers.requireStaffSession, (req, res) => {
+  if (req.staff.role !== 'system') {
+    return res.status(403).send('Watershed er kun tilgængeligt for system-brugere.');
+  }
+  try {
+    res.redirect(ssoHandoff.buildStaffHandoffRedirect({ staff: req.staff }));
+  } catch (e) {
+    console.error('internal/watershed: kunne ikke bygge handoff —', e.message);
+    res.status(500).send('Watershed er ikke konfigureret korrekt lige nu.');
+  }
+});
+
 // NYT — SAMME computeKommuneBenchmark()/periode-parsing som GET /admin/api/
 // kommune-benchmark (se dens filhoved), men bag adminUsers.requireStaffSession
 // i stedet for tenantAdmin.requireTenantSession — sales er ikke logget ind

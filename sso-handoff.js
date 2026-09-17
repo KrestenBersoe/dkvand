@@ -126,9 +126,48 @@ function verifyProductAssertion(token) {
   return { municipalityId: payload.municipalityId, municipalityName: payload.municipalityName };
 }
 
+// ── Staff → watershed hub handoff (internt personale, IKKE kommune/council/
+// mairie) ────────────────────────────────────────────────────────────────
+// RETTET (bruger-krav 2026-09-17 — "hide watershed behind same login as
+// admin login"): watershed (den fælles hub, se watershed-sync.js's egen
+// WATERSHED_HUB_URL) havde ingen adgangskontrol overhovedet — hvem som
+// helst med URL'en kunne se alle tre produkters pipeline-status/hemmelige
+// driftsdata. Samme håndsrækningsmønster som buildMunicipalityHandoffRedirect
+// ovenfor, men:
+//   - Kilden er IKKE en tenant-login, det er en allerede-godkendt
+//     dkv_staff_session (req.staff, sat af adminUsers.requireStaffSession —
+//     se server.js's GET /internal/watershed).
+//   - Begrænset til role === 'system' i server.js's route-handler (IKKE her
+//     — denne funktion signerer blot det den bliver bedt om, samme
+//     ansvarsfordeling som buildMunicipalityHandoffRedirect ovenfor, der
+//     heller ikke selv tjekker countryCode): watershed er tværnational
+//     infrastruktur (alle tre landes pipelines på én dashboard), en
+//     'country'-bruger har pr. definition kun adgang til sit eget lands data
+//     andre steder i denne fil — samme grænse skal gælde her.
+//   - `intent: 'staff-login'` (adskilt fra 'login'/'set-password' ovenfor)
+//     og `product: 'watershed'` forhindrer at dette token nogensinde kan
+//     genbruges mod en kommune-rute eller omvendt, selvom nøglen er delt.
+/**
+ * @param {{staff: {adminUserId: string, email: string, role: 'system'|'country'}}} p
+ * @returns {string} fuld redirect-URL til watershed's login-callback
+ */
+function buildStaffHandoffRedirect({ staff }) {
+  const hubUrl = process.env.WATERSHED_HUB_URL;
+  if (!hubUrl) throw new Error('WATERSHED_HUB_URL er ikke sat — kan ikke bygge watershed-handoff.');
+  const token = signHandoffToken({
+    intent: 'staff-login',
+    product: 'watershed',
+    role: staff.role,
+    adminUserId: staff.adminUserId,
+    email: staff.email,
+  });
+  return `${hubUrl}/login/callback?token=${encodeURIComponent(token)}`;
+}
+
 module.exports = {
   THIS_PRODUCT_COUNTRY,
   ASSERTION_MAX_AGE_MS,
   buildMunicipalityHandoffRedirect,
   verifyProductAssertion,
+  buildStaffHandoffRedirect,
 };
