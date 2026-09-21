@@ -124,6 +124,64 @@ async function fetchOpenMeteoWithRetry(lat, lng, retries = 2) {
   }
 }
 
+// Same confirmed 9KB/414 URL-length boundary ukwater/frwater's own
+// liveRainfall.js established for this exact API (350 cells = ~4.8KB
+// confirmed 200 OK, 676 cells = 414) — reused here rather than re-deriving
+// it, since the per-cell coordinate string length (`.toFixed(4)`) is
+// identical. PULS's own grid (~171 cells) fits in a single batch regardless.
+const BATCH_SIZE = 300;
+
+// Multi-location fetch — one HTTP request for up to BATCH_SIZE cells at
+// once, via Open-Meteo's comma-separated latitude/longitude params (same
+// real, confirmed capability liveRainfall.js's own header documents).
+// Added alongside fetchOpenMeteo() above, not in place of it:
+// fetchOpenMeteo()/fetchOpenMeteoWithRetry() stay as-is for server.js's own
+// single-cell cold-fallback path (low volume, per-request), this is only
+// for the hub's own bulk full-grid sweep (watershed-hub-open-meteo-poll.js).
+function fetchOpenMeteoBatch(cells) {
+  return new Promise((resolve, reject) => {
+    const lats = cells.map((c) => c.lat.toFixed(4)).join(',');
+    const lngs = cells.map((c) => c.lng.toFixed(4)).join(',');
+    const url = `https://api.open-meteo.com/v1/forecast` +
+      `?latitude=${lats}&longitude=${lngs}` +
+      `&hourly=precipitation,temperature_2m,windspeed_10m,winddirection_10m` +
+      `&wind_speed_unit=ms&past_days=7&forecast_days=4` +
+      `&models=best_match&timezone=Europe%2FCopenhagen`;
+    https.get(url, (resp) => {
+      if (resp.statusCode !== 200) {
+        const err = new Error(`Open-Meteo HTTP ${resp.statusCode}`);
+        err.status = resp.statusCode; // lets callers single out 429 for its own backoff, see isTransientOpenMeteoError's own header for why that's kept separate from the generic retry
+        reject(err);
+        resp.resume();
+        return;
+      }
+      let body = '';
+      resp.on('data', (c) => (body += c));
+      resp.on('end', () => {
+        try {
+          const json = JSON.parse(body);
+          // A single-cell batch (the last, remainder chunk can be size 1)
+          // gets back a plain object instead of a 1-element array — same
+          // documented Open-Meteo quirk liveRainfall.js's own
+          // fetchBatchRaw() already confirmed live and handles the same way.
+          resolve(Array.isArray(json) ? json : [json]);
+        } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+
+async function fetchOpenMeteoBatchWithRetry(cells, retries = 2) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fetchOpenMeteoBatch(cells);
+    } catch (e) {
+      if (attempt >= retries || !isTransientOpenMeteoError(e)) throw e;
+      await new Promise((r) => setTimeout(r, 1500 * (attempt + 1)));
+    }
+  }
+}
+
 // Compute derived precipitation metrics from raw Open-Meteo JSON.
 function computeMetrics(json) {
   const times = json?.hourly?.time || [];
@@ -187,4 +245,5 @@ function computeMetrics(json) {
 module.exports = {
   GRID_DEG, gridKey, buildDenmarkGrid, buildPulsGrid,
   fetchOpenMeteo, isTransientOpenMeteoError, fetchOpenMeteoWithRetry, computeMetrics,
+  BATCH_SIZE, fetchOpenMeteoBatch, fetchOpenMeteoBatchWithRetry,
 };
