@@ -241,20 +241,23 @@
      sharedInteractiveRenderer bruges IKKE her), da Canvas-figurer ikke kan
      CSS-animeres.
 
-     Ringens FARVE er altid udløbets egen type-farve (RBU_KLOAK_FILL/
-     RBU_REGN_FILL) — den skal aldrig kunne forveksles med en risiko-
-     farveskala. Ringens BEVÆGELSE (eller mangel på samme) koder status, i
-     tre trin:
+     RETTET (bruger-ønske, stil hentet fra søster-projektet ukwater/frwaters
+     "Outlets"-lag): ringen var tidligere farvet efter udløbets TYPE
+     (RBU_KLOAK_FILL/RBU_REGN_FILL, brun/blå) og regnvandsudløb fik en
+     dæmpet udgave af ringen ved aktivt overløb. Begge dele er ændret:
+       - KUN kloak-/spildevandsudløb (CSO, isRbuWastewater===true) kan
+         nogensinde få en ring — rent regnvand bærer ingen bakterie-/
+         virusrisiko nedstrøms og skal derfor aldrig vise nogen
+         overløbsindikation, animeret eller ej (se colorRbuByOwnRisk()).
+         Grundmarkørens farve (blå regn / brun kloak) er UÆNDRET.
+       - Ringens FARVE koder nu STATUS (rød/gul, samme skala som app'ens
+         øvrige risikofarver, se riskStyle()) i stedet for type, ligesom
+         ukwaters røde/gule ringe — den kan derfor ikke længere forveksles
+         med "dette er blot et kloak-punkt".
+     Ringens BEVÆGELSE (eller mangel på samme) koder selve overløbstrinnet:
        - intet overløb:  ingen ring
-       - "i risiko":      .outlet-watch-ring    (STATISK — se dens filhoved)
-       - aktivt overløb:  .outlet-active-ring   (kloak/CSO — hurtig ping)
-                        eller .outlet-active-ring-calm (regnvand — langsommere,
-                        dæmpet ping)
-     Kloakoverløb (spildevand) er den eneste af de to typer der reelt
-     medfører bakterie-/virusrisiko nedstrøms — derfor får kun kloak-typen
-     den hurtige, "alarmerende" ping; et rent regnvandsudløb i overløb får en
-     synligt roligere version af samme animation, så et udløb uden
-     sundhedsrisiko ikke ser lige så alvorligt ud som ét med. */
+       - "i risiko":      .outlet-watch-ring    (STATISK, gul — se dens filhoved)
+       - aktivt overløb:  .outlet-active-ring   (animeret, rød ping) */
   @keyframes outlet-ring-pulse {
     0%   { transform: scale(1); opacity: .85; }
     100% { transform: scale(2.2); opacity: 0; }
@@ -263,16 +266,6 @@
     transform-box: fill-box;
     transform-origin: center;
     animation: outlet-ring-pulse 1.8s ease-out infinite;
-    pointer-events: none;
-  }
-  @keyframes outlet-ring-pulse-calm {
-    0%   { transform: scale(1); opacity: .5; }
-    100% { transform: scale(2.4); opacity: 0; }
-  }
-  .outlet-active-ring-calm {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: outlet-ring-pulse-calm 3.2s ease-out infinite;
     pointer-events: none;
   }
   /* RETTET (2026-09-05, anden runde — se bruger-rapporten om stiplede ringe
@@ -3761,6 +3754,14 @@ const RBU_REGN_FILL   = '#3584e4';   // fill
 const RBU_KLOAK_COLOR = '#4a2c14';   // stroke
 const RBU_KLOAK_FILL  = '#8b5a2b';   // fill
 
+// NYT: overløbs-RINGENS farve (se renderVisibleRbuRings()) — bevidst
+// SAMME røde/gule som app'ens øvrige risikoskala (riskStyle(), :6494-6499),
+// ikke udløbstypens egen farve ovenfor. Ringen koder status (aktivt
+// overløb/i risiko), grundmarkøren koder type (regn/kloak) — de to må
+// ikke dele farveskala, ellers kan de forveksles med hinanden.
+const RBU_RING_ACTIVE_COLOR = '#c84b1f';   // rød — aktivt overløb
+const RBU_RING_WATCH_COLOR  = '#d4a020';   // gul — i risiko, endnu ikke aktivt
+
 function _lerp(a, b, t) { return a + (b - a) * t; }
 
 function currentRbuStyle(isWastewater) {
@@ -7208,8 +7209,7 @@ function colorBadevandByRisk() {
 }
 
 // Animeret overløbs-ring på Overløb-laget — se vp3OverloebRingLayer's
-// filhoved og .outlet-active-ring/.outlet-active-ring-calm/
-// .outlet-watch-ring for selve CSS'en.
+// filhoved og .outlet-active-ring/.outlet-watch-ring for selve CSS'en.
 //
 // Matcher HVER RBU-punkt til PULS' egen outfallId (r[8] i puls-data.json)
 // via en eksakt ID-sammenligning (pkt_id === outfallId) — IKKE nærmeste-
@@ -7230,13 +7230,16 @@ function colorBadevandByRisk() {
 //      gult ved (se pct/barColor-beregningen ved computeThresholdCrossing-
 //      kaldet i showUdlobPanel()) — ét sted definerer "tæt på overløb",
 //      ikke to uafhængige tal.
-//   2) Ringens farve er altid udløbets EGEN type-farve (RBU_KLOAK_FILL for
-//      kloak/CSO, RBU_REGN_FILL for regnvand) i stedet for riskColor() —
-//      farve = type, bevægelse = status.
-//   3) Kun kloak/CSO får den hurtige ping (.outlet-active-ring) ved aktivt
-//      overløb; regnvand får en dæmpet, langsommere variant
-//      (.outlet-active-ring-calm), da kun spildevand medfører bakterie-/
-//      virusrisiko nedstrøms.
+//   2) [OPDATERET, bruger-ønske — se RBU_RING_ACTIVE_COLOR/RBU_RING_WATCH_
+//      COLOR ovenfor] Ringens farve kodede oprindeligt udløbets EGEN
+//      type-farve (RBU_KLOAK_FILL/RBU_REGN_FILL) i stedet for riskColor().
+//      Ændret til at kode STATUS (rødt/gult, samme skala som app'ens øvrige
+//      risikofarver) i stedet — farve = status, bevægelse = overløbstrin.
+//   3) [OPDATERET, bruger-ønske] Kun kloak/CSO får OVERHOVEDET en ring —
+//      regnvand fik oprindeligt en dæmpet, langsommere ping
+//      (.outlet-active-ring-calm) ved aktivt overløb; fjernet helt, da kun
+//      spildevand medfører bakterie-/virusrisiko nedstrøms (se
+//      colorRbuByOwnRisk()'s tidlige `if (!isCso) return`).
 // Udløb uden pt.hourlyWeek (ingen PULS-vejrcelle) kan ikke få et
 // tærskelkrydsningssvar og falder tilbage til den gamle riskScore ≥ 0.6-
 // gate som "aktiv" — uden "i risiko"-mellemtrin, da det kræver
@@ -7266,9 +7269,10 @@ let sharedRingRenderer = null;
 // SAMTLIGE ~14.625 matchede udløb, HVER GANG den blev kaldt — inklusive
 // den 168-trins henfaldsberegning (computeThresholdCrossing()) for hver
 // ét. Opdelt i to nu:
-//   1) colorRbuByOwnRisk() — beregner tilstanden (uændret logik/tærskler)
-//      og gemmer den DIREKTE på markøren (marker._ringTier/._ringIsCso).
-//      Kører kun ved datafornyelse (se renderMap()), ligesom før.
+//   1) colorRbuByOwnRisk() — beregner tilstanden (uændret logik/tærskler,
+//      nu også filtreret til kun CSO/kloak) og gemmer den DIREKTE på
+//      markøren (marker._ringTier). Kører kun ved datafornyelse (se
+//      renderMap()), ligesom før.
 //   2) renderVisibleRbuRings() — bygger de faktiske DOM-ring-elementer,
 //      men KUN for udløb inden for kortets nuværende viewport, og uden at
 //      gentage nogen risikoberegning (den er allerede gjort af #1). Billig
@@ -7297,6 +7301,12 @@ function colorRbuByOwnRisk() {
     if (!pt) { marker._ringTier = null; return; }
 
     const isCso = isRbuWastewater(marker.feature?.properties);
+    // RETTET (bruger-ønske): kun kloak-/spildevandsudløb (CSO) må vise en
+    // ring/overløbsindikation overhovedet — rent regnvand bærer ingen
+    // sundhedsrisiko nedstrøms og skal aldrig antyde en, hverken animeret
+    // eller statisk. Grundmarkørens blå farve er uændret, se currentRbuStyle().
+    if (!isCso) { marker._ringTier = null; return; }
+
     const crossing = computeThresholdCrossing(pt.hourlyWeek, pt.thresholdMm);
 
     let tier = null; // 'active' | 'watch' | null (ingen ring)
@@ -7309,15 +7319,14 @@ function colorRbuByOwnRisk() {
     } else if (pt.riskScore !== null && pt.riskScore >= 0.6) {
       tier = 'active'; // fallback, se filhovedets kommentar: intet hourlyWeek → intet "i risiko"-trin
     }
-    marker._ringTier  = tier;
-    marker._ringIsCso = isCso;
+    marker._ringTier = tier;
   });
 
   renderVisibleRbuRings();
 }
 
 // Se colorRbuByOwnRisk()'s filhoved. Læser KUN allerede-beregnet tilstand
-// (marker._ringTier/._ringIsCso) — ingen risikoberegning her — og bygger
+// (marker._ringTier) — ingen risikoberegning her — og bygger
 // ringe for udløb inden for viewport'en + en fast bufferzone (.pad(0.25)),
 // så en ring ikke popper synligt ind/ud af syne ved en lille panorering
 // helt ude i kanten af skærmen. Kaldes ved hver pan/zoom (se
@@ -7337,14 +7346,14 @@ function renderVisibleRbuRings() {
     const latlng = marker.getLatLng();
     if (!bounds.contains(latlng)) return;
 
-    const isCso = marker._ringIsCso;
-    const className = tier === 'watch'
-      ? 'outlet-watch-ring'
-      : (isCso ? 'outlet-active-ring' : 'outlet-active-ring-calm');
+    // Kun CSO/kloak-udløb når hertil (se colorRbuByOwnRisk()) — ringens
+    // farve koder derfor altid STATUS (rød/gul), aldrig udløbstype.
+    const className = tier === 'watch' ? 'outlet-watch-ring' : 'outlet-active-ring';
+    const color      = tier === 'watch' ? RBU_RING_WATCH_COLOR : RBU_RING_ACTIVE_COLOR;
 
     const ring = L.circleMarker(latlng, {
       radius: marker.getRadius() + 3,
-      color: isCso ? RBU_KLOAK_FILL : RBU_REGN_FILL,
+      color,
       weight: 2.5,
       fillOpacity: 0,
       className,
@@ -8615,6 +8624,19 @@ async function registerSW() {
     // Android/Chrome) — kræver en klar SW-registrering, samme sted appen i
     // forvejen først kan tilgå pushManager. Se registerPeriodicHeartbeatSync().
     registerPeriodicHeartbeatSync(_swReg).catch(() => {});
+    // RETTET (bruger-rapporteret: baggrundskortet forsvinder i PWA'en på
+    // Android efter et stykke tid): beder om "persistent storage", så
+    // overloeb-sw.js's nye tile-/map-assets-cache (Cache Storage API, se den
+    // fils filhoved) IKKE indgår i browserens almindelige "best-effort"-
+    // udrydning under lagerplads-pres, som ellers frit kan ramme en
+    // installeret PWA lige så vel som en almindelig fane. Bedste-indsats
+    // API — kan afvises stille af browseren, intet at gøre ved det herfra
+    // ud over at logge til diagnosticering.
+    if (navigator.storage?.persist) {
+      navigator.storage.persist()
+        .then(granted => console.info('Persistent storage:', granted ? 'granted' : 'denied'))
+        .catch(() => {});
+    }
   } catch(e) {
     console.warn('SW unavailable:', e.message);
   }
