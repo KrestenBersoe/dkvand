@@ -39,7 +39,11 @@ const { buildCurrentGrid, getCurrentAtServer } = require('./current-grid');
 
 (async () => {
   try {
-    const { points, staticDir, currentPoints } = workerData;
+    // NYT: adHocPoints — se badevand-risk.js's computeBadevandRiskCascade()
+    // filhoved. undefined for den officielle kaskade (uændret adfærd);
+    // sat af private-site-risk.js's egen, SEPARATE new Worker()-instans
+    // (samme workerfil, egen OS-tråd, egen 30-minutters kadence).
+    const { points, staticDir, currentPoints, adHocPoints } = workerData;
 
     // Genopbygger samme grid+bucket-index som hovedtråden havde — fra de rå
     // strømpunkter (currentsCache.grid.values()), IKKE fra selve Map'en
@@ -49,7 +53,7 @@ const { buildCurrentGrid, getCurrentAtServer } = require('./current-grid');
     const getCurrentAt = grid ? (lat, lng) => getCurrentAtServer(lat, lng, grid) : null;
 
     const result = await badevandRisk.computeBadevandRiskCascade(
-      points, riskModel.seasonalTau, riskModel.seasonalTauViral, staticDir, undefined, getCurrentAt
+      points, riskModel.seasonalTau, riskModel.seasonalTauViral, staticDir, undefined, getCurrentAt, adHocPoints || null
     );
     parentPort.postMessage({ ok: true, result });
   } catch (e) {

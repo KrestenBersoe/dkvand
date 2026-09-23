@@ -107,6 +107,16 @@ const appMetrics   = require('./app-metrics');
 // her i stedet for direkte i selve ruterne nedenfor.
 const overloebStatus = require('./overloeb-status');
 const overloebEvents = require('./overloeb-events');
+// NYT: private (bruger-oprettede) badesteder — se private-sites.js's
+// filhoved for tokens/ejerskab, og private-site-risk.js's for hvorfor
+// scoring kører på sin egen worker_thread/30-minutters-cyklus i stedet for
+// at genbruge ukwaters billige on-demand-scoring.
+const privateSites = require('./private-sites');
+const { createPrivateSiteRiskService, PRIVATE_SITE_STALE_MS } = require('./private-site-risk');
+// Sat først EFTER app.listen() (se bunden af filen) — ruterne nedenfor
+// guarder derfor eksplicit mod null (samme snævre opstarts-race andre
+// modul-scopede caches i denne fil allerede håndterer defensivt).
+let privateSiteRisk = null;
 // NYT (bruger-krav 2026-08-20 — "der skal nu opsamles tæller for antal
 // visninger per badested", Statistik-panelets "# Visninger"): se
 // page-views.js's filhoved.
@@ -3457,7 +3467,7 @@ async function evaluatePushNotifications(testThresholds) {
 // 15. minut (se WEATHER_CHECK_INTERVAL_MS), så opstartsomkostningen ved en
 // ny worker (typisk lav tocifret ms) er ubetydelig sammenlignet med de
 // 45-57 sek. selve beregningen tager.
-function runBadevandRiskCascadeInWorker(points, staticDir, grid) {
+function runBadevandRiskCascadeInWorker(points, staticDir, grid, adHocPoints = null) {
   return new Promise((resolve, reject) => {
     let done = false;
     const worker = new Worker(path.join(__dirname, 'badevand-risk-worker.js'), {
@@ -3465,6 +3475,7 @@ function runBadevandRiskCascadeInWorker(points, staticDir, grid) {
         points,
         staticDir,
         currentPoints: grid ? [...grid.values()] : null,
+        adHocPoints,
       },
     });
     worker.once('message', (msg) => {
@@ -4414,6 +4425,135 @@ app.use(watershedLiveSync.hubWebhookRouter(dmiRainSyncHandlers, { secret: DKVAND
 // Returns warm cells from cache immediately. Cold cells are fetched individually
 // with concurrency=4 so the endpoint is useful even before warmCache completes.
 app.use(express.json({ limit: '1mb' }));
+
+// ── Private (bruger-oprettede) badesteder — se private-sites.js/
+// private-site-risk.js's filhoveder. RETTET (opdaget under egen
+// gennemgang): flyttet hertil FRA en placering tidligere i filen, FØR
+// express.json() ovenfor var monteret — req.body ville have været
+// undefined for hver eneste af disse ruter, præcis samme klasse fejl som
+// hubWebhookRouter's egen kommentar ovenfor advarer om (registreres FØR
+// express.json() med vilje, af den modsatte grund: for selv at kunne læse
+// den rå body). Disse ruter skal omvendt ligge EFTER. ─────────────────────
+function privateSiteRiskPayload(scored) {
+  if (!scored) return null;
+  return { bact: scored.bact, viral: scored.viral, algae: scored.algae, source: scored.source, waterType: scored.waterType, scoredAtMs: scored.scoredAtMs };
+}
+
+app.post('/api/private-sites', async (req, res) => {
+  try {
+    const { name, description } = req.body || {};
+    const lat = Number(req.body?.lat), lng = Number(req.body?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return res.status(400).json({ error: 'Ugyldig placering.' });
+    }
+    const result = await privateSites.createPrivateSite({ name, description, lat, lng }, getClientIp(req));
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    if (e.code === 'RATE_LIMITED') {
+      return res.status(429).json({ error: `Du har allerede oprettet ${e.limit} private badesteder i dag — prøv igen i morgen.` });
+    }
+    if (e.code === 'VALIDATION') {
+      return res.status(400).json({ error: e.message });
+    }
+    console.error('private-sites create: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke oprette badested lige nu.' });
+  }
+});
+
+app.get('/api/private-sites/:siteId', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    const site = await privateSites.getPrivateSiteById(req.params.siteId);
+    if (!site || site.revokedAt) return res.status(404).json({ error: 'Badested ikke fundet.' });
+
+    const scored = privateSiteRisk ? privateSiteRisk.getLatest(site.siteId) : null;
+    const isStale = !scored || (Date.now() - scored.scoredAtMs) > PRIVATE_SITE_STALE_MS;
+    if (privateSiteRisk && isStale) {
+      // Fyr-og-glem — IKKE afventet af selve svaret her, se
+      // private-site-risk.js's scoreOneOff()-filhoved for hvorfor et
+      // synkront svar ville kunne betyde et ~50-sekunders HTTP-hang.
+      privateSiteRisk.scoreOneOff({ siteId: site.siteId, lat: site.lat, lng: site.lng })
+        .catch(e => console.warn('private-site scoreOneOff fejlede:', e.message));
+    }
+    res.json({ ok: true, site, risk: privateSiteRiskPayload(scored), scoring: !scored });
+  } catch (e) {
+    console.error('private-sites detail: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente badested lige nu.' });
+  }
+});
+
+app.post('/api/private-sites/:siteId/revoke', async (req, res) => {
+  try {
+    const ok = await privateSites.verifyOwnerToken(req.params.siteId, req.body?.ownerToken);
+    if (!ok) return res.status(403).json({ error: 'Ugyldigt ejer-token.' });
+    const revoked = await privateSites.revokePrivateSite(req.params.siteId);
+    res.json({ ok: true, revoked });
+  } catch (e) {
+    console.error('private-sites revoke: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke tilbagekalde badested lige nu.' });
+  }
+});
+
+app.post('/api/private-sites/:siteId/regenerate-link', async (req, res) => {
+  try {
+    const ok = await privateSites.verifyOwnerToken(req.params.siteId, req.body?.ownerToken);
+    if (!ok) return res.status(403).json({ error: 'Ugyldigt ejer-token.' });
+    const shareToken = await privateSites.regenerateShareToken(req.params.siteId);
+    res.json({ ok: true, shareToken });
+  } catch (e) {
+    console.error('private-sites regenerate-link: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke regenerere link lige nu.' });
+  }
+});
+
+// Klientens EGEN liste-genopfriskning (localStorage-listen af egne/delte
+// private badesteder, se dansk-overloeb-kort.html) — bevidst INGEN bulk-
+// listeendpoint uden konkrete ID'er (private badesteder er IKKE
+// gennemsøgelige/liste-bare, samme princip som ukwater/frwater). Loft på
+// 25, matcher ukwaters eget.
+const MAX_PRIVATE_SITES_BATCH = 25;
+app.post('/api/private-sites/batch', async (req, res) => {
+  try {
+    const siteIds = Array.isArray(req.body?.siteIds) ? req.body.siteIds : [];
+    const capped = siteIds.filter(id => typeof id === 'string' && id.startsWith('private:')).slice(0, MAX_PRIVATE_SITES_BATCH);
+    const sites = await privateSites.getActivePrivateSitesByIds(capped);
+    const withRisk = sites.map(site => ({ ...site, risk: privateSiteRiskPayload(privateSiteRisk ? privateSiteRisk.getLatest(site.siteId) : null) }));
+    res.json({ ok: true, sites: withRisk });
+  } catch (e) {
+    console.error('private-sites batch: uventet fejl —', e.message);
+    res.status(500).json({ error: 'Kunne ikke hente badesteder lige nu.' });
+  }
+});
+
+// Delt link (/p/:shareToken) — resolver til siteId og injicerer det som
+// window.__SSR_PRIVATE_ROUTE__, samme SSR-deep-link-mønster som
+// window.__SSR_ROUTE__ for Tier 1/2-siderne (se bootRoute() i
+// dansk-overloeb-kort.html). Bevidst 'noindex, nofollow' (BÅDE meta-tag OG
+// HTTP-header, i modsætning til /udloeb/:id's 'noindex, follow') —
+// brugerplaceret, ubekræftet indhold må aldrig kunne bygge intern
+// linkjuice eller optræde i søgeresultater, se private-sites.js's filhoved
+// om at private badesteder bevidst ikke er gennemsøgelige.
+app.get('/p/:shareToken', async (req, res) => {
+  try {
+    const resolved = await privateSites.getPrivateSiteByShareToken(req.params.shareToken);
+    if (!resolved || resolved.revokedAt) {
+      res.set('X-Robots-Tag', 'noindex, nofollow');
+      return res.status(404).type('text/plain').send('Badested ikke fundet, eller linket er tilbagekaldt.');
+    }
+    let html = baseAppHtml().replace(
+      /<title>([^<]*)<\/title>/,
+      `<title>$1</title>\n<meta name="robots" content="noindex, nofollow">`
+    );
+    html = seoPages.injectBodyContent(html, `<script>window.__SSR_PRIVATE_ROUTE__ = ${JSON.stringify({ siteId: resolved.siteId })};</script>`);
+    res.set('Cache-Control', 'no-store');
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.set('X-Robots-Tag', 'noindex, nofollow');
+    res.send(html);
+  } catch (e) {
+    console.error('private-sites share-resolve: uventet fejl —', e.message);
+    res.status(500).type('text/plain').send('Der opstod en fejl.');
+  }
+});
 
 app.post('/api/weather/bulk', async (req, res) => {
   const cells = Array.isArray(req.body?.cells) ? req.body.cells : [];
@@ -5894,7 +6034,7 @@ async function runWatershedSync() {
 // ovenfor (rute-registrering, setInterval-opsætning, den forsinkede
 // warmCache()-opstart) kræver ikke databasen og kører uændret synkront —
 // kun selve lytte-starten er gated.
-Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, adminUsers.ready, badestedOverrides.ready, overloebEvents.ready, pageViews.ready, schema])
+Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, adminUsers.ready, badestedOverrides.ready, overloebEvents.ready, pageViews.ready, privateSites.ready, schema])
   .then(() => {
     app.listen(PORT, HOST, () => {
       console.log(`Overløbsrisiko server kører på http://${HOST}:${PORT}`);
@@ -5919,6 +6059,19 @@ Promise.all([appMetrics.ready, badestedObs.ready, tenantAdmin.ready, adminUsers.
     // vente på det fulde interval" begrundelse som de øvrige job herover.
     runWatershedSync().catch(e => console.warn('runWatershedSync (opstart) fejl:', e.message));
     setInterval(() => runWatershedSync().catch(e => console.warn('runWatershedSync fejl:', e.message)), WATERSHED_SYNC_INTERVAL_MS);
+    // NYT: se private-site-risk.js's filhoved. Instantieret HER (efter
+    // listen, ligesom de øvrige periodiske job ovenfor) — dens egen
+    // recompute()-kald ved opstart tåler fint at riskScoresCache/
+    // currentsCache endnu er tomme (scoreSites() springer da blot over,
+    // se dens eget tjek), præcis samme "selvhelbreder ved næste cyklus"-
+    // tolerance resten af filens opstartsjob allerede har.
+    privateSiteRisk = createPrivateSiteRiskService({
+      getScoredPulsPoints: () => riskScoresCache.points,
+      runCascade: runBadevandRiskCascadeInWorker,
+      staticDir: STATIC_DIR,
+      getCurrentGrid: () => currentsCache.grid,
+      privateSites,
+    });
   })
   .catch(e => {
     console.error('Kunne ikke klargøre Postgres-skema ved opstart — serveren starter IKKE:', e.message);
