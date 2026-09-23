@@ -4102,7 +4102,12 @@ async function submitAddPrivateSite() {
 }
 
 const AddPrivateSiteControl = L.Control.extend({
-  options: { position: 'topleft' },
+  // RETTET (bruger-ønske): 'bottomright' — samme hjørne som L.control.zoom()
+  // (linje ~3935) og LocateControl (linje ~3971) — Leafets leaflet-bar-CSS
+  // slår automatisk sammenhængende kontroller i samme hjørne sammen til ét
+  // visuelt værktøjslinje-stak, så zoom/lokation/tilføj-badested nu står
+  // grupperet ét sted i stedet for spredt topleft/bottomright.
+  options: { position: 'bottomright' },
   onAdd: function() {
     const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
     const btn = L.DomUtil.create('a', '', container);
