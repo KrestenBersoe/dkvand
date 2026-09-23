@@ -5,7 +5,117 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', e => e.waitUntil(clients.claim()));
+self.addEventListener('activate', e => {
+  e.waitUntil((async () => {
+    await clients.claim();
+    // Rydder tidligere versioner af tile-/map-assets-cachen, hvis navnet
+    // (v1, v2, ...) nogensinde ændres i en senere rettelse.
+    const keep  = new Set([TILE_CACHE_NAME, MAP_ASSETS_CACHE_NAME]);
+    const names = await caches.keys();
+    await Promise.all(
+      names.filter(n => n.startsWith('overloeb-') && !keep.has(n)).map(n => caches.delete(n))
+    );
+  })());
+});
+
+// ── Kort-flise- og map-assets-caching (Cache Storage API) ───────────────────
+// RETTET (bruger-rapporteret: baggrundskortet forsvinder i PWA'en på Android
+// efter et stykke tid): denne SW havde tidligere INGEN 'fetch'-handler
+// overhovedet. Kort-fliserne (coverage.pmtiles, hentet af MapLibre/pmtiles
+// via mange små Range-requests, se server.js's /tiles-route) og map-assets
+// (style.json/sprite/fonts) lå derfor udelukkende i browserens almindelige
+// HTTP-diskcache — som Android frit rydder under lagerplads-pres, UDEN at en
+// installeret PWA har nogen særlig beskyttelse (der er ingen
+// navigator.storage.persist()-kald noget sted i kodebasen, se
+// registerSW() i dansk-overloeb-kort.html for det nye kald). Cache Storage
+// API (denne fil) deltager derimod i browserens "persistent storage"-
+// kvotesystem og overlever markant længere under samme pres.
+//
+// Fliserne kan IKKE caches som hele filer (coverage.pmtiles er ~5,5 GB) —
+// kun de faktisk hentede byte-ranges caches, hver Range-request som sin egen
+// post. Cache API matcher som udgangspunkt KUN på URL, ikke headers — uden en
+// Vary: Range-header på det cachede svar ville alle Range-requests til
+// samme fil kollidere (forkert byterække returneret for en ny range).
+// cacheTilePut() sætter derfor selv Vary: Range på hvert cachet 206-svar.
+const TILE_CACHE_NAME       = 'overloeb-tiles-v1';
+const MAP_ASSETS_CACHE_NAME = 'overloeb-map-assets-v1';
+const TILE_CACHE_INDEX_URL  = '/__tile-cache-index__';   // syntetisk nøgle inde i selve tile-cachen — aldrig hentet fra netværket, kun brugt til evictions-metadata
+const TILE_CACHE_MAX_BYTES  = 200 * 1024 * 1024;          // 200 MB — rigeligt til en almindelig browsing-session, langt under filens fulde 5,5 GB
+
+self.addEventListener('fetch', e => {
+  const { request } = e;
+  if (request.method !== 'GET') return;
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return;
+
+  if (url.pathname === '/tiles/coverage.pmtiles') {
+    e.respondWith(handleTileFetch(request));
+  } else if (url.pathname.startsWith('/map-assets/')) {
+    e.respondWith(handleMapAssetFetch(request));
+  }
+});
+
+async function handleTileFetch(request) {
+  const cache  = await caches.open(TILE_CACHE_NAME);
+  const cached = await cache.match(request);
+  if (cached) return cached;
+
+  const response = await fetch(request);   // offline + ingen cache-hit for denne specifikke byterække: fejlen propagerer som normalt
+  if (response.status === 200 || response.status === 206) {
+    cacheTilePut(cache, request, response.clone()).catch(() => {});
+  }
+  return response;
+}
+
+async function cacheTilePut(cache, request, response) {
+  const headers      = new Headers(response.headers);
+  const existingVary = headers.get('Vary');
+  if (!existingVary) headers.set('Vary', 'Range');
+  else if (!existingVary.split(',').map(s => s.trim()).includes('Range')) headers.set('Vary', existingVary + ', Range');
+
+  const body   = await response.arrayBuffer();
+  const stored = new Response(body, { status: response.status, statusText: response.statusText, headers });
+  await cache.put(request, stored);
+  await recordTileCacheEntry(cache, request, body.byteLength);
+}
+
+// Simpelt FIFO-evictions-register, gemt som sin egen JSON-post INDE i selve
+// tile-cachen — undgår at skulle bumpe den delte overloeb_cache IndexedDB-
+// version, som både denne fil og dansk-overloeb-kort.html i forvejen deler
+// skrøbeligt (se DB_VERSION=3-kommentaren dér).
+async function recordTileCacheEntry(cache, request, size) {
+  const range    = request.headers.get('Range') || '';
+  const entryKey = request.url + '|' + range;
+
+  let index = [];
+  const idxResp = await cache.match(TILE_CACHE_INDEX_URL);
+  if (idxResp) {
+    try { index = await idxResp.json(); } catch (_) { index = []; }
+  }
+  index = index.filter(entry => entry.key !== entryKey);
+  index.push({ key: entryKey, size, ts: Date.now(), url: request.url, range: range || null });
+
+  let total = index.reduce((sum, entry) => sum + entry.size, 0);
+  while (total > TILE_CACHE_MAX_BYTES && index.length > 0) {
+    const oldest = index.shift();
+    total -= oldest.size;
+    const evictReq = new Request(oldest.url, oldest.range ? { headers: { Range: oldest.range } } : undefined);
+    await cache.delete(evictReq).catch(() => {});
+  }
+
+  await cache.put(TILE_CACHE_INDEX_URL, new Response(JSON.stringify(index)));
+}
+
+async function handleMapAssetFetch(request) {
+  const cache  = await caches.open(MAP_ASSETS_CACHE_NAME);
+  const cached = await cache.match(request);
+  if (cached) return cached;
+  const response = await fetch(request);
+  if (response.status === 200) {
+    cache.put(request, response.clone()).catch(() => {});
+  }
+  return response;
+}
 
 // ── Push event ──────────────────────────────────────────────────────────────
 self.addEventListener('push', e => {

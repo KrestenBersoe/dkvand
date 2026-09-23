@@ -241,20 +241,23 @@
      sharedInteractiveRenderer bruges IKKE her), da Canvas-figurer ikke kan
      CSS-animeres.
 
-     Ringens FARVE er altid udløbets egen type-farve (RBU_KLOAK_FILL/
-     RBU_REGN_FILL) — den skal aldrig kunne forveksles med en risiko-
-     farveskala. Ringens BEVÆGELSE (eller mangel på samme) koder status, i
-     tre trin:
+     RETTET (bruger-ønske, stil hentet fra søster-projektet ukwater/frwaters
+     "Outlets"-lag): ringen var tidligere farvet efter udløbets TYPE
+     (RBU_KLOAK_FILL/RBU_REGN_FILL, brun/blå) og regnvandsudløb fik en
+     dæmpet udgave af ringen ved aktivt overløb. Begge dele er ændret:
+       - KUN kloak-/spildevandsudløb (CSO, isRbuWastewater===true) kan
+         nogensinde få en ring — rent regnvand bærer ingen bakterie-/
+         virusrisiko nedstrøms og skal derfor aldrig vise nogen
+         overløbsindikation, animeret eller ej (se colorRbuByOwnRisk()).
+         Grundmarkørens farve (blå regn / brun kloak) er UÆNDRET.
+       - Ringens FARVE koder nu STATUS (rød/gul, samme skala som app'ens
+         øvrige risikofarver, se riskStyle()) i stedet for type, ligesom
+         ukwaters røde/gule ringe — den kan derfor ikke længere forveksles
+         med "dette er blot et kloak-punkt".
+     Ringens BEVÆGELSE (eller mangel på samme) koder selve overløbstrinnet:
        - intet overløb:  ingen ring
-       - "i risiko":      .outlet-watch-ring    (STATISK — se dens filhoved)
-       - aktivt overløb:  .outlet-active-ring   (kloak/CSO — hurtig ping)
-                        eller .outlet-active-ring-calm (regnvand — langsommere,
-                        dæmpet ping)
-     Kloakoverløb (spildevand) er den eneste af de to typer der reelt
-     medfører bakterie-/virusrisiko nedstrøms — derfor får kun kloak-typen
-     den hurtige, "alarmerende" ping; et rent regnvandsudløb i overløb får en
-     synligt roligere version af samme animation, så et udløb uden
-     sundhedsrisiko ikke ser lige så alvorligt ud som ét med. */
+       - "i risiko":      .outlet-watch-ring    (STATISK, gul — se dens filhoved)
+       - aktivt overløb:  .outlet-active-ring   (animeret, rød ping) */
   @keyframes outlet-ring-pulse {
     0%   { transform: scale(1); opacity: .85; }
     100% { transform: scale(2.2); opacity: 0; }
@@ -263,16 +266,6 @@
     transform-box: fill-box;
     transform-origin: center;
     animation: outlet-ring-pulse 1.8s ease-out infinite;
-    pointer-events: none;
-  }
-  @keyframes outlet-ring-pulse-calm {
-    0%   { transform: scale(1); opacity: .5; }
-    100% { transform: scale(2.4); opacity: 0; }
-  }
-  .outlet-active-ring-calm {
-    transform-box: fill-box;
-    transform-origin: center;
-    animation: outlet-ring-pulse-calm 3.2s ease-out infinite;
     pointer-events: none;
   }
   /* RETTET (2026-09-05, anden runde — se bruger-rapporten om stiplede ringe
@@ -290,6 +283,21 @@
      for "roligere end aktiv", ikke kun et sparet CPU-cyklus. */
   .outlet-watch-ring {
     pointer-events: none;
+  }
+
+  /* Private (bruger-oprettede) badesteder — se den private-sites-sektion
+     nedenfor i <script>. Diamantformen (i stedet for badevands-lagets
+     cirkler) er BEVIDST — gør et privat, ubekræftet badested visuelt
+     umuligt at forveksle med et officielt registreret badested ved et
+     hurtigt blik på kortet, samme designprincip ukwater/frwaters
+     .private-site-diamond bruger. Farven sættes inline pr. markør
+     (risikofarven, se privateSitePopup()), kun form/kant er fast her. */
+  .private-site-diamond {
+    width: 14px;
+    height: 14px;
+    transform: rotate(45deg);
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.35);
   }
 
   #debug-panel {
@@ -3004,6 +3012,59 @@
   </div>
 </div>
 
+<!-- Opret privat badested — samme .engage-overlay/.engage-card-skal som
+     øvrige opfordringer ovenfor. Se openAddPrivateSiteModal()/
+     submitAddPrivateSite() i <script>. -->
+<div id="add-private-site-overlay" class="engage-overlay hidden">
+  <div class="engage-card">
+    <button class="engage-close" onclick="closeAddPrivateSiteModal()" aria-label="Luk">✕</button>
+    <p style="font-size:15px;font-weight:600;margin:0 0 2px">📍 Tilføj et privat badested</p>
+    <p style="font-size:13px;color:#5a6b78;margin:0 0 1rem">Ikke et officielt registreret badested — et sted kun du (og dem du deler linket med) kan se, vurderet med samme risikomodel.</p>
+
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button type="button" class="bv-btn" style="flex:1" onclick="usePrivateSiteGpsLocation(this)">📍 Brug min placering</button>
+      <button type="button" class="bv-btn" style="flex:1" onclick="pickPrivateSiteLocationOnMap()">🗺️ Vælg på kortet</button>
+    </div>
+    <p id="aps-latlon" style="font-size:12px;color:#5a6b78;margin:0 0 12px">Ingen placering valgt endnu</p>
+
+    <label style="font-size:12px;font-weight:600;color:#5a6b78;display:block;margin-bottom:4px">Navn</label>
+    <input type="text" id="aps-name" maxlength="80" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d8dee3;border-radius:8px;font-size:14px;margin-bottom:10px">
+
+    <label style="font-size:12px;font-weight:600;color:#5a6b78;display:block;margin-bottom:4px">Beskrivelse (valgfrit)</label>
+    <textarea id="aps-description" maxlength="500" rows="2" style="width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid #d8dee3;border-radius:8px;font-size:14px;margin-bottom:10px;resize:vertical"></textarea>
+
+    <p id="aps-error" class="hidden" style="font-size:13px;color:#c84b1f;margin:0 0 10px"></p>
+
+    <button type="button" class="bv-btn primary" style="width:100%" onclick="submitAddPrivateSite()">Opret og få et delelink</button>
+  </div>
+</div>
+
+<!-- Detaljer for ét privat badested — risiko, delelink, tilbagekald/
+     regenerér (kun for ejeren, se private-sites.js's owner-token-gate).
+     Se showPrivateSitePanel() i <script>. -->
+<div id="private-site-detail-overlay" class="engage-overlay hidden">
+  <div class="engage-card">
+    <button class="engage-close" onclick="closePrivateSiteDetail()" aria-label="Luk">✕</button>
+    <p style="font-size:15px;font-weight:600;margin:0 0 2px" id="psd-name">—</p>
+    <p style="font-size:12px;color:#5a6b78;margin:0 0 10px">Privat badested — ikke officielt registreret</p>
+    <p id="psd-description" style="font-size:13px;color:#333;margin:0 0 10px"></p>
+    <p id="psd-risk" style="font-size:14px;font-weight:600;margin:0 0 14px"></p>
+
+    <div id="psd-owner-section" class="hidden">
+      <label style="font-size:12px;font-weight:600;color:#5a6b78;display:block;margin-bottom:4px">Delelink</label>
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input type="text" id="psd-share-url" readonly style="flex:1;min-width:0;padding:7px 9px;border:1px solid #d8dee3;border-radius:8px;font-size:12px;background:#f5f7f8">
+        <button type="button" class="bv-btn" onclick="copyPrivateSiteShareLink()">Kopiér</button>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button type="button" class="bv-btn" style="flex:1" onclick="regeneratePrivateSiteLink()">Regenerér link</button>
+        <button type="button" class="bv-btn" style="flex:1;color:#c84b1f" onclick="revokePrivateSite()">Tilbagekald</button>
+      </div>
+    </div>
+    <p id="psd-not-owner-note" class="hidden" style="font-size:12px;color:#5a6b78;margin:10px 0 0">Delt med dig — kun opretteren kan tilbagekalde eller regenerere linket.</p>
+  </div>
+</div>
+
 <div id="fav-toast"></div>
 <div id="layer-loading"><span class="spin"></span><span id="layer-loading-text">Beregner…</span></div>
 
@@ -3761,6 +3822,14 @@ const RBU_REGN_FILL   = '#3584e4';   // fill
 const RBU_KLOAK_COLOR = '#4a2c14';   // stroke
 const RBU_KLOAK_FILL  = '#8b5a2b';   // fill
 
+// NYT: overløbs-RINGENS farve (se renderVisibleRbuRings()) — bevidst
+// SAMME røde/gule som app'ens øvrige risikoskala (riskStyle(), :6494-6499),
+// ikke udløbstypens egen farve ovenfor. Ringen koder status (aktivt
+// overløb/i risiko), grundmarkøren koder type (regn/kloak) — de to må
+// ikke dele farveskala, ellers kan de forveksles med hinanden.
+const RBU_RING_ACTIVE_COLOR = '#c84b1f';   // rød — aktivt overløb
+const RBU_RING_WATCH_COLOR  = '#d4a020';   // gul — i risiko, endnu ikke aktivt
+
 function _lerp(a, b, t) { return a + (b - a) * t; }
 
 function currentRbuStyle(isWastewater) {
@@ -3900,6 +3969,310 @@ const LocateControl = L.Control.extend({
   },
 });
 map.addControl(new LocateControl());
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PRIVATE (BRUGER-OPRETTEDE) BADESTEDER
+// ═══════════════════════════════════════════════════════════════════════════
+// PORT af ukwater/frwaters tilsvarende funktion (samme .engage-overlay-skal,
+// samme localStorage-som-eneste-kilde-til-hvilke-markører-vises-princip —
+// der findes BEVIDST intet server-side bulk-listing-endpoint, se
+// private-sites.js's filhoved). Scores gennem SAMME risikomodel som et
+// officielt badested (badevand-risk.js's computeBadevandRiskCascade(), se
+// private-site-risk.js) — men på en 30-minutters baggrundscyklus, ikke
+// on-demand, se den fils filhoved for hvorfor dkvand's model (i modsætning
+// til ukwaters) ikke kan scoreOneOff() billigt.
+//
+// dkvand_private_sites (localStorage): denne BROWSERS egen liste over
+// badesteder den har oprettet eller modtaget et delelink til. Hvert element:
+// {siteId, name, lat, lng, shareUrl, isOwner, ownerToken?}. ownerToken
+// findes KUN for badesteder DENNE browser selv oprettede.
+const PRIVATE_SITES_KEY = 'dkvand_private_sites';
+
+function getOwnedPrivateSites() {
+  try { return JSON.parse(localStorage.getItem(PRIVATE_SITES_KEY) || '[]'); } catch (e) { return []; }
+}
+function saveOwnedPrivateSites(list) {
+  try { localStorage.setItem(PRIVATE_SITES_KEY, JSON.stringify(list)); } catch (e) {}
+}
+function upsertOwnedPrivateSite(entry) {
+  const list = getOwnedPrivateSites();
+  const idx = list.findIndex(s => s.siteId === entry.siteId);
+  if (idx >= 0) list[idx] = { ...list[idx], ...entry }; else list.push(entry);
+  saveOwnedPrivateSites(list);
+}
+function removeOwnedPrivateSite(siteId) {
+  saveOwnedPrivateSites(getOwnedPrivateSites().filter(s => s.siteId !== siteId));
+}
+
+// HOLD I SYNC med private-sites.js's DK_BBOX — kun til øjeblikkelig
+// klient-feedback (GPS uden for Danmark), serveren håndhæver den
+// autoritative grænse uafhængigt af dette.
+const PRIVATE_SITE_DK_BBOX = { latMin: 54.4, latMax: 57.9, lngMin: 7.9, lngMax: 15.3 };
+
+const privateSitesLayer = L.layerGroup().addTo(map);
+const privateSiteMarkers = new Map(); // siteId -> L.Marker
+let privateSitesById = new Map();     // siteId -> {siteId,name,description,lat,lng,...}
+let _pickingPrivateSiteLocation = false;
+
+function diamondIcon(color) {
+  return L.divIcon({ className: '', html: `<div class="private-site-diamond" style="background:${color}"></div>`, iconSize: [14, 14], iconAnchor: [7, 7] });
+}
+
+function openAddPrivateSiteModal(prefillLatLng) {
+  const overlay = document.getElementById('add-private-site-overlay');
+  if (!overlay) return;
+  document.getElementById('aps-name').value = '';
+  document.getElementById('aps-description').value = '';
+  document.getElementById('aps-error').classList.add('hidden');
+  const latLngEl = document.getElementById('aps-latlon');
+  if (prefillLatLng) {
+    latLngEl.dataset.lat = prefillLatLng.lat;
+    latLngEl.dataset.lng = prefillLatLng.lng;
+    latLngEl.textContent = `📍 ${prefillLatLng.lat.toFixed(5)}, ${prefillLatLng.lng.toFixed(5)}`;
+  } else {
+    delete latLngEl.dataset.lat;
+    delete latLngEl.dataset.lng;
+    latLngEl.textContent = 'Ingen placering valgt endnu';
+  }
+  overlay.classList.remove('hidden');
+}
+function closeAddPrivateSiteModal() {
+  document.getElementById('add-private-site-overlay')?.classList.add('hidden');
+  if (_pickingPrivateSiteLocation) {
+    _pickingPrivateSiteLocation = false;
+    map.getContainer().style.cursor = '';
+  }
+}
+function pickPrivateSiteLocationOnMap() {
+  document.getElementById('add-private-site-overlay')?.classList.add('hidden');
+  _pickingPrivateSiteLocation = true;
+  map.getContainer().style.cursor = 'crosshair';
+  map.once('click', e => {
+    _pickingPrivateSiteLocation = false;
+    map.getContainer().style.cursor = '';
+    openAddPrivateSiteModal(e.latlng);
+  });
+}
+function usePrivateSiteGpsLocation(btnEl) {
+  if (!navigator.geolocation) { alert('Denne browser understøtter ikke lokalisering.'); return; }
+  if (btnEl) btnEl.style.opacity = '.5';
+  navigator.geolocation.getCurrentPosition(
+    pos => {
+      if (btnEl) btnEl.style.opacity = '';
+      const { latitude: lat, longitude: lng } = pos.coords;
+      if (lat < PRIVATE_SITE_DK_BBOX.latMin || lat > PRIVATE_SITE_DK_BBOX.latMax || lng < PRIVATE_SITE_DK_BBOX.lngMin || lng > PRIVATE_SITE_DK_BBOX.lngMax) {
+        alert('Din placering ser ud til at være uden for Danmark.');
+        return;
+      }
+      openAddPrivateSiteModal({ lat, lng });
+    },
+    () => { if (btnEl) btnEl.style.opacity = ''; alert(geolocationErrorMessage()); },
+    { timeout: 8000, maximumAge: 30000 }
+  );
+}
+async function submitAddPrivateSite() {
+  const errEl = document.getElementById('aps-error');
+  errEl.classList.add('hidden');
+  const name = document.getElementById('aps-name').value.trim();
+  const description = document.getElementById('aps-description').value.trim();
+  const latLngEl = document.getElementById('aps-latlon');
+  const lat = latLngEl.dataset.lat != null ? Number(latLngEl.dataset.lat) : null;
+  const lng = latLngEl.dataset.lng != null ? Number(latLngEl.dataset.lng) : null;
+  if (!name) { errEl.textContent = 'Navn er påkrævet.'; errEl.classList.remove('hidden'); return; }
+  if (lat == null || lng == null) { errEl.textContent = 'Vælg en placering først.'; errEl.classList.remove('hidden'); return; }
+
+  try {
+    const res = await fetch('/api/private-sites', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, description, lat, lng }),
+    });
+    const body = await res.json();
+    if (!res.ok) { errEl.textContent = body.error || 'Kunne ikke oprette badestedet.'; errEl.classList.remove('hidden'); return; }
+
+    const shareUrl = `${location.origin}/p/${body.shareToken}`;
+    upsertOwnedPrivateSite({ siteId: body.siteId, name, lat, lng, shareUrl, isOwner: true, ownerToken: body.ownerToken });
+    closeAddPrivateSiteModal();
+    refreshPrivateSiteMarkers();
+    showPrivateSitePanel(body.siteId);
+  } catch (err) {
+    errEl.textContent = 'Kunne ikke oprette badestedet — prøv igen.';
+    errEl.classList.remove('hidden');
+  }
+}
+
+const AddPrivateSiteControl = L.Control.extend({
+  options: { position: 'topleft' },
+  onAdd: function() {
+    const container = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+    const btn = L.DomUtil.create('a', '', container);
+    btn.href = '#';
+    btn.title = 'Tilføj et privat badested';
+    btn.setAttribute('aria-label', 'Tilføj et privat badested');
+    btn.style.cssText = 'display:flex;align-items:center;justify-content:center;width:30px;height:30px';
+    // Diamant-spids nål — ekkoer bevidst den diamantformede markør denne
+    // handling ender med at oprette (se .private-site-diamond), så knap og
+    // resultat læses som samme visuelle idé.
+    btn.innerHTML = `
+      <svg width="16" height="20" viewBox="0 0 18 22" fill="none">
+        <path d="M9 21C9 21 16 13.5 16 8C16 3.6 12.9 0.5 9 0.5C5.1 0.5 2 3.6 2 8C2 13.5 9 21 9 21Z" stroke="currentColor" stroke-width="1.6"></path>
+        <rect x="6" y="5" width="6" height="6" transform="rotate(45 9 8)" fill="currentColor"></rect>
+      </svg>`;
+    L.DomEvent.on(btn, 'click', e => {
+      L.DomEvent.preventDefault(e);
+      L.DomEvent.stopPropagation(e);
+      openAddPrivateSiteModal();
+    });
+    return container;
+  },
+});
+map.addControl(new AddPrivateSiteControl());
+
+function privateSiteRiskLine(risk) {
+  if (!risk) return 'Vurderes — score klar om lidt.';
+  const active = [risk.bact, risk.viral].filter(v => v !== null && v !== undefined);
+  const r = active.length ? Math.max(...active) : null;
+  return `Risiko: ${riskLabel(r).label}`;
+}
+function privateSiteTooltip(site, risk) {
+  return `<strong>📍 ${escHtml(site.name)}</strong><br>Privat badested · ${privateSiteRiskLine(risk)}<br><span style="font-size:.7rem;opacity:.7">Klik for detaljer</span>`;
+}
+
+// Genopfrisker denne browsers EGNE private badesteder (POST /api/private-
+// sites/batch, loftet til 25 — se private-sites.js) — kaldt ved boot og
+// fra refreshEverything(). Et badested, der er tilbagekaldt (eller af
+// anden grund ukendt for serveren), forsvinder blot fra svaret; markøren
+// fjernes her i stedet for at blive stående forældet.
+async function refreshPrivateSiteMarkers() {
+  const owned = getOwnedPrivateSites();
+  if (owned.length === 0) return;
+  let sites = [];
+  try {
+    const res = await fetch('/api/private-sites/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ siteIds: owned.map(s => s.siteId).slice(0, 25) }),
+    });
+    if (res.ok) { const body = await res.json(); sites = body.sites || []; }
+  } catch (err) {
+    console.warn('Kunne ikke genopfriske private badesteder:', err.message);
+    return;
+  }
+  privateSitesById = new Map(sites.map(s => [s.siteId, s]));
+
+  for (const entry of owned) {
+    const site = privateSitesById.get(entry.siteId);
+    if (!site) {
+      const stale = privateSiteMarkers.get(entry.siteId);
+      if (stale) { privateSitesLayer.removeLayer(stale); privateSiteMarkers.delete(entry.siteId); }
+      continue;
+    }
+    const active = [site.risk?.bact, site.risk?.viral].filter(v => v !== null && v !== undefined);
+    const r = active.length ? Math.max(...active) : null;
+    const color = site.risk ? riskColor(r) : '#95a5a6';
+    const existing = privateSiteMarkers.get(entry.siteId);
+    if (existing) {
+      existing.setIcon(diamondIcon(color));
+      existing.setTooltipContent(privateSiteTooltip(site, site.risk));
+    } else {
+      const marker = L.marker([site.lat, site.lng], { icon: diamondIcon(color) })
+        .bindTooltip(privateSiteTooltip(site, site.risk), { sticky: true });
+      marker.on('click', function(e) { if (window._LC) return; window._LC = true; setTimeout(() => delete window._LC, 50); closePointPanel(); showPrivateSitePanel(site.siteId); });
+      marker.addTo(privateSitesLayer);
+      privateSiteMarkers.set(entry.siteId, marker);
+    }
+  }
+}
+
+function showPrivateSitePanel(siteId) {
+  const meta = getOwnedPrivateSites().find(s => s.siteId === siteId);
+  const site = privateSitesById.get(siteId);
+  if (!meta) return;
+  document.getElementById('psd-name').textContent = site?.name ?? meta.name;
+  document.getElementById('psd-description').textContent = site?.description || '';
+  document.getElementById('psd-risk').textContent = privateSiteRiskLine(site?.risk);
+  const ownerSection = document.getElementById('psd-owner-section');
+  const notOwnerNote = document.getElementById('psd-not-owner-note');
+  if (meta.isOwner) {
+    ownerSection.classList.remove('hidden');
+    notOwnerNote.classList.add('hidden');
+    document.getElementById('psd-share-url').value = meta.shareUrl || '';
+  } else {
+    ownerSection.classList.add('hidden');
+    notOwnerNote.classList.remove('hidden');
+  }
+  document.getElementById('private-site-detail-overlay').dataset.siteId = siteId;
+  document.getElementById('private-site-detail-overlay').classList.remove('hidden');
+}
+function closePrivateSiteDetail() {
+  document.getElementById('private-site-detail-overlay')?.classList.add('hidden');
+}
+function copyPrivateSiteShareLink() {
+  const input = document.getElementById('psd-share-url');
+  input.select();
+  navigator.clipboard?.writeText(input.value).catch(() => document.execCommand('copy'));
+}
+async function regeneratePrivateSiteLink() {
+  const siteId = document.getElementById('private-site-detail-overlay').dataset.siteId;
+  const meta = getOwnedPrivateSites().find(s => s.siteId === siteId);
+  if (!meta || !meta.ownerToken) return;
+  try {
+    const res = await fetch(`/api/private-sites/${encodeURIComponent(siteId)}/regenerate-link`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ownerToken: meta.ownerToken }),
+    });
+    const body = await res.json();
+    if (!res.ok) { alert(body.error || 'Kunne ikke regenerere linket.'); return; }
+    const shareUrl = `${location.origin}/p/${body.shareToken}`;
+    upsertOwnedPrivateSite({ siteId, shareUrl });
+    document.getElementById('psd-share-url').value = shareUrl;
+  } catch (err) {
+    alert('Kunne ikke regenerere linket — prøv igen.');
+  }
+}
+async function revokePrivateSite() {
+  const siteId = document.getElementById('private-site-detail-overlay').dataset.siteId;
+  const meta = getOwnedPrivateSites().find(s => s.siteId === siteId);
+  if (!meta || !meta.ownerToken) return;
+  if (!confirm('Tilbagekald dette badested? Linket holder op med at virke, og badestedet forsvinder fra kortet.')) return;
+  try {
+    await fetch(`/api/private-sites/${encodeURIComponent(siteId)}/revoke`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ownerToken: meta.ownerToken }),
+    });
+  } catch (err) { /* fortsætter alligevel med at fjerne lokalt, se nedenfor */ }
+  removeOwnedPrivateSite(siteId);
+  const marker = privateSiteMarkers.get(siteId);
+  if (marker) { privateSitesLayer.removeLayer(marker); privateSiteMarkers.delete(siteId); }
+  closePrivateSiteDetail();
+}
+
+// Delt link (/p/:shareToken, se server.js) — serveren injicerer
+// window.__SSR_PRIVATE_ROUTE__ = {siteId}. Modtageren har ikke nødvendigvis
+// badestedet i sin egen localStorage-liste endnu (fx allerførste besøg via
+// et delt link) — tilføjes her som isOwner:false, uden ownerToken, samme
+// "watch this too" mønster som ukwater.
+function handlePrivateSiteRoute() {
+  const route = window.__SSR_PRIVATE_ROUTE__;
+  if (!route?.siteId) return false;
+  (async () => {
+    try {
+      const res = await fetch(`/api/private-sites/${encodeURIComponent(route.siteId)}`);
+      if (!res.ok) return;
+      const body = await res.json();
+      if (!getOwnedPrivateSites().some(s => s.siteId === route.siteId)) {
+        upsertOwnedPrivateSite({ siteId: route.siteId, name: body.site.name, lat: body.site.lat, lng: body.site.lng, isOwner: false });
+      }
+      switchTab('kort');
+      map.setView([body.site.lat, body.site.lng], 14);
+      await refreshPrivateSiteMarkers();
+      showPrivateSitePanel(route.siteId);
+    } catch (err) {
+      console.warn('Kunne ikke indlæse delt privat badested:', err.message);
+    }
+  })();
+  return true;
+}
 
 // RETTET (bruger-rapporteret: "lokation er tilladt for sitet i Safari, men
 // appen får den stadig ikke"): iOS behandler et websted åbnet i en
@@ -7208,8 +7581,7 @@ function colorBadevandByRisk() {
 }
 
 // Animeret overløbs-ring på Overløb-laget — se vp3OverloebRingLayer's
-// filhoved og .outlet-active-ring/.outlet-active-ring-calm/
-// .outlet-watch-ring for selve CSS'en.
+// filhoved og .outlet-active-ring/.outlet-watch-ring for selve CSS'en.
 //
 // Matcher HVER RBU-punkt til PULS' egen outfallId (r[8] i puls-data.json)
 // via en eksakt ID-sammenligning (pkt_id === outfallId) — IKKE nærmeste-
@@ -7230,13 +7602,16 @@ function colorBadevandByRisk() {
 //      gult ved (se pct/barColor-beregningen ved computeThresholdCrossing-
 //      kaldet i showUdlobPanel()) — ét sted definerer "tæt på overløb",
 //      ikke to uafhængige tal.
-//   2) Ringens farve er altid udløbets EGEN type-farve (RBU_KLOAK_FILL for
-//      kloak/CSO, RBU_REGN_FILL for regnvand) i stedet for riskColor() —
-//      farve = type, bevægelse = status.
-//   3) Kun kloak/CSO får den hurtige ping (.outlet-active-ring) ved aktivt
-//      overløb; regnvand får en dæmpet, langsommere variant
-//      (.outlet-active-ring-calm), da kun spildevand medfører bakterie-/
-//      virusrisiko nedstrøms.
+//   2) [OPDATERET, bruger-ønske — se RBU_RING_ACTIVE_COLOR/RBU_RING_WATCH_
+//      COLOR ovenfor] Ringens farve kodede oprindeligt udløbets EGEN
+//      type-farve (RBU_KLOAK_FILL/RBU_REGN_FILL) i stedet for riskColor().
+//      Ændret til at kode STATUS (rødt/gult, samme skala som app'ens øvrige
+//      risikofarver) i stedet — farve = status, bevægelse = overløbstrin.
+//   3) [OPDATERET, bruger-ønske] Kun kloak/CSO får OVERHOVEDET en ring —
+//      regnvand fik oprindeligt en dæmpet, langsommere ping
+//      (.outlet-active-ring-calm) ved aktivt overløb; fjernet helt, da kun
+//      spildevand medfører bakterie-/virusrisiko nedstrøms (se
+//      colorRbuByOwnRisk()'s tidlige `if (!isCso) return`).
 // Udløb uden pt.hourlyWeek (ingen PULS-vejrcelle) kan ikke få et
 // tærskelkrydsningssvar og falder tilbage til den gamle riskScore ≥ 0.6-
 // gate som "aktiv" — uden "i risiko"-mellemtrin, da det kræver
@@ -7266,9 +7641,10 @@ let sharedRingRenderer = null;
 // SAMTLIGE ~14.625 matchede udløb, HVER GANG den blev kaldt — inklusive
 // den 168-trins henfaldsberegning (computeThresholdCrossing()) for hver
 // ét. Opdelt i to nu:
-//   1) colorRbuByOwnRisk() — beregner tilstanden (uændret logik/tærskler)
-//      og gemmer den DIREKTE på markøren (marker._ringTier/._ringIsCso).
-//      Kører kun ved datafornyelse (se renderMap()), ligesom før.
+//   1) colorRbuByOwnRisk() — beregner tilstanden (uændret logik/tærskler,
+//      nu også filtreret til kun CSO/kloak) og gemmer den DIREKTE på
+//      markøren (marker._ringTier). Kører kun ved datafornyelse (se
+//      renderMap()), ligesom før.
 //   2) renderVisibleRbuRings() — bygger de faktiske DOM-ring-elementer,
 //      men KUN for udløb inden for kortets nuværende viewport, og uden at
 //      gentage nogen risikoberegning (den er allerede gjort af #1). Billig
@@ -7297,6 +7673,12 @@ function colorRbuByOwnRisk() {
     if (!pt) { marker._ringTier = null; return; }
 
     const isCso = isRbuWastewater(marker.feature?.properties);
+    // RETTET (bruger-ønske): kun kloak-/spildevandsudløb (CSO) må vise en
+    // ring/overløbsindikation overhovedet — rent regnvand bærer ingen
+    // sundhedsrisiko nedstrøms og skal aldrig antyde en, hverken animeret
+    // eller statisk. Grundmarkørens blå farve er uændret, se currentRbuStyle().
+    if (!isCso) { marker._ringTier = null; return; }
+
     const crossing = computeThresholdCrossing(pt.hourlyWeek, pt.thresholdMm);
 
     let tier = null; // 'active' | 'watch' | null (ingen ring)
@@ -7309,15 +7691,14 @@ function colorRbuByOwnRisk() {
     } else if (pt.riskScore !== null && pt.riskScore >= 0.6) {
       tier = 'active'; // fallback, se filhovedets kommentar: intet hourlyWeek → intet "i risiko"-trin
     }
-    marker._ringTier  = tier;
-    marker._ringIsCso = isCso;
+    marker._ringTier = tier;
   });
 
   renderVisibleRbuRings();
 }
 
 // Se colorRbuByOwnRisk()'s filhoved. Læser KUN allerede-beregnet tilstand
-// (marker._ringTier/._ringIsCso) — ingen risikoberegning her — og bygger
+// (marker._ringTier) — ingen risikoberegning her — og bygger
 // ringe for udløb inden for viewport'en + en fast bufferzone (.pad(0.25)),
 // så en ring ikke popper synligt ind/ud af syne ved en lille panorering
 // helt ude i kanten af skærmen. Kaldes ved hver pan/zoom (se
@@ -7337,14 +7718,14 @@ function renderVisibleRbuRings() {
     const latlng = marker.getLatLng();
     if (!bounds.contains(latlng)) return;
 
-    const isCso = marker._ringIsCso;
-    const className = tier === 'watch'
-      ? 'outlet-watch-ring'
-      : (isCso ? 'outlet-active-ring' : 'outlet-active-ring-calm');
+    // Kun CSO/kloak-udløb når hertil (se colorRbuByOwnRisk()) — ringens
+    // farve koder derfor altid STATUS (rød/gul), aldrig udløbstype.
+    const className = tier === 'watch' ? 'outlet-watch-ring' : 'outlet-active-ring';
+    const color      = tier === 'watch' ? RBU_RING_WATCH_COLOR : RBU_RING_ACTIVE_COLOR;
 
     const ring = L.circleMarker(latlng, {
       radius: marker.getRadius() + 3,
-      color: isCso ? RBU_KLOAK_FILL : RBU_REGN_FILL,
+      color,
       weight: 2.5,
       fillOpacity: 0,
       className,
@@ -8615,6 +8996,19 @@ async function registerSW() {
     // Android/Chrome) — kræver en klar SW-registrering, samme sted appen i
     // forvejen først kan tilgå pushManager. Se registerPeriodicHeartbeatSync().
     registerPeriodicHeartbeatSync(_swReg).catch(() => {});
+    // RETTET (bruger-rapporteret: baggrundskortet forsvinder i PWA'en på
+    // Android efter et stykke tid): beder om "persistent storage", så
+    // overloeb-sw.js's nye tile-/map-assets-cache (Cache Storage API, se den
+    // fils filhoved) IKKE indgår i browserens almindelige "best-effort"-
+    // udrydning under lagerplads-pres, som ellers frit kan ramme en
+    // installeret PWA lige så vel som en almindelig fane. Bedste-indsats
+    // API — kan afvises stille af browseren, intet at gøre ved det herfra
+    // ud over at logge til diagnosticering.
+    if (navigator.storage?.persist) {
+      navigator.storage.persist()
+        .then(granted => console.info('Persistent storage:', granted ? 'granted' : 'denied'))
+        .catch(() => {});
+    }
   } catch(e) {
     console.warn('SW unavailable:', e.message);
   }
@@ -11461,6 +11855,7 @@ function handleSsrRoute() {
 // to KUN tjekkes her (boot-tidspunktet), ikke inde i selve handleHash(),
 // som fortsat udelukkende håndterer hash-baserede dyb-links, uændret.
 function bootRoute() {
+  if (handlePrivateSiteRoute()) return;
   if (handleSsrRoute()) return;
   if (handleUdloebPath()) return;
   handleHash();
@@ -12124,6 +12519,7 @@ async function refreshEverything() {
   _lastRefreshTs = Date.now();
   loadAll();
   loadVP3Layers();
+  refreshPrivateSiteMarkers();
   await refreshAllCachedResources();
 }
 document.addEventListener('visibilitychange', () => {
@@ -12154,6 +12550,7 @@ setInterval(loadBadevandRiskData, 5 * 60 * 1000);
 trackView('app', 'side');
 loadAll();
 loadVP3Layers();
+refreshPrivateSiteMarkers();
 loadDenmarkSea();  // statisk søterritorium — hentes én gang, ikke del af de periodiske genopdateringer ovenfor
 // RETTET: handleHash() blev tidligere KUN kaldt fra popstate-eventet — men
 // en frisk sideindlæsning med et #badevand=...-hash allerede i URL'en

@@ -233,7 +233,25 @@ function loadJson(p, fallback) {
 // Valgfri (kan udelades/være null) for bagudkompatibilitet med
 // eksisterende tests/kald uden strømdata — falder da tilbage til den
 // hidtidige, retningsblinde model for ALLE kystvands-udløb.
-async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral, staticDir, batchSize = 100, getCurrentAt = null) {
+// NYT (bruger-ønske — private badesteder, se private-sites.js): `adHocPoints`
+// er en ren TILFØJELSE til funktionssignaturen, bevidst additiv — udeladt
+// (default null) er adfærden BYTE-FOR-BYTE uændret for alle eksisterende
+// kaldere (den officielle 15-minutters-kaskade, badevand-risk-worker.js).
+// Angivet (en array af {siteId, lat, lng}, brugerplacerede punkter uden
+// nogen officiel vp3_badevand.geojson-post) scores de gennem PRÆCIS samme
+// sø-/kystvand-/vandløbs-matching og computeIsotropicLakeResult()/
+// -KystvandResult() som ethvert officielt badested — ALDRIG en forenklet
+// parallelmodel, se samtalen der førte hertil (dkvand's model er en reel
+// vandområde-kaskade, ikke ukwaters isotropiske afstands-model, og kan
+// derfor ikke genbruge dens waterBodyType=null-genvej). Når adHocPoints er
+// angivet, SPRINGES det officielle badevand-sæt (vp3_badevand.geojson) over
+// — se badevandFeatures nedenfor — så et kald der kun skal score nogle få
+// private badesteder ikke også unødigt genberegner alle ~1.039 officielle,
+// allerede friske resultater. Bidrager BEVIDST IKKE til
+// kystvandBadevandContrib (se badevands-løkken nedenfor, `!props.isAdHoc`-
+// tjekket) — et brugerplaceret punkts (potentielt upræcise) placering må
+// aldrig kunne forskyde et kystvands OFFENTLIGT VISTE gennemsnit.
+async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral, staticDir, batchSize = 100, getCurrentAt = null, adHocPoints = null) {
   const t0 = Date.now();
 
   // RETTET (bruger-ønske 2026-07-25/26): bekræftede rene regnvandsudløb (se
@@ -1606,7 +1624,16 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
   }
 
   // ── Badevand: punkt-i-polygon (sø → kystvand) → punkt-nær-linje (vandløb) ─
-  const badevandFeatures = (badevandGeojson.features || []).filter(f => f.geometry?.type === 'Point');
+  // Se adHocPoints's filhoved (funktionssignaturen ovenfor) for hvornår det
+  // officielle sæt springes over.
+  const adHocFeatures = (adHocPoints || []).map(p => ({
+    type: 'Feature',
+    geometry: { type: 'Point', coordinates: [p.lng, p.lat] },
+    properties: { bathingwat: p.siteId, isAdHoc: true },
+  }));
+  const badevandFeatures = adHocPoints
+    ? adHocFeatures
+    : (badevandGeojson.features || []).filter(f => f.geometry?.type === 'Point');
   const badevand = [];
   // NYT (bruger-ønske 2026-07-25 — "Læsø"-fejlen): ov_id -> {bactSum,
   // bactN, viralSum, viralN}, fyldt undervejs i badevands-løkken nedenfor,
@@ -1787,7 +1814,7 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
       // 'kystvand' bidrager med sin faktiske (lave eller høje) score;
       // 'nedstroms-bekraeftet' bidrager bevidst med 0 — en reel, positiv
       // måling (strømbekræftet ingen aktuel kilde), ikke fravær af data.
-      if (matchedKystOvId != null && (result?.source === 'kystvand' || allDownstreamKyst)) {
+      if (matchedKystOvId != null && !props.isAdHoc && (result?.source === 'kystvand' || allDownstreamKyst)) {
         let c = kystvandBadevandContrib.get(matchedKystOvId);
         if (!c) { c = { bactSum: 0, bactN: 0, viralSum: 0, viralN: 0 }; kystvandBadevandContrib.set(matchedKystOvId, c); }
         const b = result?.source === 'kystvand' ? (result.bact ?? null) : 0;
