@@ -61,7 +61,8 @@ primary_region = 'arn'
   # overskrevet af næste `fly deploy`, netop fordi denne fil stadig sagde
   # 2048mb — samme drift-fælde filen selv advarer om nedenfor. Rettet her
   # denne gang også, ikke kun via CLI'en.
-  memory = '4096mb'
+  # 2026-09-25, user decision: shared 2cpu / 1gb across ukwater, frwater, dkvand. NOTE the history above (OOM at 512mb/1gb-class heap, CPU steal) — watch /healthz and OOM kills after deploy; revert if it loops.
+  memory = '1024mb'
   # Skiftet fra 'shared' til 'performance' (2026-07-25) — målt direkte via
   # /proc/stat på maskinen: op til ~1.359 CPU-sekunder "steal time" over 21
   # minutters oppetid (mere end selve idle-tiden!), og ~40% steal målt live
@@ -86,7 +87,7 @@ primary_region = 'arn'
   # gøre appen ubrugelig. Samme "bevidst omkostnings-vs-robusthed"-
   # afvejning som juli, men nu genovervejet efter et helt produktionsdøgn
   # med gentagne, svært diagnosticerbare ustabilitetshændelser.
-  cpu_kind = 'performance'
+  cpu_kind = 'shared'
   # Opgraderet fra 1 til 2 (2026-07-25, manuel maskin-opgradering) — samme
   # drift-fælde som memory ovenfor: skal holdes i sync her, ellers
   # nedgraderer næste `fly deploy` maskinen tilbage til 1 vCPU.
