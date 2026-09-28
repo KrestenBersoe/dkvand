@@ -77,6 +77,31 @@ function saveEtagCache(cache) {
   fs.writeFileSync(ETAG_CACHE_PATH, JSON.stringify(cache));
 }
 
+// RETTET (produktionshændelse 2026-09-2x — dmi-rain-history.json fundet
+// korrupt: "Unexpected non-whitespace character after JSON", hver time i
+// mindst en uge, se dmi-rain.js's loadFromSyncedFile()): denne funktion
+// skrev tidligere hub'ens svar-body DIREKTE til disk, uden nogen validering
+// — en malformeret/afkortet respons fra hub'en (eller et forbigående
+// netværksglip midt i en stor overførsel) blev derfor gemt lige så
+// ubetinget som et gyldigt svar, og OVERSKREV den sidste GODE lokale kopi
+// med noget ULÆSELIGT, permanent, indtil hub'en tilfældigvis leverede et
+// gyldigt svar igen. Alle synkroniserede datasæt er JSON/GeoJSON (se
+// DATASETS ovenfor) — kroppen parses derfor her FØR den skrives; fejler
+// parsingen, behandles det som en almindelig 'error'-status (samme
+// hub-alert-fallback-sti som en HTTP-fejl allerede rammer), og den
+// eksisterende, sidst kendte GODE fil på disk røres slet ikke.
+//
+// Selve skrivningen er desuden nu ATOMISK (skriv til en midlertidig fil i
+// SAMME mappe, omdøb ind på plads) — en `rename()` inden for samme
+// filsystem er atomisk på POSIX, så en læser aldrig kan se en fil midt i
+// en trunkerings-/skrive-cyklus, uanset om denne proces bliver dræbt eller
+// to synkroniseringer (fast poll + webhook) overlapper i tid.
+function writeFileAtomic(targetPath, body) {
+  const tmpPath = `${targetPath}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tmpPath, body);
+  fs.renameSync(tmpPath, targetPath);
+}
+
 async function syncOne(datasetKey, relativePath, etagCache) {
   const url = `${HUB_URL}/api/data/${PROJECT}/${datasetKey}`;
   const headers = etagCache[datasetKey] ? { 'If-None-Match': etagCache[datasetKey] } : {};
@@ -87,8 +112,14 @@ async function syncOne(datasetKey, relativePath, etagCache) {
   if (!res.ok) return { datasetKey, status: 'error', error: `HTTP ${res.status}` };
 
   const body = Buffer.from(await res.arrayBuffer());
+  try {
+    JSON.parse(body.toString('utf8'));
+  } catch (e) {
+    return { datasetKey, status: 'error', error: `hub returned invalid JSON: ${e.message}` };
+  }
+
   const targetPath = path.join(ROOT_DIR, relativePath);
-  fs.writeFileSync(targetPath, body);
+  writeFileAtomic(targetPath, body);
 
   const etag = res.headers.get('etag');
   if (etag) etagCache[datasetKey] = etag;
