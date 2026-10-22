@@ -2347,12 +2347,24 @@
              udgangspunkt og vist først ved onloadedmetadata — ingen video uploadet endnu
              giver derfor stille en 404 på /om-video.mp4 (preload="metadata" betyder kun en
              lille Range-forespørgsel, ikke hele filen) og elementet forbliver skjult, ikke en
-             synlig "ingen video"-fejlkasse. -->
+             synlig "ingen video"-fejlkasse.
+
+             RETTET (samme dag — "Still not working" efter at .load()-rettelsen OG server.js's
+             egen Range-chunking (se dens filhoved) begge allerede var deployet): bekræftet
+             direkte at server.js returnerer en korrekt 2MB-begrænset 206-chunk fra Fly-
+             origin'en selv (curl mod dkvand.fly.dev), men Cloudflare (ditbadevand.dk's eget
+             CDN-lag, ingen dashboard-adgang herfra) omskriver/rekonstruerer svaret til HELE
+             filen igen for en "Range: bytes=0-"-forespørgsel, uanset hvad origin'en reelt
+             sender — præcis den adfærd, der får desktop Chrome til at afbryde. Peger derfor
+             video-kilden direkte på Fly-origin'en (fly.dev-værtsnavnet, ikke ditbadevand.dk),
+             som OMGÅR Cloudflare helt for denne ene ressource. Ingen CORS-problem — almindelig
+             <video>-afspilning (ikke canvas/WebGL-pixellæsning) kræver ikke CORS-headers på
+             tværs af origins. -->
         <video id="doc-hero-video" controls preload="metadata" playsinline
                style="display:none;width:100%;border-radius:10px;margin-top:1rem"
                onloadedmetadata="this.style.display='block'"
                onerror="this.style.display='none'">
-          <source src="/om-video.mp4" type="video/mp4">
+          <source src="https://dkvand.fly.dev/om-video.mp4" type="video/mp4">
         </video>
       </div>
 
