@@ -2350,21 +2350,26 @@
              synlig "ingen video"-fejlkasse.
 
              RETTET (samme dag — "Still not working" efter at .load()-rettelsen OG server.js's
-             egen Range-chunking (se dens filhoved) begge allerede var deployet): bekræftet
-             direkte at server.js returnerer en korrekt 2MB-begrænset 206-chunk fra Fly-
-             origin'en selv (curl mod dkvand.fly.dev), men Cloudflare (ditbadevand.dk's eget
-             CDN-lag, ingen dashboard-adgang herfra) omskriver/rekonstruerer svaret til HELE
-             filen igen for en "Range: bytes=0-"-forespørgsel, uanset hvad origin'en reelt
-             sender — præcis den adfærd, der får desktop Chrome til at afbryde. Peger derfor
-             video-kilden direkte på Fly-origin'en (fly.dev-værtsnavnet, ikke ditbadevand.dk),
-             som OMGÅR Cloudflare helt for denne ene ressource. Ingen CORS-problem — almindelig
-             <video>-afspilning (ikke canvas/WebGL-pixellæsning) kræver ikke CORS-headers på
-             tværs af origins. -->
+             egen Range-chunking begge allerede var deployet): bekræftet direkte at server.js
+             returnerede en korrekt 2MB-begrænset 206-chunk fra Fly-origin'en selv (curl mod
+             dkvand.fly.dev), men Cloudflare (ditbadevand.dk's eget CDN-lag) omskrev/
+             rekonstruerede svaret til HELE filen igen for en "Range: bytes=0-"-forespørgsel,
+             uanset hvad origin'en reelt sendte — netop DEN uoverensstemmelse (206/"delvist
+             indhold"-status der i virkeligheden leverer ALT) er hvad der fik desktop Chrome
+             til at afbryde. Et forsøg på at pege direkte på Fly-origin'en (omgå Cloudflare)
+             blev afvist (bruger-beslutning — Cloudflare skal IKKE omgås, uanset årsag).
+             Løsningen i stedet (se GET /om-video.mp4 i server.js): origin'en undlader nu
+             HELT Range/206-semantik og svarer altid almindelig 200 med hele filen — ingen
+             "delvist indhold"-status for Cloudflare at fortolke forskelligt fra origin'en,
+             så uoverensstemmelsen kan ikke opstå, uanset hvad Cloudflare gør med Range-
+             headeren undervejs. Mister ægte byte-range-sømningsadgang i afspilleren (kan
+             ikke hoppe til et ikke-bufferet tidspunkt uden at hente forfra), en acceptabel
+             afvejning for en kort Om-sides video. -->
         <video id="doc-hero-video" controls preload="metadata" playsinline
                style="display:none;width:100%;border-radius:10px;margin-top:1rem"
                onloadedmetadata="this.style.display='block'"
                onerror="this.style.display='none'">
-          <source src="https://dkvand.fly.dev/om-video.mp4" type="video/mp4">
+          <source src="/om-video.mp4" type="video/mp4">
         </video>
       </div>
 
