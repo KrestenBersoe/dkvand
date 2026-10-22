@@ -2830,6 +2830,21 @@
       <div class="doc-hero">
         <div class="doc-eyebrow">Kommuner</div>
         <h1>Et tilbud til kommuner</h1>
+        <!-- NYT (bruger-ønske — "Add a new video area in the menu Kommuner and
+             enable me to upload a video like the one for Om"): uploades via
+             /internal/kommuner-video (system-staff-only, se server.js's
+             registerVideoSlot()) — samme opsætning som Om-sidens video
+             (dansk-overloeb-kort.html's doc-hero ovenfor), ned til .load()-
+             kaldet i switchTab() nedenfor, der er nødvendigt af SAMME grund
+             (et <video>-element i et display:none-forfædreelement forsøger
+             aldrig selv at hente metadata igen, blot fordi det bliver synligt
+             via en CSS-klasse). -->
+        <video id="kommuner-hero-video" controls preload="metadata" playsinline
+               style="display:none;width:100%;border-radius:10px;margin-top:1rem"
+               onloadedmetadata="this.style.display='block'"
+               onerror="this.style.display='none'">
+          <source src="/kommuner-video.mp4" type="video/mp4">
+        </video>
       </div>
       <p style="font-size:.88rem;line-height:1.65;color:var(--ink);margin-bottom:.9rem">
         <a href="https://www.ditbadevand.dk" target="_blank" rel="noopener">www.ditbadevand.dk</a>
@@ -9754,6 +9769,11 @@ function switchTab(name) {
   if (name === 'varsler') {
     loadVarselData();
     showPushBanner();
+  }
+  // Se doc-hero-video's .load()-kald nedenfor (name === 'doc') for den
+  // fulde begrundelse — samme fiks, samme grund, blot Kommuner-fanens video.
+  if (name === 'kommuner') {
+    document.getElementById('kommuner-hero-video')?.load();
   }
   // NYT: "Om" er en indholdsfortegnelse + separate afsnits-"sider"
   // (se showDocSection()/showDocOverview()) — synkroniser med et evt.

@@ -1007,139 +1007,149 @@ app.get('/internal/watershed', adminUsers.requireStaffSession, (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
-// "Om"-sidens video — system-staff-only upload, offentligt læst
+// Sidewide video-slots — system-staff-only upload, offentligt læst
 // ═══════════════════════════════════════════════════════════════════════════
 // NYT (bruger-ønske 2026-10-22 — "give me a way to upload the videofile to
-// server"): 'system'-only, samme begrundelse som /internal/watershed ovenfor
-// — "Om"-siden er sitewide indhold, ikke ét lands driftsdata. Gemmes på
-// DATA_DIR (den persistente Fly-volumen, se dens filhoved/fly.toml) IKKE i
+// server", oprindelig for "Om"-siden): 'system'-only, samme begrundelse som
+// /internal/watershed ovenfor — hvert slot er sitewide indhold, ikke ét
+// lands driftsdata. Gemmes på DATA_DIR (den persistente Fly-volumen) IKKE i
 // git/Docker-imaget — en 33MB binær i versionsstyring ville permanent
 // opbloate repoet, og en video skal kunne udskiftes uden en ny `fly deploy`.
 // memoryStorage + manuelt multer-kald, samme mønster som observationUpload
-// ovenfor (samme begrundelse: fang multers egne fejl, fx LIMIT_FILE_SIZE,
-// som almindelig JSON-fejl i stedet for Express' rå standardfejlside).
-// Selve skrivningen er atomisk (tmp-fil + rename) — samme begrundelse som
-// watershed-sync.js/dmi-rain.js's rettelse samme dag: en afbrudt upload må
-// aldrig kunne overskrive en god, allerede liggende video med noget
-// ufuldstændigt.
-const OM_VIDEO_PATH = path.join(DATA_DIR, 'om-video.mp4');
-const MAX_OM_VIDEO_BYTES = 80 * 1024 * 1024; // 80MB — rigeligt over den oplyste 33MB, uden at kunne fylde den 1GB-volumen hurtigt op
-const omVideoUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: MAX_OM_VIDEO_BYTES, files: 1 },
-});
+// ovenfor. Selve skrivningen er atomisk (tmp-fil + rename) — samme
+// begrundelse som watershed-sync.js/dmi-rain.js's rettelse samme dag: en
+// afbrudt upload må aldrig kunne overskrive en god, allerede liggende video.
+//
+// UDVIDET (bruger-ønske — "Add a new video area in the menu Kommuner"):
+// trukket ud i en fabriksfunktion i stedet for en anden kopi af hele
+// blokken, nu der er TO instanser af samme feature — sikrer desuden at den
+// hårdt-tilkæmpede Cloudflare-rettelse (se GET-rutens eget filhoved
+// nedenfor: altid almindelig 200, ALDRIG 206/Range, for at undgå den
+// "delvist indhold men i virkeligheden alt"-uoverensstemmelse Cloudflare
+// introducerede og som fik desktop Chrome til at afbryde) automatisk
+// gælder for ethvert fremtidigt slot, ikke kun for dem, der huskes
+// manuelt kopieret ind hver gang.
+const MAX_VIDEO_SLOT_BYTES = 80 * 1024 * 1024; // 80MB — rigeligt over den oplyste 33MB for "om", uden at kunne fylde den 1GB-volumen hurtigt op
 
-app.get('/internal/om-video', adminUsers.requireStaffSession, (req, res) => {
-  if (req.staff.role !== 'system') {
-    return res.status(403).send('Video-upload er kun tilgængeligt for system-brugere.');
-  }
-  res.set('Cache-Control', 'no-store');
-  res.sendFile(path.join(STATIC_DIR, 'internal-om-video.html'));
-});
+function registerVideoSlot(slot, label) {
+  const videoPath = path.join(DATA_DIR, `${slot}-video.mp4`);
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: MAX_VIDEO_SLOT_BYTES, files: 1 },
+  });
 
-app.get('/internal/api/om-video-status', adminUsers.requireStaffSession, (req, res) => {
-  res.set('Cache-Control', 'no-store');
-  try {
-    const stat = fs.statSync(OM_VIDEO_PATH);
-    res.json({ exists: true, sizeBytes: stat.size, uploadedAt: stat.mtime.toISOString() });
-  } catch (e) {
-    res.json({ exists: false });
-  }
-});
-
-app.post('/internal/api/om-video', adminUsers.requireStaffSession, (req, res) => {
-  if (req.staff.role !== 'system') {
-    return res.status(403).json({ error: 'Kun system-brugere kan uploade videoen.' });
-  }
-  omVideoUpload.single('video')(req, res, (uploadErr) => {
-    if (uploadErr) {
-      console.warn('om-video: upload-fejl —', uploadErr.message);
-      const tooBig = uploadErr.code === 'LIMIT_FILE_SIZE';
-      return res.status(400).json({
-        error: tooBig
-          ? `Video for stor (maks ${(MAX_OM_VIDEO_BYTES / 1024 / 1024).toFixed(0)} MB).`
-          : 'Kunne ikke behandle video-upload.',
-      });
+  app.get(`/internal/${slot}-video`, adminUsers.requireStaffSession, (req, res) => {
+    if (req.staff.role !== 'system') {
+      return res.status(403).send('Video-upload er kun tilgængeligt for system-brugere.');
     }
-    if (!req.file) return res.status(400).json({ error: 'Ingen video medsendt (feltnavn skal være "video").' });
-    // RETTET: kun egentlig magic-bytes-tjek (ikke blot req.file.mimetype,
-    // som klienten frit kan forfalske) — samme princip som
-    // badested-observations.js's foto-validering. MP4/MOV/QuickTime deler
-    // alle ftyp-boks-strukturen (bytes 4-7 === 'ftyp'), ISO base media file
-    // format — dækker i praksis alt en telefon/browser producerer som
-    // "video/mp4".
-    const buf = req.file.buffer;
-    const looksLikeMp4 = buf.length > 12 && buf.toString('ascii', 4, 8) === 'ftyp';
-    if (!looksLikeMp4) {
-      return res.status(400).json({ error: 'Filen ligner ikke en gyldig MP4-video.' });
-    }
+    res.set('Cache-Control', 'no-store');
+    const html = fs.readFileSync(path.join(STATIC_DIR, 'internal-video-slot.html'), 'utf8')
+      .replace('%%VIDEO_SLOT_JSON%%', JSON.stringify({ slot, label }));
+    res.set('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  });
+
+  app.get(`/internal/api/${slot}-video-status`, adminUsers.requireStaffSession, (req, res) => {
+    res.set('Cache-Control', 'no-store');
     try {
-      const tmpPath = `${OM_VIDEO_PATH}.tmp-${process.pid}-${Date.now()}`;
-      fs.writeFileSync(tmpPath, buf);
-      fs.renameSync(tmpPath, OM_VIDEO_PATH);
-      console.log(`om-video: ny video uploadet af ${req.staff.email} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
-      res.json({ ok: true, sizeBytes: buf.length });
+      const stat = fs.statSync(videoPath);
+      res.json({ exists: true, sizeBytes: stat.size, uploadedAt: stat.mtime.toISOString() });
     } catch (e) {
-      console.error('om-video: kunne ikke skrive til disk —', e.message);
-      res.status(500).json({ error: 'Kunne ikke gemme videoen på serveren.' });
+      res.json({ exists: false });
     }
   });
-});
 
-app.delete('/internal/api/om-video', adminUsers.requireStaffSession, (req, res) => {
-  if (req.staff.role !== 'system') {
-    return res.status(403).json({ error: 'Kun system-brugere kan fjerne videoen.' });
-  }
-  try {
-    fs.unlinkSync(OM_VIDEO_PATH);
-  } catch (e) {
-    if (e.code !== 'ENOENT') {
-      console.error('om-video: kunne ikke fjerne —', e.message);
-      return res.status(500).json({ error: 'Kunne ikke fjerne videoen.' });
+  app.post(`/internal/api/${slot}-video`, adminUsers.requireStaffSession, (req, res) => {
+    if (req.staff.role !== 'system') {
+      return res.status(403).json({ error: 'Kun system-brugere kan uploade videoen.' });
     }
-  }
-  res.json({ ok: true });
-});
+    upload.single('video')(req, res, (uploadErr) => {
+      if (uploadErr) {
+        console.warn(`${slot}-video: upload-fejl —`, uploadErr.message);
+        const tooBig = uploadErr.code === 'LIMIT_FILE_SIZE';
+        return res.status(400).json({
+          error: tooBig
+            ? `Video for stor (maks ${(MAX_VIDEO_SLOT_BYTES / 1024 / 1024).toFixed(0)} MB).`
+            : 'Kunne ikke behandle video-upload.',
+        });
+      }
+      if (!req.file) return res.status(400).json({ error: 'Ingen video medsendt (feltnavn skal være "video").' });
+      // RETTET: kun egentlig magic-bytes-tjek (ikke blot req.file.mimetype,
+      // som klienten frit kan forfalske) — samme princip som
+      // badested-observations.js's foto-validering. MP4/MOV/QuickTime deler
+      // alle ftyp-boks-strukturen (bytes 4-7 === 'ftyp'), ISO base media
+      // file format — dækker i praksis alt en telefon/browser producerer
+      // som "video/mp4".
+      const buf = req.file.buffer;
+      const looksLikeMp4 = buf.length > 12 && buf.toString('ascii', 4, 8) === 'ftyp';
+      if (!looksLikeMp4) {
+        return res.status(400).json({ error: 'Filen ligner ikke en gyldig MP4-video.' });
+      }
+      try {
+        const tmpPath = `${videoPath}.tmp-${process.pid}-${Date.now()}`;
+        fs.writeFileSync(tmpPath, buf);
+        fs.renameSync(tmpPath, videoPath);
+        console.log(`${slot}-video: ny video uploadet af ${req.staff.email} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
+        res.json({ ok: true, sizeBytes: buf.length });
+      } catch (e) {
+        console.error(`${slot}-video: kunne ikke skrive til disk —`, e.message);
+        res.status(500).json({ error: 'Kunne ikke gemme videoen på serveren.' });
+      }
+    });
+  });
 
-// Offentlig — "Om"-sidens <video> i dansk-overloeb-kort.html peger herpå.
-// res.sendFile() håndterer Range-forespørgsler selv (nødvendigt for
-// video-scrubbing/seeking i browseren) — intet ekstra Range-arbejde nødvendigt her.
-// RETTET (bruger-rapport 2026-10-22 — "I can see it on PWA on android - but
-// not in Chrome on desktop", video vist i Om-fanen): res.sendFile() gav
-// hele filen tilbage som ÉT 206-svar for en open-ended
-// "Range: bytes=0-"-forespørgsel — desktop Chromiums video-pipeline
-// afbryder (net::ERR_ABORTED) på et metadata-probe-svar så stort, og
-// genopretter ALDRIG. Et første forsøg (2MB-begrænsede 206-chunks,
-// håndrullet Range-parsing) løste det direkte mod Fly-origin'en (bekræftet
-// via curl mod dkvand.fly.dev) — men Cloudflare (ditbadevand.dk's CDN-lag)
-// omskrev/rekonstruerede svaret til HELE filen igen for "Range:
-// bytes=0-", uanset hvad origin'en reelt sendte, og et forslag om at pege
-// uden om Cloudflare direkte på Fly-origin'en blev afvist (bruger-
-// beslutning — Cloudflare skal ikke omgås).
-//
-// Løsningen i stedet: undgå Range/206-semantik HELT. Uanset om klienten
-// sender en Range-header, svares der altid almindelig 200 med hele filen
-// — ingen "delvist indhold"-status for Cloudflare at fortolke anderledes
-// end origin'en, så den observerede uoverensstemmelse (206 der i
-// virkeligheden leverer alt) kan ikke opstå, ligegyldigt hvad Cloudflare
-// gør med Range-headeren undervejs. Mister ægte byte-range-sømning i
-// afspilleren (kan ikke hoppe til et ubufferet tidspunkt uden at hente
-// forfra) — en acceptabel afvejning for en kort Om-sides video.
-app.get('/om-video.mp4', (req, res) => {
-  // NYT: no-store, ikke public/max-age — videoen kan udskiftes når som
-  // helst via /internal/om-video, og en CDN-cachet gammel udgave må aldrig
-  // kunne overleve en udskiftning i op til en hel time.
-  res.set('Cache-Control', 'no-store');
-  let stat;
-  try {
-    stat = fs.statSync(OM_VIDEO_PATH);
-  } catch (e) {
-    return res.status(404).end();
-  }
-  res.set('Content-Type', 'video/mp4');
-  res.set('Content-Length', String(stat.size));
-  fs.createReadStream(OM_VIDEO_PATH).pipe(res);
-});
+  app.delete(`/internal/api/${slot}-video`, adminUsers.requireStaffSession, (req, res) => {
+    if (req.staff.role !== 'system') {
+      return res.status(403).json({ error: 'Kun system-brugere kan fjerne videoen.' });
+    }
+    try {
+      fs.unlinkSync(videoPath);
+    } catch (e) {
+      if (e.code !== 'ENOENT') {
+        console.error(`${slot}-video: kunne ikke fjerne —`, e.message);
+        return res.status(500).json({ error: 'Kunne ikke fjerne videoen.' });
+      }
+    }
+    res.json({ ok: true });
+  });
+
+  // Offentlig — <video>'en i dansk-overloeb-kort.html peger herpå.
+  // RETTET (bruger-rapport 2026-10-22 — "I can see it on PWA on android -
+  // but not in Chrome on desktop", oprindelig på Om-videoen): res.sendFile()
+  // gav hele filen tilbage som ÉT 206-svar for en open-ended
+  // "Range: bytes=0-"-forespørgsel — desktop Chromiums video-pipeline
+  // afbryder (net::ERR_ABORTED) på et metadata-probe-svar så stort, og
+  // genopretter ALDRIG. Et første forsøg (2MB-begrænsede 206-chunks,
+  // håndrullet Range-parsing) løste det direkte mod Fly-origin'en, men
+  // Cloudflare (ditbadevand.dk's CDN-lag) omskrev/rekonstruerede svaret til
+  // HELE filen igen for "Range: bytes=0-", uanset hvad origin'en reelt
+  // sendte, og et forslag om at pege uden om Cloudflare direkte på
+  // Fly-origin'en blev afvist (bruger-beslutning — Cloudflare skal ikke
+  // omgås). Løsningen i stedet: undgå Range/206-semantik HELT. Uanset om
+  // klienten sender en Range-header, svares der altid almindelig 200 med
+  // hele filen — ingen "delvist indhold"-status for Cloudflare at fortolke
+  // anderledes end origin'en. Mister ægte byte-range-sømning i afspilleren
+  // (kan ikke hoppe til et ubufferet tidspunkt uden at hente forfra) — en
+  // acceptabel afvejning for en kort video på en menu-side.
+  app.get(`/${slot}-video.mp4`, (req, res) => {
+    // NYT: no-store, ikke public/max-age — videoen kan udskiftes når som
+    // helst, og en CDN-cachet gammel udgave må aldrig kunne overleve en
+    // udskiftning i op til en hel time.
+    res.set('Cache-Control', 'no-store');
+    let stat;
+    try {
+      stat = fs.statSync(videoPath);
+    } catch (e) {
+      return res.status(404).end();
+    }
+    res.set('Content-Type', 'video/mp4');
+    res.set('Content-Length', String(stat.size));
+    fs.createReadStream(videoPath).pipe(res);
+  });
+}
+
+registerVideoSlot('om', 'Om-siden');
+registerVideoSlot('kommuner', 'Kommuner-siden');
 
 // NYT — SAMME computeKommuneBenchmark()/periode-parsing som GET /admin/api/
 // kommune-benchmark (se dens filhoved), men bag adminUsers.requireStaffSession
