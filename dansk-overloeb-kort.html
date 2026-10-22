@@ -249,7 +249,11 @@
          nogensinde få en ring — rent regnvand bærer ingen bakterie-/
          virusrisiko nedstrøms og skal derfor aldrig vise nogen
          overløbsindikation, animeret eller ej (se colorRbuByOwnRisk()).
-         Grundmarkørens farve (blå regn / brun kloak) er UÆNDRET.
+         Grundmarkørens farve (blå regn / brun kloak) VAR uændret her —
+         RETTET IGEN 2026-10-22 ("match ukwater"-ønsket): grundmarkøren er
+         nu OGSÅ status-drevet (grå/lilla, se RBU_INACTIVE_COLOR/
+         RBU_ACTIVE_COLOR), ikke type-drevet. Se currentRbuStyle()/
+         colorRbuByOwnRisk() for den aktuelle logik.
        - Ringens FARVE koder nu STATUS (rød/gul, samme skala som app'ens
          øvrige risikofarver, se riskStyle()) i stedet for type, ligesom
          ukwaters røde/gule ringe — den kan derfor ikke længere forveksles
@@ -2169,8 +2173,15 @@
     <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
     <div class="leg-row"><div class="leg-swatch" style="background:#1a6faf;opacity:.5;border:1px solid #1a6faf"></div> Kystvande (VP3)</div>
     <div class="leg-row"><div class="leg-swatch" style="background:#f0c040;opacity:.5;border:1px solid #e6a817"></div> Badevandsområder</div>
-    <div class="leg-row"><div class="leg-swatch" style="background:#3584e4;border-radius:50%"></div> Overløb — regnvand</div>
-    <div class="leg-row"><div class="leg-swatch" style="background:#8b5a2b;border-radius:50%"></div> Overløb — kloak</div>
+    <!-- RETTET (bruger-ønske 2026-10-22 — "change the color and design of outlets
+         to match ukwater"): "Overløb — regnvand" (blå) fjernet — regnvandsudløb er
+         allerede filtreret helt fra laget (se buildRbuLayer()'s filter), denne række
+         var en overset rest fra FØR det filter blev indført. "Kloak"-rækken er nu
+         farvet grå (RBU_INACTIVE_COLOR), matcher grundmarkørens status-neutrale farve,
+         plus en ny lilla række for RBU_ACTIVE_COLOR (samme to farver som ukwaters
+         outlet-dot). -->
+    <div class="leg-row"><div class="leg-swatch" style="background:#7f8c8d;border-radius:50%"></div> Overløb</div>
+    <div class="leg-row"><div class="leg-swatch" style="background:#8e44ad;border-radius:50%"></div> Overløb — aktivt/forudsagt</div>
     <div class="leg-row"><div class="leg-swatch" style="border:2px solid #c84b1f;border-radius:50%;background:transparent"></div> Animeret ring: udløb i høj risiko</div>
     <hr style="border-color:rgba(26,107,138,.2); margin:.4rem 0">
     <div class="leg-row" style="font-size:.65rem; color:rgba(240,237,230,.4)" id="leg-tau">
@@ -2331,6 +2342,18 @@
         <div class="doc-eyebrow">Om</div>
         <h1>National Badevandsvarsel · Danmarks vandmiljø</h1>
         <p class="doc-lead">Et screeningsværktøj der visualiserer forureningsrisiko fra regnbetingede kloakoverløb (CSO) ved alle aktive udløbspunkter i Danmark, baseret på officielle PULS-data, VP3 vandområdeplandata, DMI/Open-Meteo-nedbørsmodel og CMEMS' Østersø-havmodel. Ud over risikoscoren kan man for hver sø også se en konkret, opgjort stofbelastning — kvælstof, fosfor, COD/BOD samt en række miljøfremmede stoffer — se Sø-stofbelastning.</p>
+        <!-- NYT (bruger-ønske 2026-10-22 — "make room for a video in the Om section"):
+             uploades via /internal/om-video (system-staff-only, se server.js). Skjult som
+             udgangspunkt og vist først ved onloadedmetadata — ingen video uploadet endnu
+             giver derfor stille en 404 på /om-video.mp4 (preload="metadata" betyder kun en
+             lille Range-forespørgsel, ikke hele filen) og elementet forbliver skjult, ikke en
+             synlig "ingen video"-fejlkasse. -->
+        <video id="doc-hero-video" controls preload="metadata" playsinline
+               style="display:none;width:100%;border-radius:10px;margin-top:1rem"
+               onloadedmetadata="this.style.display='block'"
+               onerror="this.style.display='none'">
+          <source src="/om-video.mp4" type="video/mp4">
+        </video>
       </div>
 
       <nav class="doc-toc">
@@ -2437,7 +2460,7 @@
           <tr><td>🧬 Viralt kort</td><td>Varmekort med separat viral risikomodel</td><td>Lilla gradient — vira overlever markant længere om vinteren</td></tr>
           <tr><td>🌿 Algerisiko</td><td>Varmekort baseret på næringsstof-proxy × temperatur-gate (se Badevandsvurdering)</td><td>Gul → grøn gradient efter algerisiko-score — ikke maskeret til præcise vandområde-polygoner for søer/vandløb (kun kystvande), se Begrænsninger</td></tr>
           <tr><td>🌊 Kystvande (VP3)</td><td>Polygoner for de 109 målsatte kystvandområder</td><td>Grøn/amber/rød udfyldning efter max af waterArea-tekstmatch og ID15-opstrøms-matching, se Kystvandvurdering</td></tr>
-          <tr><td>🚰 Overløb</td><td>VP3's regnbetingede udløbspunkter (RBU-registret) — officielt myndighedsregistrerede udledningssteder, adskilt fra PULS-udløbene. Kun bekræftede spildevands-/kloakoverløbsbygværker vises (<span class="doc-mono">bgv_type</span> OS/OV/OF/OVI/OSI/OK/OKI) — rent regnvand (SE/SF) og ukendt/uklassificerede punkter (UR/Bypass/SKYBRUD/"ikke oplyst") er filtreret fra laget helt, samme afgrænsning som ukwater/frwaters tilsvarende Outlets-lag, se Datakvalitet</td><td>Fast brun farve ved alle zoomniveauer (kun størrelse/gennemsigtighed gradueres efter zoom). Punkter, der deler outfallId med et PULS-udløb i høj risiko (≥60%, udløbets EGEN empiriske tærskel — ingen naboudløb-vægtning), får en animeret rød puls-ring (gul, statisk, ved ≥70% af tærsklen); punkter uden PULS-modstykke får ingen ring, se Kortlag-indledningen</td></tr>
+          <tr><td>🚰 Overløb</td><td>VP3's regnbetingede udløbspunkter (RBU-registret) — officielt myndighedsregistrerede udledningssteder, adskilt fra PULS-udløbene. Kun bekræftede spildevands-/kloakoverløbsbygværker vises (<span class="doc-mono">bgv_type</span> OS/OV/OF/OVI/OSI/OK/OKI) — rent regnvand (SE/SF) og ukendt/uklassificerede punkter (UR/Bypass/SKYBRUD/"ikke oplyst") er filtreret fra laget helt, samme afgrænsning som ukwater/frwaters tilsvarende Outlets-lag, se Datakvalitet</td><td>Grå grundmarkør i ro, lilla ved aktivt/forudsagt overløb — samme to farver som ukwaters Outlets-lag (størrelse/gennemsigtighed gradueres desuden efter zoom). Punkter, der deler outfallId med et PULS-udløb i høj risiko (udløbets EGEN empiriske tærskel, lokal prognose ELLER serverens DMI-målte risikoscore, alt efter hvad der viser størst risiko — ingen naboudløb-vægtning), får en animeret rød puls-ring (gul, statisk, ved "i risiko"); punkter uden PULS-modstykke får ingen ring, se Kortlag-indledningen</td></tr>
           <tr><td>🏖 Badevandsområder</td><td>EU badevandsovervågningsstationer fra VP3. Klik åbner badevandsside med 7-dages nedbørsgraf, risikooversigt og opstrøms-matchede udløb</td><td>Cirkelmarkør i grøn/amber/rød ud fra bekræftet punkt-i-polygon-/punkt-nær-linje-match (sø → kystvand → vandløb); grå/"ukendt" hvis ingen bekræftet forbindelse — se Badevandsvurdering</td></tr>
           <tr><td>〰 Strøm</td><td>Animeret partikel-lag for havstrøm (CMEMS Østersø- og Nordsø-model, se CMEMS/Copernicus Marine), klippet til vandområder (VP3 kystvande-/sø-polygoner)</td><td>Bevægelsesretning/-fart fra strømvektoren; farve efter vandtemperatur, relativ skala over det aktuelt viste datasæt (lyseblå=koldt → mørkerød=varmt)</td></tr>
           <tr><td>🧭 Vandløbsretning</td><td>Pile langs vandløbslinjer, der viser udledt strømretning — se Vandløbenes strømretning</td><td>Grøn = sikker retning (>1 m højdeforskel mellem endepunkternes ID15-oplande); grå = usikker (retning vist, men under margen); ingen pil hvis retning ikke kunne afgøres</td></tr>
@@ -3815,13 +3838,20 @@ function rbuTypeLabel(props) {
 // ukendt/uklassificeret (UR/Bypass/SKYBRUD) er FJERNET fra laget helt,
 // ikke blot farvet anderledes. Samme visning på tværs af dkvand/ukwater/
 // frwater: ukwaters eget outlet-datasæt er allerede udelukkende CSO, så
-// der findes intet type-skel at vise dér. Kun ÉN fast farve tilbage —
-// brun er den internationalt konventionelle farve for spildevand/kloak
-// (fx APWA's farvekode for underjordiske ledninger), bevidst valgt væk
-// fra grøn/gul/rød (risikolagenes alarm-farver) og lilla (viral-laget),
-// så betydningen ikke kan forveksles med en risikoscore.
-const RBU_KLOAK_COLOR = '#4a2c14';   // stroke
-const RBU_KLOAK_FILL  = '#8b5a2b';   // fill
+// der findes intet type-skel at vise dér.
+//
+// RETTET (bruger-ønske 2026-10-22 — "change the color and design of
+// outlets to match ukwater"): grundmarkørens farve var hidtil ÉN fast brun
+// type-farve (RBU_KLOAK_COLOR/-FILL), uændret uanset udløbets faktiske
+// status. Erstattet med ukwaters eget skema (loadAndRender()'s
+// anyActive-farvevalg): grå i ro, lilla ved aktivt/forudsagt overløb
+// (marker._ringTier==='active', se colorRbuByOwnRisk()) — samme to
+// hex-farver ukwaters outlet-dot bruger. Typefarven gav reelt ingen
+// information laget ikke allerede havde vist (alle punkter er CSO efter
+// filteret ovenfor); status-farven gør markøren selv ensbetydende med
+// ringens signal, ikke blot en statisk baggrundsfarve.
+const RBU_INACTIVE_COLOR = '#7f8c8d';   // grå — intet aktivt/forudsagt overløb (ukwaters "anyActive=false")
+const RBU_ACTIVE_COLOR   = '#8e44ad';   // lilla — marker._ringTier==='active' (ukwaters "anyActive=true")
 
 // NYT: overløbs-RINGENS farve (se renderVisibleRbuRings()) — bevidst
 // SAMME røde/gule som app'ens øvrige risikoskala (riskStyle(), :6494-6499),
@@ -3835,24 +3865,33 @@ function _lerp(a, b, t) { return a + (b - a) * t; }
 
 // RETTET: tog tidligere et isWastewater-argument (regn/kloak-farvevalg) —
 // overflødigt nu laget kun indeholder bekræftede CSO-punkter, se filter'et
-// i buildRbuLayer(). Kun én fast farve tilbage (RBU_KLOAK_COLOR/-FILL).
-function currentRbuStyle() {
+// i buildRbuLayer(). Tager nu i stedet `isActive` (se RBU_INACTIVE_COLOR/
+// RBU_ACTIVE_COLOR's filhoved, 2026-10-22) — farven kommer fra udløbets
+// EGEN status (marker._ringTier), ikke en fast type-farve. `isActive` er
+// valgfri (udeladt = grå/i ro) — nødvendigt ved selve lag-opbygningen i
+// buildRbuLayer(), hvor colorRbuByOwnRisk() (som sætter _ringTier) endnu
+// ikke er kørt for det nye lag.
+function currentRbuStyle(isActive) {
   const z = map.getZoom();
   const t = Math.max(0, Math.min(1, (z - RBU_ZOOM_FAR) / (RBU_ZOOM_NEAR - RBU_ZOOM_FAR)));
-  const radius = Math.max(3, Math.round(_lerp(3, RBU_MARKER_BASE_RADIUS, t)));
+  // Aktive udløb får samme radius-bump som ukwaters ACTIVE_OUTLET_BASE_RADIUS
+  // vs. INACTIVE_OUTLET_BASE_RADIUS (større, ikke kun anderledes farvet) —
+  // skalerer stadig selv med zoom, +3px er et konstant tillæg ovenpå.
+  const radius = Math.max(3, Math.round(_lerp(3, RBU_MARKER_BASE_RADIUS, t))) + (isActive ? 3 : 0);
+  const color = isActive ? RBU_ACTIVE_COLOR : RBU_INACTIVE_COLOR;
   return {
     radius: Math.max(radius, 4),   // synlig/klikbar selv ved RBU_ZOOM_FAR, hvor almindelige punkter er 3px
     fillOpacity: _lerp(0.55, 0.85, t),
     opacity: _lerp(0.75, 1, t),
-    color: RBU_KLOAK_COLOR,
-    fillColor: RBU_KLOAK_FILL,
+    color,
+    fillColor: color,
   };
 }
 function updateRbuRadii(layer) {
   if (!layer || !map.hasLayer(layer)) return;
-  const style = currentRbuStyle();
   layer.eachLayer(l => {
     if (!l.setRadius) return;
+    const style = currentRbuStyle(l._ringTier === 'active');
     l.setRadius(style.radius);
     l.setStyle(style);
   });
@@ -6141,8 +6180,9 @@ const VP3_LAYERS = {
   // præcise Leaflet-interne mekanisme direkte (ingen fjernadgang til en
   // fejlende iPhone for at bekræfte via devtools).
   badevand:   { getShow: () => showVP3Bade,    getLayer: () => vp3BadevandLayer, onShown: () => refreshBadevandMarkers() },
-  // Ét fælles Overløb-lag (blå = regnvand, brun = kloak i samme lag, se
-  // currentRbuStyle()) — se vp3OverloebLayer's filhoved.
+  // Ét fælles Overløb-lag (kun CSO-punkter, se buildRbuLayer()'s filter;
+  // grå = i ro, lilla = aktivt/forudsagt overløb, se currentRbuStyle()) —
+  // se vp3OverloebLayer's filhoved.
   overloeb:     { getShow: () => showVP3Overloeb, getLayer: () => vp3OverloebLayer,     onShown: () => { updateRbuRadii(vp3OverloebLayer); renderVisibleRbuRings(); } },
   // Samme show-state som hoved-laget ovenfor — ringen tændes/slukkes altid
   // sammen med Overløb, aldrig uafhængigt.
@@ -7615,6 +7655,22 @@ function colorBadevandByRisk() {
 // tærskelkrydsningssvar og falder tilbage til den gamle riskScore ≥ 0.6-
 // gate som "aktiv" — uden "i risiko"-mellemtrin, da det kræver
 // tærskelkrydsningen.
+//
+// RETTET (bruger-rapport 2026-10-21 — "dkvand outlets still do not show
+// animated rings ... when thresholds are breached"): ovenstående fallback
+// gjaldt KUN når pt.hourlyWeek var helt tom — i praksis næsten aldrig,
+// fordi pt.hourlyWeek ALTID er Open-Meteos egen prognosemodel for cellen
+// (sat klient-side, se loadAll()), uafhængigt af om puls-risk-scoring.js
+// (serveren) rent faktisk har et DMI-MÅLT regnmålernet-svar for samme
+// celle og derfor allerede har genberegnet pt.riskScore ud fra DEN i
+// stedet (se dens egen rainHourlyWeek-prioritering: målt regn vinder altid
+// over prognosen, pt.rainSource==='malt'). Når de to kilder er uenige —
+// Open-Meteos model viser mindre regn for cellen end DMI's målere reelt
+// registrerede — viste ringen derfor "intet overløb", selvom appens EGEN
+// autoritative risikoscore (samme tal som Lav/Mellem/Høj-badgen) allerede
+// viste et reelt krydset tærskel. pt.riskScore konsulteres nu ALTID, ikke
+// kun som nødløsning når hourlyWeek mangler — se tierFromRiskScore()/
+// combineRingTiers() nedenfor.
 let _rbuOutfallIndex    = null;
 let _rbuOutfallIndexRef = null;   // overflowPoints-referencen indekset er bygget fra
 
@@ -7682,17 +7738,44 @@ function colorRbuByOwnRisk() {
 
     const crossing = computeThresholdCrossing(pt.hourlyWeek, pt.thresholdMm);
 
-    let tier = null; // 'active' | 'watch' | null (ingen ring)
+    // Lokal tærskelkrydsning — Open-Meteos PROGNOSE for cellen, se
+    // filhovedets kommentar ovenfor.
+    let localTier = null;
     if (crossing) {
       if (crossing.isActive) {
-        tier = 'active';
+        localTier = 'active';
       } else if (crossing.currentMM / Math.max(crossing.threshold, 0.01) >= RBU_RING_WATCH_PCT) {
-        tier = 'watch';
+        localTier = 'watch';
       }
-    } else if (pt.riskScore !== null && pt.riskScore >= 0.6) {
-      tier = 'active'; // fallback, se filhovedets kommentar: intet hourlyWeek → intet "i risiko"-trin
     }
+
+    // Serverens egen risikoscore — prioriterer DMI-MÅLT regn over Open-
+    // Meteos prognose, når hub'en har et svar for cellen (se puls-risk-
+    // scoring.js's rainHourlyWeek). Samme rød/gul-grænser som appens øvrige
+    // Lav/Mellem/Høj-badge (se riskModel.riskBucket() — ÉT sted definerer
+    // disse, ikke et nyt tal opfundet her).
+    let scoreTier = null;
+    if (pt.riskScore !== null && pt.riskScore !== undefined) {
+      if (pt.riskScore >= 0.6) scoreTier = 'active';
+      else if (pt.riskScore >= 0.2) scoreTier = 'watch';
+    }
+
+    // Brug det ALVORLIGSTE af de to signaler — ringen skal aldrig vise
+    // "intet overløb", blot fordi ÉN af de to kilder tilfældigvis viser
+    // lavere risiko end den anden (se filhovedets kommentar, 2026-10-21).
+    const SEVERITY = { active: 2, watch: 1 };
+    const tier = (SEVERITY[localTier] || 0) >= (SEVERITY[scoreTier] || 0) ? localTier : scoreTier;
     marker._ringTier = tier;
+    // NYT (bruger-ønske 2026-10-22 — "change the color and design of
+    // outlets to match ukwater"): grundmarkørens farve/radius afhænger nu
+    // af SAMME tier som ringen (se RBU_INACTIVE_COLOR/RBU_ACTIVE_COLOR's
+    // filhoved) — lilla+større ved 'active', grå ellers ('watch' får
+    // stadig kun en ring, ikke en farvet grundmarkør, samme skel som
+    // ukwaters egen anyActive-logik). setRadius() OG setStyle() skal begge
+    // kaldes — Leaflets circleMarker.setStyle() opdaterer IKKE radius.
+    const baseStyle = currentRbuStyle(tier === 'active');
+    marker.setRadius(baseStyle.radius);
+    marker.setStyle(baseStyle);
   });
 
   renderVisibleRbuRings();

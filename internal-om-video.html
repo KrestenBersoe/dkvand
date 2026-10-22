@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Om-video — upload</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  /* Samme farvepalet/tema som set-password.html/admin-login.html. */
+  :root {
+    --paper: #12202a; --card: #16283355; --ink: #f0ede6; --ink-soft: #9fb0bb;
+    --accent: #4fb8d6; --border: rgba(255,255,255,.08);
+    --ok: #3fa96a; --warn: #d4a020; --bad: #d1584a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem;
+    background: linear-gradient(180deg, #0d1720, #12202a 40%);
+    color: var(--ink);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 520px; margin: 4rem auto 0; }
+  h1 { font-size: 1.4rem; margin: 0 0 .3rem; }
+  .sub { color: var(--ink-soft); font-size: .85rem; margin-bottom: 1.5rem; }
+  .card {
+    background: rgba(255,255,255,.03); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1.3rem 1.4rem; margin-bottom: 1rem;
+  }
+  label { display: block; font-size: .82rem; color: var(--ink-soft); margin: 0 0 .4rem; }
+  input[type=file] {
+    width: 100%; background: rgba(255,255,255,.04); border: 1px solid var(--border); color: var(--ink);
+    padding: .6rem .7rem; border-radius: 8px; font-size: .9rem; font-family: inherit;
+    margin-bottom: 1rem;
+  }
+  button {
+    background: var(--accent); border: none; color: #0d1720;
+    padding: .65rem 1.2rem; border-radius: 8px; font-size: .9rem; font-weight: 700; cursor: pointer;
+  }
+  button.danger { background: var(--bad); color: #fff; }
+  button:disabled { opacity: .6; cursor: default; }
+  .err-msg, .ok-msg {
+    font-size: .85rem; padding: .7rem .9rem; border-radius: 8px; margin-bottom: 1rem; display: none;
+  }
+  .err-msg { background: rgba(209,88,74,.12); color: var(--bad); }
+  .ok-msg { background: rgba(63,169,106,.12); color: var(--ok); }
+  .err-msg.show, .ok-msg.show { display: block; }
+  .field-note { font-size: .74rem; color: var(--ink-soft); margin: -.6rem 0 1rem; }
+  .status-row { display: flex; justify-content: space-between; align-items: center; font-size: .88rem; }
+  video { width: 100%; border-radius: 8px; margin-top: .8rem; display: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎬 "Om"-sidens video</h1>
+  <div class="sub">Vises på "Om"-fanen på kortet. Kun MP4. Maks 80 MB.</div>
+
+  <div class="card">
+    <div class="status-row">
+      <span id="status-text">Henter status…</span>
+      <button class="danger" id="remove-btn" style="display:none" onclick="removeVideo()">Fjern video</button>
+    </div>
+    <video id="preview" controls></video>
+  </div>
+
+  <div class="card">
+    <div class="err-msg" id="err-msg"></div>
+    <div class="ok-msg" id="ok-msg"></div>
+    <form id="form" onsubmit="return submitForm(event)">
+      <label for="f-video">Ny video (MP4)</label>
+      <input id="f-video" name="video" type="file" accept="video/mp4" required>
+      <div class="field-note">En ny upload overskriver den nuværende video med det samme.</div>
+      <button type="submit" id="submit-btn">Upload</button>
+    </form>
+  </div>
+</div>
+
+<script>
+async function loadStatus() {
+  const statusEl = document.getElementById('status-text');
+  const removeBtn = document.getElementById('remove-btn');
+  const preview = document.getElementById('preview');
+  try {
+    const resp = await fetch('/internal/api/om-video-status');
+    const data = await resp.json();
+    if (data.exists) {
+      const mb = (data.sizeBytes / 1024 / 1024).toFixed(1);
+      statusEl.textContent = `Nuværende video: ${mb} MB, uploadet ${new Date(data.uploadedAt).toLocaleString('da-DK')}`;
+      removeBtn.style.display = '';
+      preview.src = '/om-video.mp4?v=' + Date.now();
+      preview.style.display = '';
+    } else {
+      statusEl.textContent = 'Ingen video uploadet endnu.';
+      removeBtn.style.display = 'none';
+      preview.style.display = 'none';
+    }
+  } catch (e) {
+    statusEl.textContent = 'Kunne ikke hente status.';
+  }
+}
+loadStatus();
+
+async function submitForm(e) {
+  e.preventDefault();
+  const btn = document.getElementById('submit-btn');
+  const errEl = document.getElementById('err-msg');
+  const okEl = document.getElementById('ok-msg');
+  errEl.classList.remove('show');
+  okEl.classList.remove('show');
+
+  const fileInput = document.getElementById('f-video');
+  const file = fileInput.files[0];
+  if (!file) return false;
+
+  const formData = new FormData();
+  formData.append('video', file);
+
+  btn.disabled = true;
+  btn.textContent = 'Uploader…';
+  try {
+    const resp = await fetch('/internal/api/om-video', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (!resp.ok) {
+      errEl.textContent = data.error || 'Kunne ikke uploade videoen.';
+      errEl.classList.add('show');
+      return false;
+    }
+    okEl.textContent = 'Video uploadet.';
+    okEl.classList.add('show');
+    fileInput.value = '';
+    loadStatus();
+  } catch (e) {
+    errEl.textContent = 'Kunne ikke uploade videoen — tjek din forbindelse.';
+    errEl.classList.add('show');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Upload';
+  }
+  return false;
+}
+
+async function removeVideo() {
+  if (!confirm('Fjern den nuværende video?')) return;
+  try {
+    await fetch('/internal/api/om-video', { method: 'DELETE' });
+    loadStatus();
+  } catch (e) {
+    alert('Kunne ikke fjerne videoen.');
+  }
+}
+</script>
+</body>
+</html>
