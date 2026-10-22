@@ -258,6 +258,18 @@ function loadFromSyncedFile(filePath) {
 // Reel, undgåelig, ny belastning indført samme dag som selve disk-
 // persistensen — throttlet her til højst ét reelt skriv hvert 10. minut,
 // uanset hvor ofte refreshLatest() selv kalder ind.
+// RETTET (produktionshændelse — dmi-rain-history.json fundet korrupt på
+// hub-siden, "Unexpected non-whitespace character after JSON", hver time i
+// mindst en uge — se watershed-sync.js's loadFromSyncedFile()-kaldested/
+// writeFileAtomic() for den fulde begrundelse): fs.writeFile() (ASYNC,
+// fire-and-forget) skriver IKKE atomisk — et parallelt kald (denne
+// funktion kaldes fra refreshLatest(), som selv kan køre overlappende med
+// f.eks. et samtidigt persistHistoryToDiskSync()-kald fra en hub-adapter,
+// se dens eget filhoved) kan derfor efterlade filen midt i en trunkerings-
+// /skrivecyklus, hvis to skriv til SAMME fil interfolierer. Skriver nu til
+// en midlertidig fil og omdøber ATOMISK ind på plads (samme mønster som
+// persistHistoryToDiskSync() nedenfor) — en igangværende læser ser enten
+// den GAMLE, komplette fil eller den NYE, komplette fil, aldrig en blanding.
 const PERSIST_MIN_INTERVAL_MS = 10 * 60 * 1000;
 let _lastPersistTs = 0;
 function persistHistoryToDisk() {
@@ -265,8 +277,12 @@ function persistHistoryToDisk() {
   if (now - _lastPersistTs < PERSIST_MIN_INTERVAL_MS) return;
   _lastPersistTs = now;
   const stations = [...stationHistory].map(([stationId, h]) => [stationId, [...h]]);
-  fs.writeFile(HISTORY_CACHE_FILE, JSON.stringify({ ts: now, stations }), (err) => {
-    if (err) console.warn('Kunne ikke skrive dmi-rain-historik til disk:', err.message);
+  const tmpPath = `${HISTORY_CACHE_FILE}.tmp-${process.pid}-${now}`;
+  fs.writeFile(tmpPath, JSON.stringify({ ts: now, stations }), (err) => {
+    if (err) { console.warn('Kunne ikke skrive dmi-rain-historik til disk:', err.message); return; }
+    fs.rename(tmpPath, HISTORY_CACHE_FILE, (renameErr) => {
+      if (renameErr) console.warn('Kunne ikke omdøbe dmi-rain-historik ind på plads:', renameErr.message);
+    });
   });
 }
 
@@ -291,7 +307,14 @@ function persistHistoryToDiskSync() {
   // whose whole output IS this file — a reader with no coords has nothing
   // to run rebuildCellIndex() against).
   const coords = [...stationCoords];
-  fs.writeFileSync(HISTORY_CACHE_FILE, JSON.stringify({ ts: now, stations, coords }));
+  // Atomisk (temp-fil + omdøbning) af samme grund som persistHistoryToDisk()
+  // ovenfor — denne funktion er hub-adapterens EGEN, endelige skriv (se
+  // watershed-hub-dmi-rain-poll.js), dvs. selve kilden andre projekters
+  // syncOne()-kald henter fra. En korrupt fil HER forplanter sig til
+  // dkvand/ukwater/frwater på én gang.
+  const tmpPath = `${HISTORY_CACHE_FILE}.tmp-${process.pid}-${now}`;
+  fs.writeFileSync(tmpPath, JSON.stringify({ ts: now, stations, coords }));
+  fs.renameSync(tmpPath, HISTORY_CACHE_FILE);
 }
 
 function floorToHour(iso) {

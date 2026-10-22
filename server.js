@@ -1006,6 +1006,111 @@ app.get('/internal/watershed', adminUsers.requireStaffSession, (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════
+// "Om"-sidens video — system-staff-only upload, offentligt læst
+// ═══════════════════════════════════════════════════════════════════════════
+// NYT (bruger-ønske 2026-10-22 — "give me a way to upload the videofile to
+// server"): 'system'-only, samme begrundelse som /internal/watershed ovenfor
+// — "Om"-siden er sitewide indhold, ikke ét lands driftsdata. Gemmes på
+// DATA_DIR (den persistente Fly-volumen, se dens filhoved/fly.toml) IKKE i
+// git/Docker-imaget — en 33MB binær i versionsstyring ville permanent
+// opbloate repoet, og en video skal kunne udskiftes uden en ny `fly deploy`.
+// memoryStorage + manuelt multer-kald, samme mønster som observationUpload
+// ovenfor (samme begrundelse: fang multers egne fejl, fx LIMIT_FILE_SIZE,
+// som almindelig JSON-fejl i stedet for Express' rå standardfejlside).
+// Selve skrivningen er atomisk (tmp-fil + rename) — samme begrundelse som
+// watershed-sync.js/dmi-rain.js's rettelse samme dag: en afbrudt upload må
+// aldrig kunne overskrive en god, allerede liggende video med noget
+// ufuldstændigt.
+const OM_VIDEO_PATH = path.join(DATA_DIR, 'om-video.mp4');
+const MAX_OM_VIDEO_BYTES = 80 * 1024 * 1024; // 80MB — rigeligt over den oplyste 33MB, uden at kunne fylde den 1GB-volumen hurtigt op
+const omVideoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_OM_VIDEO_BYTES, files: 1 },
+});
+
+app.get('/internal/om-video', adminUsers.requireStaffSession, (req, res) => {
+  if (req.staff.role !== 'system') {
+    return res.status(403).send('Video-upload er kun tilgængeligt for system-brugere.');
+  }
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(STATIC_DIR, 'internal-om-video.html'));
+});
+
+app.get('/internal/api/om-video-status', adminUsers.requireStaffSession, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  try {
+    const stat = fs.statSync(OM_VIDEO_PATH);
+    res.json({ exists: true, sizeBytes: stat.size, uploadedAt: stat.mtime.toISOString() });
+  } catch (e) {
+    res.json({ exists: false });
+  }
+});
+
+app.post('/internal/api/om-video', adminUsers.requireStaffSession, (req, res) => {
+  if (req.staff.role !== 'system') {
+    return res.status(403).json({ error: 'Kun system-brugere kan uploade videoen.' });
+  }
+  omVideoUpload.single('video')(req, res, (uploadErr) => {
+    if (uploadErr) {
+      console.warn('om-video: upload-fejl —', uploadErr.message);
+      const tooBig = uploadErr.code === 'LIMIT_FILE_SIZE';
+      return res.status(400).json({
+        error: tooBig
+          ? `Video for stor (maks ${(MAX_OM_VIDEO_BYTES / 1024 / 1024).toFixed(0)} MB).`
+          : 'Kunne ikke behandle video-upload.',
+      });
+    }
+    if (!req.file) return res.status(400).json({ error: 'Ingen video medsendt (feltnavn skal være "video").' });
+    // RETTET: kun egentlig magic-bytes-tjek (ikke blot req.file.mimetype,
+    // som klienten frit kan forfalske) — samme princip som
+    // badested-observations.js's foto-validering. MP4/MOV/QuickTime deler
+    // alle ftyp-boks-strukturen (bytes 4-7 === 'ftyp'), ISO base media file
+    // format — dækker i praksis alt en telefon/browser producerer som
+    // "video/mp4".
+    const buf = req.file.buffer;
+    const looksLikeMp4 = buf.length > 12 && buf.toString('ascii', 4, 8) === 'ftyp';
+    if (!looksLikeMp4) {
+      return res.status(400).json({ error: 'Filen ligner ikke en gyldig MP4-video.' });
+    }
+    try {
+      const tmpPath = `${OM_VIDEO_PATH}.tmp-${process.pid}-${Date.now()}`;
+      fs.writeFileSync(tmpPath, buf);
+      fs.renameSync(tmpPath, OM_VIDEO_PATH);
+      console.log(`om-video: ny video uploadet af ${req.staff.email} (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
+      res.json({ ok: true, sizeBytes: buf.length });
+    } catch (e) {
+      console.error('om-video: kunne ikke skrive til disk —', e.message);
+      res.status(500).json({ error: 'Kunne ikke gemme videoen på serveren.' });
+    }
+  });
+});
+
+app.delete('/internal/api/om-video', adminUsers.requireStaffSession, (req, res) => {
+  if (req.staff.role !== 'system') {
+    return res.status(403).json({ error: 'Kun system-brugere kan fjerne videoen.' });
+  }
+  try {
+    fs.unlinkSync(OM_VIDEO_PATH);
+  } catch (e) {
+    if (e.code !== 'ENOENT') {
+      console.error('om-video: kunne ikke fjerne —', e.message);
+      return res.status(500).json({ error: 'Kunne ikke fjerne videoen.' });
+    }
+  }
+  res.json({ ok: true });
+});
+
+// Offentlig — "Om"-sidens <video> i dansk-overloeb-kort.html peger herpå.
+// res.sendFile() håndterer Range-forespørgsler selv (nødvendigt for
+// video-scrubbing/seeking i browseren) — intet ekstra Range-arbejde nødvendigt her.
+app.get('/om-video.mp4', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=3600');
+  res.sendFile(OM_VIDEO_PATH, (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
+});
+
 // NYT — SAMME computeKommuneBenchmark()/periode-parsing som GET /admin/api/
 // kommune-benchmark (se dens filhoved), men bag adminUsers.requireStaffSession
 // i stedet for tenantAdmin.requireTenantSession — sales er ikke logget ind
