@@ -9746,6 +9746,20 @@ function switchTab(name) {
     const id = location.hash.replace('#', '');
     if (id && document.getElementById(id)?.classList.contains('doc-section')) showDocSection(id);
     else showDocOverview();
+    // RETTET (bruger-rapport 2026-10-22 — "Video is not visible"): et
+    // <video>-element, der sidder i et display:none-forfædreelement ved
+    // sideindlæsning (#tab-doc er kun .active, altså synlig, EFTER et
+    // faneskift), forsøger i praksis ALDRIG at hente metadata i de fleste
+    // browsere — og en ren CSS-klasseskift til synlig udløser ikke
+    // automatisk et nyt forsøg. onloadedmetadata (se doc-hero's <video>)
+    // fyrede derfor aldrig, og elementet blev for evigt ved
+    // display:none. Et eksplicit .load()-kald, nu hvor fanen RENT FAKTISK
+    // er synlig, tvinger browseren til at forsøge igen (en billig Range-
+    // forespørgsel for metadata alene, preload="metadata" — ikke hele
+    // filen). Elementet findes ikke på SSR-strippede varianter af denne
+    // HTML (badested-/soe-sider, se window.__DOC_PANEL_STRIPPED__
+    // ovenfor), derfor null-tjekket.
+    document.getElementById('doc-hero-video')?.load();
   }
 }
 
