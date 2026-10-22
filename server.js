@@ -1104,11 +1104,63 @@ app.delete('/internal/api/om-video', adminUsers.requireStaffSession, (req, res) 
 // Offentlig — "Om"-sidens <video> i dansk-overloeb-kort.html peger herpå.
 // res.sendFile() håndterer Range-forespørgsler selv (nødvendigt for
 // video-scrubbing/seeking i browseren) — intet ekstra Range-arbejde nødvendigt her.
+// RETTET (bruger-rapport 2026-10-22 — "I can see it on PWA on android - but
+// not in Chrome on desktop", video vist i Om-fanen): res.sendFile() gav
+// tidligere hele filen tilbage som ÉT 206-svar for en open-ended
+// "Range: bytes=0-"-forespørgsel (hvilket LITERALT er hvad klienten bad om
+// — det er ikke i sig selv ugyldigt), men desktop Chromiums video-pipeline
+// afbryder (net::ERR_ABORTED) når et metadata-probe-svar er markant større
+// end forventet, og genopretter ALDRIG — elementet sidder fast på
+// networkState=NETWORK_NO_SOURCE/readyState=0 for evigt. Bekræftet direkte
+// (headless Chromium, samme motor som desktop Chrome) — Android tolererer
+// det samme svar fint, formentlig fordi dens medie-afkoder er mindre
+// striks om dette. Standardpraksis for videoservering er derfor at
+// BEGRÆNSE hver Range-chunk til en fast maks-størrelse, uanset hvor meget
+// klienten bad om — tvinger klienten til selv at bede om mere i
+// opfølgende requests, i stedet for at modtage hele filen på én gang.
+// Håndruller derfor selv Range-parsingen her (res.sendFile() giver ingen
+// kontrol over chunk-størrelsen).
+const OM_VIDEO_CHUNK_BYTES = 2 * 1024 * 1024; // 2MB — rigeligt til MP4-metadata (moov er forrest, se upload-handlerens ftyp-tjek), lille nok at desktop Chrome ikke afbryder
 app.get('/om-video.mp4', (req, res) => {
-  res.set('Cache-Control', 'public, max-age=3600');
-  res.sendFile(OM_VIDEO_PATH, (err) => {
-    if (err && !res.headersSent) res.status(404).end();
-  });
+  // NYT: no-store, ikke public/max-age — videoen kan udskiftes når som
+  // helst via /internal/om-video, og en CDN-cachet gammel udgave (Cloudflare
+  // sad allerede inde med én fra et tidligere, ikke-Range-specifikt svar)
+  // må aldrig kunne overleve en udskiftning i op til en hel time.
+  res.set('Cache-Control', 'no-store');
+  let stat;
+  try {
+    stat = fs.statSync(OM_VIDEO_PATH);
+  } catch (e) {
+    return res.status(404).end();
+  }
+  const total = stat.size;
+  const range = req.headers.range;
+  if (!range) {
+    // Ingen Range-header overhovedet (sjældent for <video>, men muligt for
+    // et direkte besøg/download) — hele filen er fair her, ingen klient
+    // forventer en begrænset chunk uden selv at bede om en Range.
+    res.set('Content-Type', 'video/mp4');
+    res.set('Content-Length', String(total));
+    fs.createReadStream(OM_VIDEO_PATH).pipe(res);
+    return;
+  }
+  const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+  if (!match) return res.status(416).set('Content-Range', `bytes */${total}`).end();
+  const reqStart = match[1] === '' ? 0 : parseInt(match[1], 10);
+  // Klienten bad om en SLUT-byte: respektér den, men stadig aldrig over
+  // chunk-grænsen — et eksplicit ønske om en stor range skal stadig
+  // chunkes, af samme afbryder-grund som ovenfor.
+  const reqEnd = match[2] === '' ? Math.min(reqStart + OM_VIDEO_CHUNK_BYTES - 1, total - 1)
+                                 : Math.min(parseInt(match[2], 10), reqStart + OM_VIDEO_CHUNK_BYTES - 1, total - 1);
+  if (reqStart >= total || reqStart > reqEnd) {
+    return res.status(416).set('Content-Range', `bytes */${total}`).end();
+  }
+  res.status(206);
+  res.set('Content-Range', `bytes ${reqStart}-${reqEnd}/${total}`);
+  res.set('Content-Length', String(reqEnd - reqStart + 1));
+  res.set('Content-Type', 'video/mp4');
+  res.set('Accept-Ranges', 'bytes');
+  fs.createReadStream(OM_VIDEO_PATH, { start: reqStart, end: reqEnd }).pipe(res);
 });
 
 // NYT — SAMME computeKommuneBenchmark()/periode-parsing som GET /admin/api/
