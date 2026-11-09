@@ -281,6 +281,11 @@ fi
 echo
 
 # ── Trin 15: Opsummering ─────────────────────────────────────────────────────
+# ── Indeks-manifest: fingeraftryk af puls-data.json, så serveren kan afvise
+# afledte filer, der er bygget mod en anden rækkefølge (derived-index-guard.js).
+node scripts/write-derived-index-manifest.js
+echo
+
 echo "── Trin 17/17: Opsummering ─────────────────────────────────────────"
 echo
 echo "Filer klar til deployment i $SCRIPT_DIR:"
@@ -288,7 +293,7 @@ for f in puls-data.json vp3_kystvande_simplified.geojson vp3_soeer.geojson \
          vp3_vandlob.geojson vp3_badevand.geojson vp3_rbu_slim.geojson \
          rbu-lake-links.json id15-lake-matches.json id15-kystvand-matches.json \
          vandlob-directions.json vandlob-upstream-matches.json vandlob-display.json \
-         lake-substance-load.json lake-mfs-load.json; do
+         lake-substance-load.json lake-mfs-load.json derived-index-manifest.json; do
   if [ -f "$f" ]; then
     SIZE=$(du -h "$f" | cut -f1)
     echo "  ✅ $f ($SIZE)"

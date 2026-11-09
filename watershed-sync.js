@@ -41,6 +41,17 @@ const DATASETS = {
   'vp3-rbu': 'vp3_rbu_slim.geojson',
   'vandlob-directions': 'vandlob-directions.json',
   'vandlob-display': 'vandlob-display.json',
+  // RETTET (2026-11-09): disse filer peger på udløb via RÆKKENUMMER i puls-data.json
+  // og SKAL derfor synkroniseres sammen med den — ellers får serveren en ny
+  // puls-data.json mod gamle koblinger (søer koblet til udløb i hele landet).
+  // Skal matche full-rebuild.outputs i watershed/manifests/dkvand.json.
+  'id15-lake-matches': 'id15-lake-matches.json',
+  'id15-kystvand-matches': 'id15-kystvand-matches.json',
+  'rbu-lake-links': 'rbu-lake-links.json',
+  'vandlob-upstream-matches': 'vandlob-upstream-matches.json',
+  'lake-substance-load': 'lake-substance-load.json',
+  'lake-mfs-load': 'lake-mfs-load.json',
+  'derived-index-manifest': 'derived-index-manifest.json',
   // Volatile tier — synced separately, at a faster cadence than this file's
   // own DATASETS loop, by watershed-live-sync.js. Listed here too so
   // main()'s own manual/cron sync (whatever cadence THAT runs at) also

@@ -3868,6 +3868,13 @@ async function _evaluatePushNotificationsInner(testThresholds) {
     _rawBadevandCascade = result.badevand || [];
     const patchedBadevand = await badestedOverrides.applyActiveOverrides(_rawBadevandCascade);
     result.badevand = patchedBadevand;
+    // Indeks-kontrol (derived-index-guard.js): alarmér, hvis de afledte kobling-filer
+    // ikke passer til puls-data.json — koblingerne er da slået fra i resultatet.
+    if (result.derivedIndexGuard && result.derivedIndexGuard.ok === false) {
+      hubAlert.reportHubFallback('derived-index', result.derivedIndexGuard.reason, true);
+    } else {
+      hubAlert.reportHubRecovered('derived-index');
+    }
     badevandRiskCache = { ts: Date.now(), ...result };
     badevandByIdCache = new Map(patchedBadevand.map(b => [String(b.id), b]));
     // NYT (Skilte-fanen, live digitale skilte) — modsat broadcastOverloebUpdate()

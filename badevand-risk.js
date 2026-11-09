@@ -82,6 +82,7 @@
 const fs = require('fs');
 const path = require('path');
 const waterClass = require('./water-classification');
+const derivedIndexGuardLib = require('./derived-index-guard');
 
 const WATERBODY_MATCH_BUFFER_DEG = 0.0045; // ~500 m — øget fra 0,003° (~334 m), se diagnose-badevand-afstand.js: fangede kun 88,8% af geometrisk-nære badesteder ved 334 m, 500 m fanger 96,6%. Forenklet kystvandgeometri (vp3_kystvande_simplified.geojson) trækker kanter indad ved komplekse kystlinjer, hvilket 334 m ikke kompenserede nok for. HOLD I SYNC med klientens konstant i dansk-overloeb-kort.html.
 const VANDLOB_BUFFER_DEG = 0.0045;         // RETTET: hævet fra 0,0009° (~100 m) til samme 500 m som ovenfor, af samme årsag (se diagnose-badevand-afstand.js). HOLD I SYNC med klientens konstant.
@@ -295,15 +296,26 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
     return result;
   } : null;
 
-  const rbuLakeLinks       = loadJson(path.join(staticDir, 'rbu-lake-links.json'), {});
-  const id15LakeMatches    = loadJson(path.join(staticDir, 'id15-lake-matches.json'), {});
-  const id15KystvandMatches = loadJson(path.join(staticDir, 'id15-kystvand-matches.json'), {});
+  let rbuLakeLinks       = loadJson(path.join(staticDir, 'rbu-lake-links.json'), {});
+  let id15LakeMatches    = loadJson(path.join(staticDir, 'id15-lake-matches.json'), {});
+  let id15KystvandMatches = loadJson(path.join(staticDir, 'id15-kystvand-matches.json'), {});
   const soeerGeojson       = loadJson(path.join(staticDir, 'vp3_soeer.geojson'), { features: [] });
   const kystvandGeojson    = loadJson(path.join(staticDir, 'vp3_kystvande_simplified.geojson'), { features: [] });
   const badevandGeojson    = loadJson(path.join(staticDir, 'vp3_badevand.geojson'), { features: [] });
   const vandlobDisplay     = loadJson(path.join(staticDir, 'vandlob-display.json'), []);
-  const vandlobUpstream    = loadJson(path.join(staticDir, 'vandlob-upstream-matches.json'), []);
+  let vandlobUpstream    = loadJson(path.join(staticDir, 'vandlob-upstream-matches.json'), []);
   const vandlobDirections  = loadJson(path.join(staticDir, 'vandlob-directions.json'), []);
+  // INDEKS-KONTROL (2026-11-09, kommune-henvendelsen): RBU-/ID15-/vandløbs-
+  // filerne peger på udløb via rækkenummer i puls-data.json. Passer de ikke
+  // til de punkter, vi scorer med, kobles søer til tilfældige udløb i hele
+  // landet — uden fejlmeddelelse. Ved uoverensstemmelse bruges koblingerne
+  // IKKE (søer udelades = "ingen data", aldrig et gæt, aldrig "bekræftet
+  // ingen udledning"), og tilstanden returneres til serveren som alarm.
+  const derivedIndexGuard = derivedIndexGuardLib.checkDerivedIndexes(points, staticDir, id15LakeMatches);
+  if (!derivedIndexGuard.ok) {
+    console.error(`badevand-risk: AFLEDTE INDEKS UDE AF SYNC — ${derivedIndexGuard.reason}. Sø-/kystvands-/vandløbskoblinger via rækkenummer slås fra.`);
+    rbuLakeLinks = {}; id15LakeMatches = {}; id15KystvandMatches = {}; vandlobUpstream = [];
+  }
   const vandlobUpstreamByIndex = {};
   for (const entry of vandlobUpstream) vandlobUpstreamByIndex[entry.index] = entry;
   const vandlobDirectionByIndex = {};
@@ -621,7 +633,7 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
   // (lakes/kystvande) er færdige.
   const lakeOutflowSegments = new Map(); // navn -> segments[]
   let _lakeIterCount = 0;
-  for (const feat of soeerGeojson.features || []) {
+  for (const feat of (derivedIndexGuard.ok ? (soeerGeojson.features || []) : [])) {
     const props = feat.properties || {};
     const navn = props.ov_navn || props.navn || 'Sø';
     const rbuRec  = rbuMatchData.get(normSoeName(navn));
@@ -1847,7 +1859,7 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
   }
 
   console.log(`badevand-risk: ${lakeList.length} søer, ${kystvandList.length} kystvande, ${badevand.length} badesteder beregnet på ${Date.now() - t0} ms`);
-  return { lakes, kystvande, badevand };
+  return { lakes, kystvande, badevand, derivedIndexGuard };
 }
 
 module.exports = { computeBadevandRiskCascade, haversineM };
