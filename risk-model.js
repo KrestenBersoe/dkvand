@@ -129,7 +129,12 @@ function computeRisk(pt) {
   const severity  = Math.min(Math.log10(meanVolumePerEvent + 1) / 5, 1);
   let   risk      = pOverflow * (0.6 + 0.4 * severity);
 
-  if (lastEventAge !== null && lastEventAge !== undefined && lastEventAge >= 0) {
+  // RETTET (2026-11-09): residual-tillægget kræver registreret overløbshistorik
+  // (overflowProbBase > 0). lastEventAge udledes af nedbør vs. tærskel, ikke af
+  // faktiske hændelser — uden dette krav fik udløb med 0 registrerede overløb
+  // (PULS "verificeret nul"/ingen data, ~32 % af alle udløb, fallback 25 mm)
+  // en risiko på op til ~100 % efter kraftig regn. HOLD I SYNC MED KLIENTEN.
+  if (overflowProbBase > 0 && lastEventAge !== null && lastEventAge !== undefined && lastEventAge >= 0) {
     const tau       = seasonalTau();
     const amplitude = 0.9 * (1 + SEDIMENT_REBOUND);
     const residual  = amplitude * Math.exp(-lastEventAge / tau);
@@ -182,7 +187,12 @@ function computeViralRisk(pt) {
 
   let viralRisk = pOverflow * (VIRAL_AMPLITUDE_BASE + VIRAL_SEVERITY_WEIGHT * severity);
 
-  if (lastEventAge !== null && lastEventAge !== undefined && lastEventAge >= 0) {
+  // RETTET (2026-11-09): residual-tillægget kræver registreret overløbshistorik
+  // (overflowProbBase > 0). lastEventAge udledes af nedbør vs. tærskel, ikke af
+  // faktiske hændelser — uden dette krav fik udløb med 0 registrerede overløb
+  // (PULS "verificeret nul"/ingen data, ~32 % af alle udløb, fallback 25 mm)
+  // en risiko på op til ~100 % efter kraftig regn. HOLD I SYNC MED KLIENTEN.
+  if (overflowProbBase > 0 && lastEventAge !== null && lastEventAge !== undefined && lastEventAge >= 0) {
     const tauV      = seasonalTauViral();
     const residualV = VIRAL_RESIDUAL_AMPLITUDE * Math.exp(-lastEventAge / tauV);
     viralRisk = Math.min(viralRisk + residualV * (1 - viralRisk), 1);

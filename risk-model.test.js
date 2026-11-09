@@ -238,6 +238,27 @@ test('computeForecastViralRisk: lægger forecastMM oveni, som den bakterielle ud
   assert.ok(high > low, `forventede højere viral prognoserisiko med mere regn: ${low} vs ${high}`);
 });
 
+// ── Residual-tillæg kræver registreret overløbshistorik (rettet 2026-11-09) ──
+// Tidligere gav lastEventAge et residual-tillæg UANSET overflowProbBase, så et
+// udløb med 0 registrerede overløb (PULS "verificeret nul"/ingen data) kunne
+// score ~100 % efter kraftig regn (fallback-tærskel 25 mm udløste lastEventAge).
+test('computeRisk: udløb uden registreret overløb (overflowProbBase=0) får INTET residual-tillæg, selv med frisk lastEventAge', () => {
+  const r = computeRisk({ overflowProbBase: 0, meanVolumePerEvent: 0, precipMM: 30, lastEventAge: 0.1, thresholdMm: null });
+  assert.strictEqual(r.risk, 0, `forventede 0, fik ${r.risk}`);
+});
+
+test('computeViralRisk: udløb uden registreret overløb (overflowProbBase=0) får INTET residual-tillæg, selv med frisk lastEventAge', () => {
+  const { computeViralRisk } = require('./risk-model');
+  const r = computeViralRisk({ overflowProbBase: 0, meanVolumePerEvent: 0, precipMM: 30, lastEventAge: 0.1, thresholdMm: null });
+  assert.strictEqual(r, 0, `forventede 0, fik ${r}`);
+});
+
+test('computeRisk: residual-tillægget virker stadig for udløb MED registreret overløb (overflowProbBase>0)', () => {
+  const noEvent = computeRisk({ overflowProbBase: 0.01, meanVolumePerEvent: 500, precipMM: 30, lastEventAge: null, thresholdMm: null });
+  const fresh   = computeRisk({ overflowProbBase: 0.01, meanVolumePerEvent: 500, precipMM: 30, lastEventAge: 0.1, thresholdMm: null });
+  assert.ok(fresh.risk > noEvent.risk);
+});
+
 // ── Badested-gruppe-aggregering (samme princip som sendPushNotifications() i server.js) ──
 test('badested-aggregering: samlet risiko er max af bakteriel/viral på tværs af gruppens udløb', () => {
   const pointRisks = new Map([
