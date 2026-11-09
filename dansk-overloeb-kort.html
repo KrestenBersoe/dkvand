@@ -2728,7 +2728,7 @@
           <tr>
             <td><strong>Bakteriel overløbsrisiko</strong></td>
             <td>Eksponentielt henfald af antecedent nedbør (τ = 3 dage; bakteriel henfaldstid τ ≈ 0,8–5,6 dage efter sæson) kombineret med udløbsspecifik overløbssandsynlighed fra PULS' historiske hændelsesdata. Samme τ-model bruges nu også til at nedvægte søers opstrøms-matchede udløb efter beregnet rejsetid (se Søvurdering) — τ er baseret på litteraturens T90-værdier for E. coli (Miljøstyrelsen 2002/2003: 0,5 time-3 døgn i havvand, stærkt lys-/temperaturafhængig). <strong>Overløbs-udløsningspunktet</strong> (hvor meget akkumuleret nedbør der reelt skal til, før dette udløb overløber) er for 13.072 af 21.563 udløb en udløbs-specifik empirisk tærskel udledt af eller lånt fra PULS' egen hændelseshistorik (se PULS-TAERSKLER-RAPPORT.md). De resterende ~39% (for få hændelser bag tallet, eller ingen data) bruger en generisk 25 mm-tærskel (hævet fra 5 mm den 30. juli 2026 efter empirisk kalibrering).</td>
-            <td>🟡 <strong>Moderat-høj.</strong> Bygger på reelle, målte overløbshændelser for ~14% af punkter (resten estimeret via log-log-regression eller lånt fra lignende udløb, se Datakvalitet). Selve henfaldsprincippet (eksponentiel antecedent nedbør) er velkendt i hydrologisk litteratur, men τ-værdien er ikke lokalt kalibreret mod målte bakteriekoncentrationer i dansk vand. Den udløbs-specifikke tærskel er valideret på årligt niveau (median 13,8% afvigelse for lånte tærskler, n=530) — PULS har ingen daterede enkelthændelser, så en datopræcis validering er ikke mulig. Tidspunktet for seneste overløb (residualleddet) er derfor estimeret ud fra nedbør, ikke observeret, og gives kun til udløb med overløbshistorik.</td>
+            <td>🟡 <strong>Moderat-høj.</strong> Bygger på reelle, målte overløbshændelser for ~14% af punkter (resten estimeret via log-log-regression eller lånt fra lignende udløb, se Datakvalitet). Selve henfaldsprincippet (eksponentiel antecedent nedbør) er velkendt i hydrologisk litteratur, men τ-værdien er ikke lokalt kalibreret mod målte bakteriekoncentrationer i dansk vand. Den udløbs-specifikke tærskel er valideret på årligt niveau (median 13,8% afvigelse for lånte tærskler, n=530) — PULS har ingen daterede enkelthændelser, så en datopræcis validering er ikke mulig. Tidspunktet for seneste overløb (residualleddet) er derfor estimeret ud fra nedbør, ikke observeret, og gives kun til udløb med overløbshistorik. <strong>Kalibreringsresultat (30. juli 2026):</strong> på et holdt-ud testsæt af fælleskloak-overløb (n = 781; rumlig opdeling pr. nedbørscelle) er modellens AUC for "opstod mindst ét overløb i rapporteringsåret" <strong>0,61</strong> (95 % CI 0,57–0,65), dvs. kun svagt bedre end tilfældig. Målingen er på års-niveau og dækker kun udløb med rapporteret eller verificeret facit; den validerer ikke volumen, timing eller bakteriekoncentrationer i vandet. Procenttallene er et risikoindeks, ikke en kalibreret sandsynlighed eller en måling.</td>
           </tr>
           <tr>
             <td><strong>Viral risiko</strong></td>
@@ -5660,7 +5660,7 @@ function updatePanel(pt, risk, foreRisk) {
     <div class="field">
       <span class="label">Kommune</span><span class="value">${escHtml(pt.municipality)}</span>
     </div>
-    ${pt.waterArea ? `<div class="field"><span class="label">Recipient</span><span class="value">${escHtml(pt.waterArea)}</span></div>` : ''}
+    ${pt.waterArea ? `<div class="field"><span class="label" title="Afledt af os (nærmeste vandområde/opstrøms-sporing) – ikke officielt tilladelsesfastsat">Recipient (afledt)</span><span class="value">${escHtml(pt.waterArea)}</span></div>` : ''}
     <div class="field">
       <span class="label">Datakvalitet</span><span class="value" style="font-size:.78rem">${qualLabel}</span>
     </div>
@@ -11561,7 +11561,7 @@ async function showUdlobPanel(pt) {
     infoBody.innerHTML = `
       <div class="field"><span class="label">Lokation</span>${mapsLink}</div>
       <div class="field"><span class="label">Kommune</span><span class="value">${escHtml(pt.municipality)}</span></div>
-      ${pt.waterArea ? `<div class="field"><span class="label">Recipient</span><span class="value">${escHtml(pt.waterArea)}</span></div>` : ''}
+      ${pt.waterArea ? `<div class="field"><span class="label" title="Afledt af os (nærmeste vandområde/opstrøms-sporing) – ikke officielt tilladelsesfastsat">Recipient (afledt)</span><span class="value">${escHtml(pt.waterArea)}</span></div>` : ''}
       <div class="field"><span class="label">Datakvalitet</span><span class="value" style="font-size:.78rem">${qualLabel}</span></div>
       <div class="field"><span class="label">Historik</span><span class="value">${pt.eventsPerYear != null ? pt.eventsPerYear.toFixed(0) : '—'} overløb/år · ${formatL(pt.volumeM3Year)}/år</span></div>
       <div class="field"><span class="label">Gns. volumen pr. hændelse</span><span class="value">${formatL(pt.meanVolumePerEvent)}</span></div>
@@ -11575,7 +11575,7 @@ async function showUdlobPanel(pt) {
     infoBody.innerHTML = `
       <div class="field"><span class="label">Lokation</span>${mapsLink}</div>
       <div class="field"><span class="label">Kommune</span><span class="value">${escHtml(pt.municipality)}</span></div>
-      <div class="field"><span class="label">Vandområde / Recipient</span><span class="value">${escHtml(String(pt.waterArea || '—'))}</span></div>
+      <div class="field"><span class="label" title="Afledt af os (nærmeste vandområde/opstrøms-sporing) – ikke officielt tilladelsesfastsat">Vandområde / Recipient (afledt)</span><span class="value">${escHtml(String(pt.waterArea || '—'))}</span></div>
       <div class="field"><span class="label">Udløbstype</span><span class="value">${
         pt.rbuTypeClass === 'wastewater' ? '🟤 Indeholder spildevand (overløbsbygværk)' :
         pt.rbuTypeClass === 'stormwater' ? 'Regnvandsudløb (intet spildevand)' :

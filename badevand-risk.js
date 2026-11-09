@@ -1187,11 +1187,15 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
   // ikke de rå — mere retvisende for brugeren ("dette udløbs faktiske
   // bidrag her", ikke "dette udløbs egen, uafhængige måling"). algaeScore
   // forbliver rå (intet etableret henfald for alge, se ovenfor).
-  function buildRelevantOutlets(lat, lng, outlets, velocity, tau, tauV, maxCount = 20) {
+  function buildRelevantOutlets(lat, lng, outlets, velocity, tau, tauV, maxCount = 20, maxDistM = Infinity) {
     const withDecay = [];
     for (const o of outlets) {
       if (o.lat == null || o.lng == null) continue;
       const distM = haversineM(lat, lng, o.lat, o.lng);
+      // RETTET (2026-11-09, kommune-henvendelse): listen skal vise præcis de udløb,
+      // der indgår i scoren. Scoren springer udløb over >SOE_NAVNEMATCH_MAX_DIST_M,
+      // men listen gjorde ikke — fjerne udløb stod derfor i badestedets liste uden at bidrage.
+      if (distM > maxDistM) continue;
       const travelTimeDays = (distM / velocity) / 86400;
       const adjBact  = o.riskScore  != null ? o.riskScore  * Math.exp(-travelTimeDays / tau)  : null;
       const adjViral = o.viralScore != null ? o.viralScore * Math.exp(-travelTimeDays / tauV) : null;
@@ -1259,7 +1263,7 @@ async function computeBadevandRiskCascade(points, seasonalTau, seasonalTauViral,
     // etableret afstands-/henfaldsmodel andetsteds i denne fil (alge afhænger
     // af næringsstoffer/temperatur, ikke punktkilde-spredning; prognose er
     // vejrbaseret, ikke udledningsbaseret).
-    const relevantOutlets = buildRelevantOutlets(lat, lng, lake.outlets, ASSUMED_LAKE_MIXING_VELOCITY_M_PER_S, tau, tauV);
+    const relevantOutlets = buildRelevantOutlets(lat, lng, lake.outlets, ASSUMED_LAKE_MIXING_VELOCITY_M_PER_S, tau, tauV, 20, SOE_NAVNEMATCH_MAX_DIST_M);
     return { bact, viral, algae: lake.algae, forecast: lake.forecast, source: 'soe', outlets: relevantOutlets };
   }
 
