@@ -430,7 +430,12 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // Gzip everything — JSON payloads compress ~70-80%
-app.use(compression());
+app.use(compression({
+  // /tiles (coverage.pmtiles, Range/206) må aldrig komprimeres: Content-Range
+  // refererer til de ukomprimerede bytes, og Chrome afviser et komprimeret 206
+  // med ERR_CONTENT_DECODING_FAILED — hele baggrundskortet forsvinder.
+  filter: (req, res) => req.path.startsWith('/tiles/') ? false : compression.filter(req, res),
+}));
 
 // ── Static files with appropriate cache headers ─────────────────────────────
 const STATIC_DIR = __dirname;
@@ -5933,7 +5938,11 @@ app.get('/api/health', (req, res) => {
 // Placeret FØR allowlist-filteret nedenfor — .pmtiles-endelsen er bevidst
 // IKKE i PUBLIC_STATIC_EXTENSIONS, filen skal kun serveres via denne
 // navngivne rute.
-app.use('/tiles', express.static(TILES_DIR, { maxAge: '30d', immutable: true }));
+// no-transform: Cloudflare brotli-komprimerede ellers 206-svarene (se compression-filter ovenfor).
+app.use('/tiles', express.static(TILES_DIR, {
+  maxAge: '30d', immutable: true,
+  setHeaders: res => res.setHeader('Cache-Control', 'public, max-age=2592000, immutable, no-transform'),
+}));
 
 // GET /map-assets/style.json — serveret dynamisk (FØR express.static
 // nedenfor, som ellers ville fange den) for at kunne indsætte den aktuelle
@@ -5948,8 +5957,15 @@ app.get('/map-assets/style.json', (req, res) => {
   // Sti-præfikset (MAP_ASSETS_VERSION) gør URL'erne unikke pr. deploy — selve
   // filstien efter præfikset er uændret, se den versionerede static-rute
   // nedenfor, som ignorerer præfiks-værdien og altid server fra MAP_ASSETS_DIR.
-  style.sprite = `/map-assets/${MAP_ASSETS_VERSION}/sprite/sprite`;
-  style.glyphs = `/map-assets/${MAP_ASSETS_VERSION}/fonts/{fontstack}/{range}.pbf`;
+  // MapLibre GL 5.x kræver ABSOLUTTE sprite-/glyphs-URL'er. Origin udledes af
+  // requestens egen host (så dkvand.fly.dev og ditbadevand.dk begge er same-origin),
+  // men kun for kendte værter — ellers falder vi tilbage til SITE_URL.
+  const fwdProto = String(req.get('x-forwarded-proto') || '').split(',')[0].trim();
+  const reqHost  = String(req.get('host') || '').toLowerCase();
+  const knownHost = /^([a-z0-9-]+\.)*(ditbadevand\.dk|dkvand\.fly\.dev)(:\d+)?$/.test(reqHost);
+  const assetOrigin = knownHost ? `${fwdProto === 'http' ? 'http' : 'https'}://${reqHost}` : seoPages.SITE_URL;
+  style.sprite = `${assetOrigin}/map-assets/${MAP_ASSETS_VERSION}/sprite/sprite`;
+  style.glyphs = `${assetOrigin}/map-assets/${MAP_ASSETS_VERSION}/fonts/{fontstack}/{range}.pbf`;
   res.set('Cache-Control', 'no-cache, no-transform');
   res.json(style);
 });
