@@ -37,8 +37,8 @@ self.addEventListener('activate', e => {
 // Vary: Range-header på det cachede svar ville alle Range-requests til
 // samme fil kollidere (forkert byterække returneret for en ny range).
 // cacheTilePut() sætter derfor selv Vary: Range på hvert cachet 206-svar.
-const TILE_CACHE_NAME       = 'overloeb-tiles-v1';
-const MAP_ASSETS_CACHE_NAME = 'overloeb-map-assets-v1';
+const TILE_CACHE_NAME       = 'overloeb-tiles-v2';
+const MAP_ASSETS_CACHE_NAME = 'overloeb-map-assets-v2';
 const TILE_CACHE_INDEX_URL  = '/__tile-cache-index__';   // syntetisk nøgle inde i selve tile-cachen — aldrig hentet fra netværket, kun brugt til evictions-metadata
 const TILE_CACHE_MAX_BYTES  = 200 * 1024 * 1024;          // 200 MB — rigeligt til en almindelig browsing-session, langt under filens fulde 5,5 GB
 
@@ -69,6 +69,10 @@ async function handleTileFetch(request) {
 
 async function cacheTilePut(cache, request, response) {
   const headers      = new Headers(response.headers);
+  // fetch() har allerede afkodet kroppen; en bevaret Content-Encoding/-Length ville få
+  // browseren til at afkode en ukomprimeret krop igen (ERR_CONTENT_DECODING_FAILED).
+  headers.delete('Content-Encoding');
+  headers.delete('Content-Length');
   const existingVary = headers.get('Vary');
   if (!existingVary) headers.set('Vary', 'Range');
   else if (!existingVary.split(',').map(s => s.trim()).includes('Range')) headers.set('Vary', existingVary + ', Range');
@@ -107,6 +111,8 @@ async function recordTileCacheEntry(cache, request, size) {
 }
 
 async function handleMapAssetFetch(request) {
+  // style.json er dynamisk (tiles-version, sprite-URL) — aldrig cache-først.
+  if (new URL(request.url).pathname === '/map-assets/style.json') return fetch(request);
   const cache  = await caches.open(MAP_ASSETS_CACHE_NAME);
   const cached = await cache.match(request);
   if (cached) return cached;
